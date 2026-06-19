@@ -1,0 +1,449 @@
+# Sub2API Admin Plus 程序代码结构
+
+版本：v0.2  
+日期：2026-06-20  
+定位：基于完整 Sub2API 复制基线演进的自动化运营扩展系统
+
+## 1. 当前基线结论
+
+`sub2api-admin-plus` 已完整复制 Sub2API 的前后端架构、UI 设计、构建脚本和部署目录。MVP 0 不再采用“新建一个完全独立 Go 服务目录”的结构，而是在当前复制基线上做业务隔离。
+
+核心约束：
+
+- 不修改 `/Users/coso/Documents/dev/go/sub2api` 上游项目。
+- 当前仓库可以修改，但 Admin Plus 私有业务必须集中放在独立命名空间，减少后续同步上游时的冲突。
+- 后端 module 路径暂时保留 `github.com/Wei-Shaw/sub2api`，MVP 0 不做全仓 import 迁移。
+- 前端继续复用 Sub2API Vue/Vite/Tailwind/UI 风格，不使用 iframe。
+- 不开发独立用户、角色、权限系统。
+- 写 Sub2API 状态只走 Admin API；读 Sub2API 可以走 Admin API、只读数据库、只读 Redis。
+- Admin Plus 写自己的 PostgreSQL 独立库，Redis 写入必须使用独立前缀。
+
+## 2. 现有目录职责
+
+```text
+sub2api-admin-plus/
+  backend/                  # 复制后的 Sub2API Go 后端，Admin Plus 后端业务在这里增量开发
+  frontend/                 # 复制后的 Sub2API Vue 前端，Admin Plus 页面在这里增量开发
+  deploy/                   # 复制后的部署目录，后续改为 Admin Plus 部署配置
+  docs/                     # 产品、架构、基线和开发文档
+  assets/                   # 复制后的静态资产
+  skills/                   # 复制后的 Codex/运维辅助工具
+  tools/                    # 复制后的工具脚本
+  README.md                 # Admin Plus 项目说明
+  DEV_GUIDE.md              # Admin Plus 开发指南
+```
+
+复制基线保留大量 Sub2API 原有模块是有意为之。MVP 0 的目标是先保证可运行和可构建，MVP 1 再逐步隐藏或清理非运营扩展所需的页面与路由。
+
+## 3. 后端目标结构
+
+Admin Plus 后端业务建议统一进入 `backend/internal/adminplus/`，避免散落到原 Sub2API 的 `service`、`repository`、`handler/admin` 中。
+
+```text
+backend/
+  cmd/
+    server/                         # MVP 0 继续复用现有入口
+
+  internal/
+    adminplus/
+      auth/                         # 复用 Sub2API 管理员身份的登录代理和 token 校验
+      config/                       # Admin Plus 自有配置解析
+      domain/                       # Admin Plus 领域模型、枚举、业务错误
+      app/
+        suppliers/                  # 供应商台账、供应商账号映射
+        rates/                      # 费率抓取、快照、变更事件
+        promotions/                 # 优惠活动监控、充值建议
+        billing/                    # 账单导入、账单明细归一化
+        reconciliation/             # 对账、成本、收入、毛利计算
+        health/                     # 首 token、耗时、错误率、并发、健康分
+        actions/                    # 切换/降权/暂停/调并发/充值建议
+        extension/                  # Chrome 插件任务协议
+        audit/                      # 操作审计、敏感凭据使用审计
+      adapters/
+        sub2api/
+          local/                    # 本地 Sub2API Admin API/只读数据源
+          sourceaccounts/           # OpenAI/Anthropic/Gemini 源站账号运营读取
+          provider/                 # 上游也是 Sub2API 的供应商适配
+          readonlydb/               # Sub2API 主库只读查询
+          readonlyredis/            # Sub2API Redis 只读查询
+        browser/                    # 网页后台/Chrome 插件抓取适配
+        newapi/                     # New API 供应商预留适配
+      clients/
+        sub2apiadmin/               # Sub2API Admin API client
+        chromeextension/            # Chrome 插件通信 client/model
+      db/
+        ent/                        # Admin Plus 自有 Ent schema/client，独立于 backend/ent
+        migrations/                 # Admin Plus 独立库迁移
+      redis/                        # Admin Plus Redis 前缀封装
+      scheduler/                    # 定时任务、分布式锁、重试、幂等
+      crypto/                       # 供应商凭据加密/脱敏
+      ports/                        # 跨模块接口，降低具体实现耦合
+
+    handler/
+      adminplus/                    # Admin Plus HTTP handler
+
+    server/
+      routes/
+        adminplus.go                # /api/admin-plus/* 路由注册
+```
+
+暂不建议新增 `cmd/admin-plus-api` 和 `cmd/admin-plus-worker`。当前阶段继续复用 `cmd/server`，通过独立路由、独立包和独立调度模块完成业务隔离。只有当后台 worker 与 Web 生命周期明显冲突时，再拆第二个入口。
+
+## 4. 前端目标结构
+
+前端不是当前重点，但如果需要页面，应沿用 Sub2API 现有 Vue 结构和 UI 风格。
+
+```text
+frontend/src/
+  api/adminplus/                   # Admin Plus API 封装
+  components/adminplus/            # Admin Plus 业务组件
+  views/adminplus/                 # Admin Plus 管理页面
+  stores/adminplus/                # Admin Plus Pinia store
+  router/                          # 增加 Admin Plus 路由
+```
+
+前端原则：
+
+- 不做 iframe。
+- 不做独立权限系统。
+- 登录页可以存在于 Admin Plus，但登录、2FA、刷新和登出都代理到本地 Sub2API 认证接口。
+- 页面视觉、表格、弹窗、表单、布局复用 Sub2API 现有风格。
+- MVP 1 优先做运营后台页面，不做营销页。
+
+## 5. Chrome 插件结构
+
+```text
+extension/
+  chrome/
+    manifest.json
+    src/
+      background/
+      content/
+      popup/
+      tasks/
+      providers/
+        sub2api/
+        newapi/
+        browser_only/
+```
+
+插件只负责浏览器侧能力：
+
+- 使用供应商后台账号密码或临时 token 自动登录。
+- 读取费率、余额、优惠、账单页面。
+- 导出账单文件并上传到 Admin Plus。
+- 上报任务状态、错误、截图和原始文件。
+
+插件不保存 Sub2API 管理员身份，不参与 Admin Plus 用户权限体系。
+
+## 6. 认证复用
+
+建议后端包：
+
+```text
+backend/internal/adminplus/auth/
+  login_proxy.go
+  refresh_proxy.go
+  logout_proxy.go
+  verifier.go
+  principal.go
+```
+
+建议路由：
+
+```text
+POST /api/admin-plus/auth/login
+POST /api/admin-plus/auth/login/2fa
+POST /api/admin-plus/auth/refresh
+POST /api/admin-plus/auth/logout
+GET  /api/admin-plus/auth/me
+```
+
+实现规则：
+
+- Admin Plus 可以有自己的登录页。
+- 登录请求由 Admin Plus 后端代理到本地 Sub2API `/api/auth/login` 等现有认证接口。
+- 登录成功后必须校验用户是 Sub2API 管理员。
+- Admin Plus 不签发自己的用户 token。
+- Admin Plus 不保存管理员密码。
+- Admin Plus 不维护用户表、角色表和权限表。
+- Admin Plus 前端可以把 Sub2API token 存在自己的域名下，不要求与 Sub2API 后台同时登录。
+
+## 7. 数据库与 Redis
+
+### 7.1 Admin Plus 自有数据库
+
+Admin Plus 自有表使用独立 PostgreSQL 库，例如：
+
+```text
+sub2api_admin_plus
+```
+
+建议自有表前缀：
+
+```text
+admin_plus_suppliers
+admin_plus_supplier_accounts
+admin_plus_rate_snapshots
+admin_plus_rate_change_events
+admin_plus_promotions
+admin_plus_bills
+admin_plus_reconciliation_runs
+admin_plus_health_samples
+admin_plus_actions
+admin_plus_extension_tasks
+admin_plus_audit_logs
+```
+
+如果使用 Ent，优先放在 `backend/internal/adminplus/db/ent`，不要和复制来的 `backend/ent` 混在一起。这样可以避免 Admin Plus 迁移污染 Sub2API 原有 schema。
+
+### 7.2 Sub2API 主库读取
+
+Sub2API 主库只读连接放在：
+
+```text
+backend/internal/adminplus/adapters/sub2api/readonlydb
+```
+
+允许读取：
+
+- `accounts`
+- `usage_logs`
+- `channel_monitors`
+- `channel_monitor_histories`
+- `channel_monitor_daily_rollups`
+- 其它经确认只读安全的分析表
+
+禁止直接写入 Sub2API 主库。
+
+### 7.3 Redis
+
+Admin Plus 写入共享 Redis 时必须加前缀：
+
+```text
+admin_plus:
+```
+
+Sub2API Redis 只读适配器放在：
+
+```text
+backend/internal/adminplus/adapters/sub2api/readonlyredis
+```
+
+允许读取明确列入白名单的 key，例如：
+
+```text
+session_limit:account:{accountID}
+window_cost:account:{accountID}
+```
+
+禁止：
+
+- 写无前缀 key。
+- 写 Sub2API 原生 key。
+- 执行 `FLUSH*`。
+- 清理非 `admin_plus:` 前缀的数据。
+
+## 8. 供应商适配器
+
+统一接口建议放在：
+
+```text
+backend/internal/adminplus/ports/provider.go
+```
+
+建议能力：
+
+```text
+ProviderAdapter
+  FetchRateCatalog()
+  FetchUsageBills()
+  FetchBalance()
+  FetchConcurrency()
+  FetchHealthMetrics()
+  FetchModels()
+  ProbeCredential()
+  ExportBillsByBrowserTask()
+  ValidateCredential()
+```
+
+MVP 1 优先实现：
+
+- `Sub2APISourceAccountAdapter`：读取并运营 Sub2API 已添加的 OpenAI、Anthropic、Gemini 源站账号。
+- `Sub2APIProviderAdapter`：上游供应商也是 Sub2API 部署实例。
+
+后续再补：
+
+- `NewAPIProviderAdapter`
+- `BrowserOnlyProviderAdapter`
+- `CustomProviderAdapter`
+
+## 9. 业务模块职责
+
+### `suppliers`
+
+- 供应商 CRUD。
+- 供应商类型：`source_account`、`relay`、`browser_only`、`custom`。
+- 供应商运行状态：`monitor_only`、`candidate`、`active`、`disabled`。
+- 本地账号与供应商账号映射。
+
+无余额供应商只能监控费率和优惠，不能进入切换候选。
+
+### `rates`
+
+- 每 10 分钟抓取费率。
+- 记录费率快照。
+- 对比费率变化。
+- 生成变更事件和通知。
+- 计算费率变化对毛利的影响。
+
+### `promotions`
+
+- 监控充值赠送、折扣费率、套餐折扣、限时活动。
+- 对无余额供应商继续监控优惠。
+- 只生成充值建议，不直接生成切换建议。
+
+### `billing`
+
+- 导入供应商账单。
+- 接收 Chrome 插件导出的账单文件。
+- 标准化账单明细。
+
+### `reconciliation`
+
+- 对齐供应商账单与本地 Sub2API 使用记录。
+- 计算收入、成本、毛利和毛利率。
+- 标记未匹配、成本异常、token 差异。
+
+### `health`
+
+- 采集首 token 时间、总耗时、错误率、可用率。
+- 采集余额、额度、可并发数。
+- 计算供应商和账号健康分。
+
+### `actions`
+
+- 生成暂停、恢复、降权、升权、调并发、切换、充值建议。
+- 管理员确认后才调用 Sub2API Admin API 执行动作。
+- 所有动作必须审计和可回滚评估。
+
+### `extension`
+
+- 管理 Chrome 插件设备。
+- 创建、领取、心跳、完成、失败任务。
+- 接收文件、截图和错误上下文。
+
+### `audit`
+
+- 记录敏感凭据使用。
+- 记录所有外部写操作。
+- 记录自动化建议确认和执行。
+
+## 10. 路由规划
+
+```text
+/api/admin-plus/auth/*
+/api/admin-plus/suppliers
+/api/admin-plus/supplier-accounts
+/api/admin-plus/rates
+/api/admin-plus/promotions
+/api/admin-plus/bills
+/api/admin-plus/reconciliation
+/api/admin-plus/health
+/api/admin-plus/actions
+/api/admin-plus/extension
+/api/admin-plus/audit
+```
+
+路由规则：
+
+- 管理接口必须通过 Sub2API 管理员身份校验。
+- 插件接口使用短期设备 token。
+- 写操作必须带幂等键或业务去重键。
+- 执行动作必须记录审计。
+
+## 11. 定时任务
+
+建议放在：
+
+```text
+backend/internal/adminplus/scheduler
+```
+
+MVP 1 任务：
+
+- `rate_poll_job`：每 10 分钟抓取费率。
+- `promotion_poll_job`：定时抓取优惠。
+- `balance_poll_job`：定时检查余额和额度。
+- `health_probe_job`：定时测速和并发探测。
+- `bill_export_job`：每天触发账单导出。
+- `reconciliation_job`：每天对账。
+- `action_generation_job`：生成运营建议。
+- `extension_task_timeout_job`：处理插件任务超时。
+
+任务要求：
+
+- 支持分布式锁。
+- 支持失败重试。
+- 支持幂等。
+- 支持任务审计。
+- 不因单个供应商失败阻塞全部任务。
+
+## 12. 依赖方向
+
+允许：
+
+```text
+handler/adminplus -> adminplus/app
+adminplus/app -> adminplus/ports
+adminplus/app -> adminplus/db
+adminplus/app -> adminplus/redis
+adminplus/adapters -> adminplus/clients
+adminplus/adapters -> copied Sub2API DTO/util when necessary
+adminplus/actions -> clients/sub2apiadmin
+```
+
+禁止：
+
+```text
+adminplus/app -> backend/internal/service 的复杂业务实现
+adminplus/app -> Sub2API 主库写操作
+adminplus/app -> Sub2API Redis 写操作
+adminplus/adapters -> 无白名单 Redis key
+Chrome 插件 -> Sub2API 管理员 token
+```
+
+原则是业务依赖接口，不依赖复制来的 Sub2API 内部实现细节。确实需要复用 Sub2API 代码时，优先复制小型 DTO、常量或校验函数到 Admin Plus 命名空间，并记录来源。
+
+## 13. 最小落地顺序
+
+1. 在 `backend/internal/adminplus/config` 增加 Admin Plus 配置。
+2. 在 `backend/internal/adminplus/auth` 完成 Sub2API 登录代理和管理员校验。
+3. 在 `backend/internal/server/routes/adminplus.go` 注册 `/api/admin-plus/*`。
+4. 在 `backend/internal/handler/adminplus` 增加 `auth/me` 和健康检查接口。
+5. 建立 Admin Plus 独立 DB 连接和迁移目录。
+6. 建立 Redis 前缀封装。
+7. 建立 Sub2API Admin API client。
+8. 建立 Sub2API 只读 DB/Redis adapter。
+9. 实现供应商台账。
+10. 实现 Sub2API 源站账号读取适配。
+11. 实现 Sub2API 供应商费率抓取。
+12. 实现费率快照和变更事件。
+13. 实现余额、优惠和健康采集。
+14. 实现账单导入和对账。
+15. 实现自动化建议和管理员确认执行。
+16. 实现 Chrome 插件任务协议。
+
+## 14. 代码审查重点
+
+- 是否误改 `/Users/coso/Documents/dev/go/sub2api`。
+- 是否把 Admin Plus 业务散落到 Sub2API 原有 service/repository 中。
+- 是否直接写入 Sub2API 主库。
+- 是否直接写入 Sub2API Redis key。
+- 是否绕过 Admin API 修改 Sub2API 状态。
+- 是否记录敏感操作审计。
+- 是否对凭据加密和脱敏。
+- 是否把无余额供应商加入切换候选。
+- 是否误做 OpenAI、Anthropic、Gemini 源站账号添加功能。
+- 是否保存了源站账号 API Key、OAuth、Cookie 等应由 Sub2API 管理的凭据。
+- 是否把账号采购预留模块误做成下单、付款、售后系统。

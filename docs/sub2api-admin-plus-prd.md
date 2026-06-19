@@ -1,0 +1,1840 @@
+# Sub2API Admin Plus 产品需求文档
+
+版本：v0.1  
+日期：2026-06-20  
+项目：`sub2api-admin-plus`  
+定位：Sub2API 的非侵入式自动化运营扩展系统
+
+## 1. 背景
+
+当前 Sub2API 已承担核心网关职责，包括账号管理、API Key 分发、计费、调度、并发控制、使用记录和渠道监控。实际运营中还存在一批偏“运营自动化”和“供应商管理”的需求：
+
+- 下游/上游供应商费率会变化，需要定时抓取、比对并告警。
+- 需要把供应商账单导出后与本地 Sub2API 使用记录对账，计算真实成本、收入和利润。
+- 需要持续监控第三方节点速度，例如首 token 时间、总耗时、可用率、错误率和可并发数。
+- 需要绑定第三方供应商的账号密码、临时 token 或 Admin API Key，通过 Chrome 插件登录供应商后台，完成网页侧数据抓取和账单导出。
+- 需要保持主系统 `/Users/coso/Documents/dev/go/sub2api` 可持续跟随上游更新，不能把自用运营逻辑侵入 Sub2API 核心代码。
+
+因此，`sub2api-admin-plus` 作为独立扩展系统开发，复用 Sub2API 的技术栈、管理员权限和公开集成点，只开发自动化运营业务能力。
+
+## 2. 产品目标
+
+### 2.1 核心目标
+
+`sub2api-admin-plus` 的初步核心目的，是让中转站在多上游供应商之间自动选择成本、稳定性和利润都合理的运营方案：客户尽量使用到低成本、稳定的 API；中转商获得可持续的合理利润；系统在上游故障、余额不足、费率变化、优惠活动出现时及时发现、通知并给出切换或充值建议，减少人工盯盘。
+
+1. 建立供应商台账：管理第三方供应商、供应商账号、供应商费率、登录凭据、Sub2API 账号映射关系。
+2. 自动监控费率：每 10 分钟抓取一次供应商费率，发现变更后记录快照、生成事件并告警。
+3. 自动对账：每天导入或自动导出供应商账单，与本地 `usage_logs` 对齐，计算成本、收入、毛利和异常差异。
+4. 自动监控节点质量：持续采集首 token、总耗时、可用率、错误率、并发容量和余额状态，用于运营决策。
+5. 利益最优调度建议：综合上游成本、节点质量、可用余额、客户售价和目标毛利，推荐最符合客户利益且能保留合理利润的上游节点。
+6. 优惠与充值机会监控：即使某个供应商当前没有余额，也持续关注其费率和优惠活动；有优惠时提醒及时充值，以便获得更低成本。
+7. 自动化运营告警：余额不足、费率上涨、节点故障、对账异常、毛利过低、供应商优惠活动时及时通知。
+8. 自动化执行闭环：在管理员确认后，通过 Sub2API Admin API 调整账号调度状态、优先级或并发。
+9. Chrome 插件协同：当供应商没有完整 API 或数据库权限时，通过浏览器插件完成登录、导出和页面数据抓取。
+
+### 2.2 非侵入目标
+
+`sub2api-admin-plus` 不修改 Sub2API 核心业务代码，不新增 Sub2API 私有分支逻辑，不直接写 Sub2API 数据库或 Redis。
+
+允许的集成方式按优先级排序：
+
+1. 独立 Admin Plus URL，通过 Sub2API 管理员 JWT 校验复用管理员身份。
+2. Sub2API Admin API。
+3. Sub2API PostgreSQL 只读查询。
+4. Sub2API Redis 只读查询。
+5. Chrome 插件登录供应商后台抓取网页数据。
+6. 可选在 Sub2API 后台配置外链入口，但不依赖 iframe。
+7. 仅当缺少通用扩展点时，向上游 Sub2API 提交小型通用 PR。
+
+## 3. 明确不做
+
+- 不开发独立用户系统。
+- 不开发独立角色/权限系统。
+- 不开发新的登录体系。
+- 不把自用业务逻辑 PR 到 Sub2API 上游。
+- 不直接写入 Sub2API PostgreSQL 或 Redis。
+- 不重做 Sub2API 已有的账号管理、用户管理、API Key 管理、网关转发、计费扣费和核心调度。
+- 不开发 OpenAI、Anthropic、Gemini 等源站账号添加功能，不保存这些源站账号的 API Key、OAuth、Cookie 等凭据。
+- MVP 不支持所有供应商后台；OpenAI、Anthropic、Gemini 等源站账号的添加继续由 Sub2API 负责，admin-plus 只运营 Sub2API 已添加的源站账号，并优先支持 Sub2API 中转型上游。
+- MVP 不开发账号采购、库存下单、付款和卖家推荐功能；仅预留账号采购成本、库存来源和采购记录模型。
+
+## 4. 设计原则
+
+- KISS：先做 Sub2API 供应商适配器，避免一开始抽象过度。
+- YAGNI：New API 和其它相似系统保留适配器接口，MVP 不展开。
+- DRY：费率、账单、监控统一走 Provider Adapter，避免每个页面各写一套抓取逻辑。
+- SOLID：采集、对账、策略决策、执行动作分层，单一职责。
+- 非侵入：主系统只读或通过 Admin API 写入，确保 Sub2API 可持续升级。
+
+## 5. 用户与角色
+
+### 5.1 目标用户
+
+系统运营者，即当前 Sub2API 的管理员。
+
+### 5.2 权限复用
+
+`sub2api-admin-plus` 不维护自己的用户、角色和权限表。
+
+认证来源：
+
+- Admin Plus 独立访问，不依赖 iframe、跨子域共享 cookie 或同时登录状态。
+- Admin Plus 可以提供自己的登录页，但登录、2FA、刷新 token 和登出动作都代理到本地 Sub2API 认证接口。
+- Admin Plus 前端保存的是 Sub2API 签发的 access token 和 refresh token，存储位置在 Admin Plus 自己域名下。
+- Admin Plus 后端校验请求时，复用 Sub2API JWT/管理员判断逻辑，或调用本地 Sub2API `/api/v1/auth/me` 校验当前 token。
+- 服务端执行写操作调用 Sub2API 时，使用 Sub2API Admin API Key 或经校验后的管理员 JWT，具体按 Sub2API 现有接口要求选择。
+- Chrome 插件与 admin-plus 通信时，使用 admin-plus 生成的短期设备 token，设备 token 只代表插件任务执行权限，不代表用户体系。
+
+授权规则：
+
+- 只要当前请求不能证明来自 Sub2API 管理员，就拒绝访问 admin-plus。
+- admin-plus 内部不做二级角色，例如运营、财务、只读管理员等。
+- 操作审计记录操作人使用 Sub2API 的管理员用户 ID、用户名或管理员 token 指纹。
+
+### 5.3 登录策略结论
+
+是否与 Sub2API 后台“同时登录”不是核心目标。Admin Plus 的认证边界应定义为：
+
+- Admin Plus 有独立登录入口。
+- 登录表单提交给 Admin Plus 后端。
+- Admin Plus 后端代理调用本地 Sub2API `/api/v1/auth/login`、`/api/v1/auth/login/2fa`、`/api/v1/auth/refresh` 和 `/api/v1/auth/logout`。
+- Sub2API 负责密码校验、2FA 校验、refresh token 管理、用户状态和管理员角色判断。
+- Admin Plus 只接受 `role=admin` 的 Sub2API 用户。
+- Admin Plus 不签发自己的用户 token，不保存用户密码，不维护用户表。
+
+这样可以支持：
+
+```text
+Sub2API:    https://sub2api.demo.com
+Admin Plus: https://sub2api-plus.demo.com
+```
+
+并且不需要：
+
+- iframe。
+- 共享父域 cookie。
+- 跨子域读取 `localStorage`。
+- Chrome 插件同步 Sub2API 登录 token。
+- 给 Sub2API 增加 SSO 或 token handoff PR。
+
+复制 Sub2API 后端代码的价值在于复用 DTO、JWT 校验、管理员判断、响应结构和只读查询模型；MVP 登录链路优先走 Sub2API 现有认证 API 代理，避免在 admin-plus 中复制一套会写 Sub2API DB/Redis 的认证服务。
+
+## 6. 上游供应商支持策略
+
+### 6.1 MVP 优先级
+
+上游需要区分两类：
+
+- Sub2API 源站账号：Sub2API 中已添加的 OpenAI、Anthropic、Gemini 等原始 LLM 账号，是成本链路的最上游。
+- 中转型上游：Sub2API、New API、New API-like、仅网页后台的供应商。
+
+MVP 优先级：
+
+1. Sub2API 源站账号：读取并运营 Sub2API 已添加的 OpenAI、Anthropic、Gemini 账号。
+2. 中转型上游：供应商也是 Sub2API 部署实例。
+3. 中转型上游：New API 或 New API-like 系统。
+4. 仅提供网页后台的供应商。
+5. 其它自定义供应商。
+
+MVP 必须支持读取和运营 Sub2API 已添加的源站 LLM 账号，以及 Sub2API 中转型上游。
+
+### 6.2 Sub2API 供应商适配能力
+
+当上游供应商也是 Sub2API 时，优先使用以下数据源：
+
+- Admin API：账号列表、使用记录、渠道监控、账单导出、余额调整等可公开管理接口。
+- PostgreSQL 只读：`usage_logs`、`accounts`、`channel_monitors`、`channel_monitor_histories`、`channel_monitor_daily_rollups` 等分析数据。
+- Redis 只读：并发会话、窗口费用等运行态数据，例如 `session_limit:account:{accountID}`、`window_cost:account:{accountID}`。
+- Chrome 插件：当供应商未开放 Admin API Key 或无法直连 DB/Redis 时，登录后台导出 CSV、读取余额和并发信息。
+
+### 6.3 Sub2API 源站账号运营能力
+
+OpenAI、Anthropic、Gemini 等源站 LLM 账号的添加、OAuth、API Key 录入和凭据刷新继续由 Sub2API 完成。admin-plus 只读取 Sub2API 已存在的账号，并管理这些账号的运营属性。
+
+核心能力：
+
+- 读取 Sub2API 已添加的源站账号和分组绑定。
+- 配置官方/采购成本费率。
+- 采集余额、额度、限速、可并发数和可用模型。
+- 执行连通性测试和模型探测。
+- 监控首 token、总耗时、错误率和可用率。
+- 根据成本、稳定性、额度和目标毛利生成调度建议。
+
+源站账号不依赖供应商账单页面时，优先使用 Sub2API Admin API、只读数据库、使用记录和账号测试结果做成本核算；admin-plus 不直接保存源站账号 API Key 或 OAuth 凭据。
+
+### 6.4 Provider Adapter 设计
+
+所有上游能力都通过 Adapter 暴露，MVP 实现 `Sub2APISourceAccountAdapter` 和 `Sub2APIProviderAdapter`。
+
+```text
+ProviderAdapter
+  - ProviderKind()
+  - FetchRateCatalog()
+  - FetchUsageBills()
+  - FetchBalance()
+  - FetchConcurrency()
+  - FetchHealthMetrics()
+  - FetchModels()
+  - ProbeCredential()
+  - ExportBillsByBrowserTask()
+  - ValidateCredential()
+```
+
+Sub2API 源站账号按 platform 归类处理：OpenAI、Anthropic、Gemini。后续 New API 只新增 `NewAPIProviderAdapter`，不影响已实现业务模块。
+
+## 7. 业务范围
+
+### 7.1 供应商台账
+
+用于维护所有上游供应商。
+
+核心字段：
+
+- 供应商名称。
+- 上游类别：`source_account`、`relay`、`browser_only`、`custom`。
+- 供应商类型：`openai`、`anthropic`、`gemini`、`sub2api`、`new_api`、`browser_only`、`custom`。
+- 后台地址。
+- API Base URL。
+- Admin API Key。
+- PostgreSQL 只读连接。
+- Redis 只读连接。
+- Chrome 插件登录配置。
+- 供应商状态：正常、不可用、凭据失效、暂停监控。
+- 供应商备注。
+
+供应商运行分类：
+
+- `monitor_only`：仅监控费率、优惠和余额，不进入切换候选。
+- `candidate`：有余额且健康达标，可以进入切换候选。
+- `active`：当前正在承载流量。
+- `disabled`：暂停监控和调度。
+
+余额规则：
+
+- 供应商无余额或额度不足时，不允许作为流量切换候选。
+- 供应商无余额时，仍然保留费率、优惠、账单和页面监控。
+- 如果无余额供应商出现明显优惠或低成本机会，系统只生成“充值建议”，不生成“切换建议”。
+- 充值后，系统重新校验余额、健康和凭据，通过后才能进入 `candidate`。
+
+### 7.2 供应商账号映射
+
+用于把本地 Sub2API 账号与上游账号关联。上游账号可以是原始 LLM 账号，也可以是中转型供应商账号。
+
+核心能力：
+
+- 选择本地 Sub2API 账号 ID。
+- 绑定供应商实例。
+- 绑定上游账号类型：OpenAI、Anthropic、Gemini、Sub2API、New API 等。
+- 绑定供应商侧 API Key、账号名、邮箱、组织 ID、项目 ID 或供应商侧 account ID。
+- 配置该供应商账号的成本费率。
+- 配置默认并发、最大并发、余额阈值、质量阈值。
+- 支持一对一和一对多映射。
+
+映射目标：
+
+- 对账时知道某条本地使用记录应归属哪个供应商账单。
+- 监控时知道哪个供应商节点影响哪个本地账号。
+- 调度建议时能定位到应调整的本地账号。
+
+### 7.3 费率监控
+
+每 10 分钟抓取供应商费率并生成快照。
+
+MVP 数据源：
+
+- Sub2API 供应商 Admin API 的渠道/模型定价接口。
+- Sub2API 供应商数据库的渠道定价表，只读查询。
+- Chrome 插件从供应商后台费率页面抓取。
+- 手动维护费率作为兜底。
+
+核心能力：
+
+- 按供应商、模型、计费模式、计费层级记录费率。
+- 支持 token、按次、图片等计费模式。
+- 支持输入、输出、缓存创建、缓存读取等不同价格项。
+- 支持与上一快照对比。
+- 发现变更后生成事件。
+- 支持变更阈值，例如大于 1% 才告警。
+- 支持人工确认变更。
+- 支持把确认后的费率用于成本核算。
+
+### 7.4 优惠监控
+
+用于发现供应商充值优惠、折扣费率、限时活动、赠送余额等降低成本的机会。
+
+数据来源：
+
+- 供应商 Sub2API 公告、后台页面或配置接口。
+- Chrome 插件读取供应商后台活动、充值页和公告。
+- 手动录入优惠活动。
+
+核心能力：
+
+- 记录优惠类型：充值赠送、折扣费率、套餐折扣、限时活动、邀请码返利。
+- 记录优惠有效期、适用模型、适用账号、最低充值金额、预计折后成本。
+- 对比当前可用供应商成本，计算优惠后是否能降低成本或提高毛利。
+- 对无余额供应商也执行优惠监控。
+- 对无余额供应商只生成充值建议，不进入切换候选。
+- 优惠即将结束时生成提醒。
+
+### 7.5 账单导出与对账
+
+用于核算成本和利润。
+
+数据来源：
+
+- 供应商 Sub2API Admin API 使用记录。
+- 供应商 Sub2API 数据库 `usage_logs` 只读查询。
+- 供应商后台 CSV 导出。
+- 本地 Sub2API 数据库 `usage_logs` 只读查询。
+
+对账维度：
+
+- 日期。
+- 供应商。
+- 供应商账号。
+- 本地账号。
+- API Key。
+- 模型。
+- 请求 ID。
+- Token。
+- 成本。
+- 收入。
+- 毛利。
+- 首 token 时间。
+- 总耗时。
+
+对账结果：
+
+- 已匹配。
+- 供应商有、本地无。
+- 本地有、供应商无。
+- 成本差异。
+- token 差异。
+- 模型映射差异。
+- 重复账单。
+- 账单时间跨日。
+
+### 7.6 节点质量监控
+
+质量指标：
+
+- 首 token 时间 P50/P90/P95。
+- 总耗时 P50/P90/P95。
+- 成功率。
+- 错误率。
+- 429/529/5xx 比例。
+- 可用率。
+- 当前并发。
+- 最大可并发。
+- 余额。
+- 最近一次账单导出时间。
+- 最近一次费率更新时间。
+
+数据来源：
+
+- 本地 Sub2API `usage_logs.first_token_ms`。
+- 本地 Sub2API `usage_logs.duration_ms`。
+- 本地 Sub2API Ops 和 Channel Monitor API。
+- 本地 Sub2API `channel_monitor_histories`。
+- 本地 Sub2API Redis 并发会话只读数据。
+- 供应商 Sub2API 的相同指标。
+- Chrome 插件读取供应商后台余额和并发卡片。
+
+### 7.7 自动化运营策略
+
+策略只生成建议，MVP 默认不自动执行破坏性动作。
+
+建议类型：
+
+- 降低账号优先级。
+- 提高账号优先级。
+- 暂停调度账号。
+- 恢复调度账号。
+- 调整账号并发。
+- 提醒补充余额。
+- 提醒供应商优惠活动。
+- 提醒供应商费率变更。
+- 提醒账单异常。
+
+执行方式：
+
+- 默认人工确认。
+- 确认后通过 Sub2API Admin API 执行。
+- 所有执行动作写审计日志。
+
+调度候选硬规则：
+
+- 只有 `candidate` 或 `active` 供应商账号可以进入切换候选。
+- 供应商账号必须有可用余额或有效额度。
+- 供应商账号必须通过健康阈值。
+- 供应商凭据必须有效。
+- `monitor_only` 供应商只能生成充值、观察或手动评估建议，不能生成流量切换执行动作。
+
+### 7.8 Chrome 插件
+
+Chrome 插件负责浏览器侧自动化。
+
+MVP 职责：
+
+- 接收 admin-plus 下发的任务。
+- 使用已绑定的供应商账号密码或临时 token 登录供应商后台。
+- 打开供应商使用记录页面。
+- 按天导出 CSV。
+- 读取供应商余额、请求数、可并发数等页面数据。
+- 把导出的文件和结构化数据上传到 admin-plus。
+- 上报任务状态、失败截图和错误原因。
+
+插件不负责：
+
+- 对账计算。
+- 策略判断。
+- 直接修改本地 Sub2API。
+- 保存长期明文密码。
+
+### 7.9 账号采购与库存成本预留
+
+部分上游账号可能来自账号采购平台或人工采购，每个账号本身有采购成本、有效期和库存状态。该能力作为后续预留，MVP 不开发采购下单和库存管理。
+
+预留范围：
+
+- 记录账号来源：官方自有、采购平台、人工采购、供应商赠送。
+- 记录采购成本、币种、采购时间、有效期。
+- 记录账号库存状态：未使用、使用中、失效、待续费。
+- 将账号采购成本折算到成本核算和毛利分析中。
+
+MVP 不做：
+
+- 自动购买账号。
+- 采购平台商家推荐。
+- 下单、支付、退款、售后流程。
+- 账号库存自动补货。
+
+## 8. 用户故事
+
+### 8.1 客户使用低成本稳定 API
+
+作为中转站客户，我希望系统优先把我的请求路由到稳定且成本合理的上游 API，这样我可以用更低价格获得可持续的服务，而不是频繁遇到慢响应、失败或突然涨价。
+
+验收标准：
+
+- 系统可以按模型、供应商、账号计算当前可用上游的成本。
+- 系统可以结合首 token、总耗时、错误率和可用率判断节点质量。
+- 系统可以给出“低成本且稳定”的推荐节点。
+- 当最低成本节点质量不达标时，系统可以推荐次优成本但更稳定的节点。
+- 推荐理由必须可解释，例如成本最低、P95 延迟达标、错误率低于阈值。
+
+### 8.2 运营 Sub2API 已添加的源站账号
+
+作为中转商，我希望系统可以读取和运营 Sub2API 已添加的 OpenAI、Anthropic、Gemini 等源站账号，这样不重复开发账号添加能力，也能把最上游账号纳入成本、额度和稳定性管理。
+
+验收标准：
+
+- 可以读取 Sub2API 中已添加的 OpenAI、Anthropic、Gemini 账号。
+- 可以读取这些账号在 Sub2API 中的分组、调度和状态信息。
+- 可以采集可用模型、额度、余额、限速和健康指标。
+- 可以把原始 LLM 账号纳入成本、利润和切换建议计算。
+
+### 8.3 中转商保持合理利润
+
+作为中转商，我希望系统在选择低成本上游的同时计算客户售价、上游成本和毛利，这样既能让客户获得有竞争力的价格，也能保证业务有合理利润。
+
+验收标准：
+
+- 可以按供应商、模型、账号、API Key 计算收入、成本、毛利和毛利率。
+- 可以配置最低毛利率阈值。
+- 当某个上游费率上涨导致毛利过低时，系统生成告警。
+- 当某个模型存在更优成本节点时，系统生成切换建议。
+- 对账结果可以解释利润变化来源，例如费率上涨、用量变化、模型映射变化。
+
+### 8.4 上游故障及时切换
+
+作为运营者，我希望系统发现上游故障、慢响应、错误率升高或并发不足时，及时推荐切换到成本和稳定性更合适的节点，避免客户持续受到影响。
+
+验收标准：
+
+- 可以按供应商、账号、模型查看延迟趋势。
+- 可以展示 P50/P90/P95。
+- 可以展示近 5 分钟、1 小时、24 小时指标。
+- 可以生成“建议切换”状态。
+- 可以看到建议原因，例如首 token P95 超阈值、错误率超阈值、余额不足、可用并发不足。
+- 切换建议必须展示候选节点的成本、健康分和预计毛利。
+- 默认只生成建议，管理员确认后才执行调度变更。
+
+### 8.5 余额不足及时通知
+
+作为运营者，我希望系统持续监控每个上游供应商余额，并在余额不足或预计即将耗尽时通知我，这样我可以及时充值或切换，避免客户请求失败。
+
+验收标准：
+
+- 可以读取供应商当前余额。
+- 可以基于最近消耗速度估算剩余可用时间。
+- 可以配置余额阈值和预计耗尽时间阈值。
+- 余额不足时生成告警并显示影响的本地账号、模型和客户分组。
+- 余额不足时可以生成暂停、降权或切换建议。
+
+### 8.6 费率变化自动发现
+
+作为运营者，我希望系统定时监控上游供应商费率变化，这样上游涨价或降价时可以及时调整调度策略、售价或利润预期。
+
+验收标准：
+
+- 可以创建供应商。
+- 可以绑定本地账号与供应商账号。
+- 可以配置或抓取模型费率。
+- 定时任务每 10 分钟执行一次。
+- 费率变化会生成快照和变更事件。
+- 页面能展示变更前、变更后、变化比例、影响账号和预计利润影响。
+
+### 8.7 无余额供应商优惠监控
+
+作为中转商，我希望系统即使在某个供应商没有余额时，也继续关注它是否出现充值优惠、折扣费率或活动，这样我可以在合适时机充值，获得更低成本；但在没有额度前，它不能被用于流量切换。
+
+验收标准：
+
+- 无余额供应商可以保持 `monitor_only` 状态。
+- `monitor_only` 供应商继续执行费率和优惠监控。
+- 发现优惠时生成充值建议，展示优惠有效期、预计折后成本、预计毛利变化。
+- 无余额供应商不能出现在自动切换候选列表。
+- 充值后必须重新校验余额、健康和凭据，达标后才能进入切换候选。
+
+### 8.8 每日账单对账
+
+作为运营者，我希望每天自动导出供应商账单并与本地使用记录对账，这样可以确认真实成本、客户收入、利润和异常账单。
+
+验收标准：
+
+- 可以为供应商配置每日导出时间。
+- 可以通过 API、数据库或 Chrome 插件导入账单。
+- 可以按日期生成对账批次。
+- 可以看到总收入、总成本、毛利、毛利率。
+- 可以看到未匹配、成本差异、token 差异明细。
+- 可以导出对账结果 CSV。
+
+### 8.9 自动化运营少盯盘
+
+作为中转商，我希望系统自动完成费率监控、优惠监控、余额监控、账单对账、节点健康评估和切换建议，这样日常运营不需要长期人工盯盘，只在需要决策时收到通知。
+
+验收标准：
+
+- 系统能自动执行定时采集和对账任务。
+- 系统能把异常聚合成待处理事项。
+- 系统能按严重程度排序告警。
+- 系统能记录每个建议的原因、影响范围和建议动作。
+- 系统能保留处理记录，方便复盘。
+
+### 8.10 供应商凭据绑定
+
+作为运营者，我希望绑定供应商账号密码、临时 token、Admin API Key 和只读数据库连接，这样系统可以用最合适的数据源采集运营数据。
+
+验收标准：
+
+- 凭据加密存储。
+- 页面不回显明文。
+- 可以测试凭据是否可用。
+- 可以禁用某个凭据。
+- 凭据使用记录进入审计日志。
+
+## 9. 用户用例
+
+### 9.1 低成本稳定路由建议
+
+参与者：运营者、Admin Plus、Sub2API Admin API。
+
+前置条件：
+
+- 已配置至少两个上游供应商。
+- 已绑定本地账号与供应商账号。
+- 已采集费率和健康指标。
+
+主流程：
+
+1. 系统按模型读取所有可用上游节点。
+2. 系统过滤不可用、余额不足、无有效额度、错误率超阈值、延迟超阈值的节点。
+3. 系统计算每个候选节点的上游成本、客户售价、预计毛利和健康分。
+4. 系统选择“满足稳定性阈值下成本最低，并满足最低毛利率”的节点。
+5. 系统生成调度建议。
+6. 运营者确认后，系统通过 Sub2API Admin API 更新账号优先级、并发或调度状态。
+
+异常流程：
+
+- 如果最低成本节点不稳定，选择成本次优但健康分达标的节点。
+- 如果所有节点毛利都低于阈值，生成售价或供应商调整告警。
+- 如果某个供应商成本更低但没有余额，只生成充值建议，不进入切换候选。
+- 如果所有节点不可用，生成高优先级故障告警。
+
+### 9.2 Sub2API 源站账号运营接入
+
+参与者：运营者、Admin Plus、本地 Sub2API Admin API。
+
+前置条件：
+
+- 本地 Sub2API 已添加 OpenAI、Anthropic 或 Gemini 账号。
+- admin-plus 已配置 Sub2API Admin API Key 或只读数据库连接。
+
+主流程：
+
+1. 系统从 Sub2API 读取已添加的源站账号。
+2. 系统识别账号平台、类型、分组、状态、并发和调度配置。
+3. 系统读取或计算账号可用模型、额度、限速和健康状态。
+4. 系统为账号绑定成本费率、余额阈值和毛利目标。
+5. 系统将达标账号纳入调度建议候选。
+
+异常流程：
+
+- 如果 Sub2API 中账号凭据失效，admin-plus 标记该账号不可候选并提示去 Sub2API 修复。
+- 如果账号无额度，状态为 `monitor_only`，只监控优惠或额度恢复，不进入切换候选。
+- 如果 Sub2API 无法返回余额，允许手动录入或通过账号测试结果推断。
+
+### 9.3 上游余额不足处理
+
+参与者：运营者、Admin Plus、Chrome 插件、供应商 Sub2API。
+
+前置条件：
+
+- 供应商已配置余额采集方式。
+- 已配置余额阈值和预计耗尽时间阈值。
+
+主流程：
+
+1. 系统定时读取供应商余额。
+2. 系统根据最近 24 小时消耗速度估算剩余可用时间。
+3. 余额低于阈值或预计耗尽时间低于阈值时，生成告警。
+4. 系统列出受影响的本地账号、模型、客户分组和预计影响。
+5. 系统推荐充值、降权、暂停调度或切换到其它供应商。
+6. 运营者确认后执行调度调整。
+
+异常流程：
+
+- 如果 API 无法读取余额，创建 Chrome 插件抓取任务。
+- 如果插件抓取失败，标记凭据或页面结构异常并提升告警等级。
+
+### 9.4 上游故障切换
+
+参与者：Admin Plus、Sub2API Admin API、运营者。
+
+前置条件：
+
+- 已配置健康阈值。
+- 已采集使用日志或渠道监控数据。
+
+主流程：
+
+1. 系统持续聚合首 token、总耗时、错误率、可用率。
+2. 指标超过阈值时，系统识别故障供应商和影响账号。
+3. 系统查询可替代节点。
+4. 系统比较替代节点的成本、健康分、余额和毛利。
+5. 系统生成切换建议。
+6. 运营者确认后执行切换。
+
+异常流程：
+
+- 如果替代节点成本明显更高但当前节点故障严重，系统标记“稳定性优先”。
+- 如果替代节点会导致毛利过低，系统标记“利润风险”并提示是否临时接受。
+- 如果替代节点无余额，即使成本更低，也不能作为切换目标，只能生成充值建议。
+
+### 9.5 无余额供应商优惠监控
+
+参与者：运营者、Admin Plus、Chrome 插件、供应商后台。
+
+前置条件：
+
+- 供应商已配置费率或优惠采集方式。
+- 供应商当前余额不足或没有充值。
+- 供应商状态为 `monitor_only`。
+
+主流程：
+
+1. 系统继续定时抓取该供应商的费率、公告、充值页和优惠信息。
+2. 系统发现充值赠送、折扣费率、套餐折扣或限时活动。
+3. 系统计算优惠后的预计成本和预计毛利。
+4. 系统与当前可用供应商成本做比较。
+5. 如果优惠后成本更低或毛利更好，系统生成充值建议。
+6. 运营者充值后，系统重新校验余额、健康和凭据。
+7. 校验通过后，供应商才可从 `monitor_only` 进入 `candidate`。
+
+异常流程：
+
+- 如果优惠即将结束但余额仍为 0，系统提高提醒等级。
+- 如果充值后健康指标不达标，供应商仍不能进入切换候选。
+- 如果优惠信息无法自动抓取，系统创建 Chrome 插件任务或提示手动录入。
+
+### 9.6 每日利润核算
+
+参与者：运营者、Admin Plus、Chrome 插件、供应商 Sub2API。
+
+前置条件：
+
+- 已配置供应商账单导出方式。
+- 已配置本地 Sub2API 只读数据库连接。
+
+主流程：
+
+1. 系统按计划获取供应商账单。
+2. 系统读取本地 Sub2API 使用记录。
+3. 系统按 request_id、账号、模型、时间窗口匹配账单。
+4. 系统计算收入、上游成本、毛利和毛利率。
+5. 系统生成对账报告。
+6. 系统标记成本差异、未匹配记录和利润异常。
+
+异常流程：
+
+- 如果供应商账单缺少 request_id，系统使用弱匹配并标记置信度。
+- 如果账单导出失败，创建重试任务并通知运营者。
+
+### 9.7 费率变化后的策略调整
+
+参与者：运营者、Admin Plus、供应商 Sub2API。
+
+前置条件：
+
+- 已配置费率采集方式。
+- 已配置最低毛利率阈值。
+
+主流程：
+
+1. 系统每 10 分钟抓取供应商费率。
+2. 系统与上一快照比较。
+3. 系统计算费率变化对本地账号、客户售价和毛利的影响。
+4. 如果毛利低于阈值，生成策略建议。
+5. 策略建议包括切换供应商、调整本地账号倍率、暂停低利润模型或提示改价。
+6. 运营者确认后执行可自动化的调度动作。
+
+异常流程：
+
+- 如果费率来源冲突，优先使用管理员指定的权威来源。
+- 如果无法抓取费率，保留旧费率并生成采集失败告警。
+
+## 10. 总体架构
+
+```mermaid
+flowchart LR
+  Admin[Sub2API 管理员] --> Sub2APIUI[Sub2API 管理后台登录]
+  Admin -->|独立访问| PlusUI[Admin Plus 前端]
+  Sub2APIUI -.可选外链入口.-> PlusUI
+  PlusUI --> PlusAPI[Admin Plus 后端]
+
+  PlusUI -->|Authorization: Bearer Sub2API JWT| PlusAPI
+  PlusAPI -->|校验管理员 JWT / 查询管理员身份| Sub2APIAdmin[本地 Sub2API Admin API]
+  PlusAPI -->|只读查询| LocalPG[(本地 Sub2API PostgreSQL)]
+  PlusAPI -->|只读查询| LocalRedis[(本地 Sub2API Redis)]
+
+  PlusAPI --> PlusDB[(Admin Plus PostgreSQL 独立库)]
+  PlusAPI --> PlusRedis[(共享 Redis / admin-plus 前缀)]
+  PlusAPI --> Worker[调度任务 Worker]
+
+  Worker -->|Admin API / 只读 DB| SourceAccounts[Sub2API 源站账号 OpenAI/Anthropic/Gemini]
+  Worker -->|Admin API| SupplierSub2API[供应商 Sub2API]
+  Worker -->|只读 DB| SupplierPG[(供应商 PostgreSQL)]
+  Worker -->|只读 Redis| SupplierRedis[(供应商 Redis)]
+
+  Worker --> TaskQueue[插件任务队列]
+  ChromeExt[Chrome 插件] -->|领取任务 / 上传结果| PlusAPI
+  ChromeExt -->|登录 / 导出 / 抓取| SupplierWeb[供应商后台网页]
+
+  PlusAPI -->|确认后写入| Sub2APIAdmin
+```
+
+## 11. 部署与数据隔离
+
+`sub2api-admin-plus` 部署时复用 Sub2API 的基础设施，但必须做到逻辑隔离。
+
+### 11.1 PostgreSQL
+
+部署策略：
+
+- 复用 Sub2API 的 PostgreSQL 实例。
+- 使用独立数据库，例如 `sub2api_admin_plus`。
+- 不与 Sub2API 主库共用 schema。
+- admin-plus 的业务表、迁移记录、任务表、审计表全部写入独立数据库。
+- 读取 Sub2API 主库时必须使用独立只读连接配置，例如 `SUB2API_READONLY_DATABASE_URL`。
+
+禁止：
+
+- admin-plus 业务表建在 Sub2API 主库。
+- admin-plus 迁移工具连接 Sub2API 主库执行 DDL。
+- admin-plus 直接写 Sub2API 主库。
+
+推荐连接划分：
+
+```text
+ADMIN_PLUS_DATABASE_URL        -> PostgreSQL 实例 / sub2api_admin_plus，读写
+SUB2API_READONLY_DATABASE_URL  -> PostgreSQL 实例 / sub2api，严格只读
+```
+
+### 11.2 Redis
+
+部署策略：
+
+- 复用 Sub2API 的 Redis 实例。
+- admin-plus 所有自有 key 必须使用独立前缀。
+- 默认前缀：`admin-plus:{env}:`，例如 `admin-plus:prod:`。
+- 读取 Sub2API Redis 时只读访问 Sub2API 已有 key，例如 `session_limit:account:{accountID}`。
+- admin-plus 不写入、删除或改动任何 Sub2API key。
+
+admin-plus 自有 key 示例：
+
+```text
+admin-plus:prod:lock:rate-poll:{providerID}
+admin-plus:prod:task:chrome:{taskID}
+admin-plus:prod:queue:chrome
+admin-plus:prod:cache:supplier-health:{providerID}
+admin-plus:prod:idempotency:{operation}:{key}
+```
+
+推荐配置：
+
+```text
+REDIS_URL                  -> 复用 Sub2API Redis 实例
+ADMIN_PLUS_REDIS_PREFIX    -> admin-plus:prod:
+SUB2API_REDIS_READ_PREFIX  -> 空值或 Sub2API 实际前缀
+```
+
+验收要求：
+
+- 任意 admin-plus Redis 写入必须带 `ADMIN_PLUS_REDIS_PREFIX`。
+- 启动时校验 `ADMIN_PLUS_REDIS_PREFIX` 非空。
+- 禁止使用无前缀写入。
+- 禁止执行 `FLUSH*`。
+- Redis key 扫描和清理只能作用于 admin-plus 前缀。
+
+### 11.3 后端代码复用策略
+
+admin-plus 的主要复杂度在后端逻辑。为了减少重复实现并兼容 Sub2API 持续更新，允许把 Sub2API 后端代码复制到 admin-plus 仓库内部，但必须按“同步快照 + 扩展层覆盖”的方式管理。
+
+复用目标：
+
+- 复用 Sub2API 后端 DTO、类型定义、分页、响应结构。
+- 复用 Admin API 相关请求/响应模型。
+- 复用账号、使用记录、渠道监控等只读查询模型。
+- 复用 PostgreSQL / Redis 连接、配置解析、日志、时间等可独立使用的工具函数。
+- 复用成本、token、延迟、使用记录等统计口径。
+
+不复用：
+
+- 网关转发核心。
+- 用户登录和权限系统。
+- Sub2API 主服务启动入口。
+- 会写入 Sub2API 主库或主 Redis key 的 repository/service。
+- 与 admin-plus 后端业务无关的大量前端代码。
+
+推荐目录：
+
+```text
+internal/
+  app/                         # admin-plus 自有业务
+  adapters/
+    sub2api/                   # 本地/供应商 Sub2API 适配层
+  hooks/                       # 针对复制代码的 hook / override
+  clients/
+    sub2api_admin/             # Admin API client
+  copied/
+    sub2api/                   # Sub2API 后端代码快照，只同步不手改
+      backend/
+        internal/
+        ent/
+```
+
+同步规则：
+
+- `internal/copied/sub2api` 是上游同步区，不承载 admin-plus 私有逻辑。
+- 复制目录必须记录来源 commit，例如 `internal/copied/sub2api/SOURCE.md`。
+- 复制目录只允许通过脚本从 `/Users/coso/Documents/dev/go/sub2api` 同步。
+- 禁止人工直接修改 `internal/copied/sub2api` 下的文件。
+- 如果必须修补复制代码，优先在 `internal/hooks`、`internal/adapters` 或 wrapper 中处理。
+- 确实属于通用问题时，再考虑给 Sub2API 上游提 PR。
+
+允许的扩展方式：
+
+- 用接口包裹复制代码暴露的能力。
+- 用 adapter 转换 Sub2API 类型为 admin-plus 内部类型。
+- 用 function option 注入不同的 DB、Redis、logger、clock。
+- 用 decorator 拦截写操作，强制改为只读或转发 Admin API。
+- 用 build tag 隔离不可复用的入口文件。
+
+禁止的扩展方式：
+
+- 在复制目录中直接改 Sub2API 业务逻辑。
+- fork 出一套难以同步的 service。
+- 把 admin-plus 的业务规则写进复制代码。
+- 通过全局变量修改 Sub2API 核心行为。
+
+运行边界不变：
+
+- 读取 Sub2API 数据：通过 Admin API、只读 DB、只读 Redis。
+- 写入 Sub2API 数据：只通过 Admin API。
+- admin-plus 自有数据：写入独立 `sub2api_admin_plus` 数据库。
+- admin-plus 自有缓存、锁、队列：写入共享 Redis 的 `ADMIN_PLUS_REDIS_PREFIX` 前缀。
+
+升级流程：
+
+```mermaid
+flowchart TD
+  A[更新 /Users/coso/Documents/dev/go/sub2api] --> B[记录上游 commit]
+  B --> C[执行 copy sync 脚本]
+  C --> D[生成复制目录 diff]
+  D --> E[运行 admin-plus 后端测试]
+  E --> F{测试通过?}
+  F -->|是| G[更新 SOURCE.md 和兼容记录]
+  F -->|否| H[在 adapter/hook 层修复兼容]
+  H --> E
+```
+
+验收要求：
+
+- `internal/copied/sub2api` 可以整体删除后通过同步脚本重建。
+- 复制目录中不存在 admin-plus 私有业务逻辑。
+- 所有自定义行为都能在 `internal/app`、`internal/adapters` 或 `internal/hooks` 中定位。
+- 同步 Sub2API 上游后，不需要修改原 Sub2API 项目文件。
+- 代码复用只服务后端业务实现，前端不要求复制 Sub2API 前端。
+
+## 12. 逻辑架构
+
+```mermaid
+flowchart TB
+  subgraph Frontend[前端]
+    Dashboard[运营看板]
+    Suppliers[供应商管理]
+    Rates[费率监控]
+    Reconcile[账单对账]
+    Health[节点健康]
+    Actions[策略建议]
+  end
+
+  subgraph Backend[后端]
+    Auth[Sub2API 管理员鉴权适配]
+    SupplierSvc[供应商服务]
+    RateSvc[费率服务]
+    BillSvc[账单服务]
+    ReconcileSvc[对账服务]
+    HealthSvc[健康评分服务]
+    RuleSvc[自动化规则服务]
+    ActionSvc[执行动作服务]
+    ExtensionSvc[插件任务服务]
+  end
+
+  subgraph Reuse[Sub2API 后端复用层]
+    Copied[复制代码快照]
+    Hooks[Hook / Override]
+    Client[Admin API Client]
+  end
+
+  subgraph Adapters[Provider Adapter]
+    SourceAccountAdapter[Sub2API Source Account Adapter]
+    Sub2APIAdapter[Sub2API Adapter]
+    BrowserAdapter[Browser Task Adapter]
+    FutureAdapter[New API Adapter]
+  end
+
+  Frontend --> Backend
+  Backend --> Reuse
+  Backend --> Adapters
+```
+
+## 13. 关键时序
+
+### 13.1 管理员访问 admin-plus
+
+```mermaid
+sequenceDiagram
+  participant A as 管理员
+  participant P as Admin Plus 前端
+  participant B as Admin Plus 后端
+  participant S as 本地 Sub2API Auth API
+  participant API as Sub2API Admin API
+
+  A->>P: 打开 Admin Plus 独立地址
+  alt 未登录
+    P-->>A: 显示 Admin Plus 登录页
+    A->>P: 输入 Sub2API 管理员账号、密码、2FA
+    P->>B: POST /auth/login
+    B->>S: 代理调用 /api/v1/auth/login 或 /login/2fa
+    S-->>B: 返回 Sub2API token 和用户信息
+    B->>B: 校验 role=admin
+    B-->>P: 返回 token 和管理员信息
+    P->>P: 在 Admin Plus 域名下保存 token
+  end
+  P->>B: Authorization: Bearer Sub2API JWT
+  B->>API: 校验 token / 查询管理员身份
+  API-->>B: 返回管理员信息或 401/403
+  B-->>P: 返回 Admin Plus 页面数据或登录状态
+```
+
+### 13.2 每 10 分钟费率抓取
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant DB as Admin Plus DB
+  participant A as Sub2API Provider Adapter
+  participant U as 供应商 Sub2API
+  participant N as 通知服务
+
+  W->>DB: 查询启用费率监控的供应商
+  W->>A: FetchRateCatalog(provider)
+  A->>U: Admin API / 只读 DB / Chrome 任务
+  U-->>A: 返回费率目录
+  A-->>W: 归一化费率
+  W->>DB: 写入费率快照
+  W->>DB: 与上一快照比对
+  alt 费率发生变化
+    W->>DB: 写入变更事件
+    W->>N: 发送告警
+  end
+```
+
+### 13.3 每日账单导出与对账
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant E as Chrome 插件
+  participant U as 供应商后台
+  participant B as Admin Plus 后端
+  participant L as 本地 Sub2API DB
+  participant D as Admin Plus DB
+
+  W->>D: 创建账单导出任务
+  E->>B: 领取任务
+  E->>U: 登录供应商后台
+  E->>U: 导出指定日期 CSV
+  E->>B: 上传 CSV 和页面指标
+  B->>D: 保存账单导入批次
+  B->>L: 只读查询本地 usage_logs
+  B->>D: 生成对账结果
+```
+
+### 13.4 节点异常后的调度建议
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant M as 指标源
+  participant R as 规则引擎
+  participant D as Admin Plus DB
+  participant A as 管理员
+  participant S as 本地 Sub2API Admin API
+
+  W->>M: 拉取延迟、错误率、并发、余额
+  W->>R: 计算健康评分
+  R-->>W: 输出建议动作
+  W->>D: 保存建议
+  A->>D: 查看建议原因
+  A->>S: 确认执行后调用 Admin API
+  S-->>A: 更新账号调度配置
+```
+
+## 14. 核心流程
+
+### 14.1 费率变更流程
+
+```mermaid
+flowchart TD
+  A[定时任务触发] --> B[读取供应商配置]
+  B --> C{可用数据源}
+  C -->|Admin API| D[调用供应商 Sub2API API]
+  C -->|只读 DB| E[查询供应商 DB]
+  C -->|Chrome| F[创建插件抓取任务]
+  D --> G[归一化费率]
+  E --> G
+  F --> G
+  G --> H[写入费率快照]
+  H --> I{与上一快照是否不同}
+  I -->|否| J[结束]
+  I -->|是| K[生成变更事件]
+  K --> L[告警 / 待确认]
+```
+
+### 14.2 对账流程
+
+```mermaid
+flowchart TD
+  A[选择对账日期] --> B[获取供应商账单]
+  B --> C[获取本地 usage_logs]
+  C --> D[按 request_id 精确匹配]
+  D --> E{匹配成功?}
+  E -->|是| F[比较 token / 成本 / 模型]
+  E -->|否| G[按时间窗口 + 账号 + 模型弱匹配]
+  G --> H{弱匹配成功?}
+  H -->|是| F
+  H -->|否| I[标记未匹配]
+  F --> J{差异超过阈值?}
+  J -->|否| K[标记正常]
+  J -->|是| L[标记异常]
+  I --> M[生成对账报告]
+  K --> M
+  L --> M
+```
+
+### 14.3 节点切换判断流程
+
+```mermaid
+flowchart TD
+  A[采集节点指标] --> B[计算健康评分]
+  B --> C{有可用余额/额度?}
+  C -->|否| D[只生成充值建议 / 不进入切换候选]
+  C -->|是| E{错误率超阈值?}
+  E -->|是| F[建议降权或暂停]
+  E -->|否| G{延迟超阈值?}
+  G -->|是| H[建议降权]
+  G -->|否| I{成本过高?}
+  I -->|是| J[在有额度节点中推荐低成本切换]
+  I -->|否| K[保持当前策略]
+```
+
+## 15. 数据模型草案
+
+### 15.1 ER 图
+
+```mermaid
+erDiagram
+  supplier_providers ||--o{ supplier_accounts : has
+  supplier_providers ||--o{ supplier_credentials : has
+  supplier_providers ||--o{ supplier_rate_snapshots : has
+  supplier_rate_snapshots ||--o{ supplier_rate_items : contains
+  supplier_rate_snapshots ||--o{ supplier_rate_change_events : produces
+  supplier_providers ||--o{ supplier_promotion_events : has
+  supplier_accounts ||--o{ account_procurement_records : has
+  supplier_providers ||--o{ supplier_bill_imports : has
+  supplier_bill_imports ||--o{ supplier_bill_items : contains
+  supplier_accounts ||--o{ usage_reconciliation_items : maps
+  usage_reconciliation_runs ||--o{ usage_reconciliation_items : contains
+  supplier_accounts ||--o{ supplier_health_metrics : has
+  automation_rules ||--o{ automation_actions : produces
+  chrome_extension_devices ||--o{ chrome_extension_tasks : runs
+```
+
+### 15.2 表说明
+
+#### supplier_providers
+
+供应商实例。
+
+关键字段：
+
+- `id`
+- `name`
+- `provider_kind`：`source_account`、`relay`、`browser_only`、`custom`
+- `provider_type`
+- `platform`：`openai`、`anthropic`、`gemini`、`sub2api`、`new_api` 等
+- `admin_base_url`
+- `api_base_url`
+- `status`
+- `runtime_mode`：`monitor_only`、`candidate`、`active`、`disabled`
+- `rate_poll_interval_seconds`
+- `bill_export_schedule`
+- `metadata`
+- `created_at`
+- `updated_at`
+
+#### supplier_credentials
+
+供应商凭据。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `credential_type`：`admin_api_key`、`postgres_readonly`、`redis_readonly`、`browser_login`、`temporary_token`
+- `encrypted_payload`
+- `status`
+- `last_validated_at`
+- `last_used_at`
+- `created_at`
+- `updated_at`
+
+#### supplier_accounts
+
+供应商账号与本地账号映射。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `local_sub2api_account_id`
+- `upstream_kind`
+- `upstream_platform`
+- `supplier_account_id`
+- `supplier_account_name`
+- `supplier_api_key_fingerprint`
+- `organization_id`
+- `project_id`
+- `procurement_source`
+- `procurement_cost`
+- `procurement_currency`
+- `procured_at`
+- `procurement_expires_at`
+- `model_scope`
+- `current_rate_snapshot_id`
+- `configured_concurrency`
+- `observed_max_concurrency`
+- `balance_threshold`
+- `has_usable_balance`
+- `runtime_mode`
+- `status`
+- `metadata`
+
+#### supplier_rate_snapshots
+
+供应商费率快照。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `source_type`
+- `source_version`
+- `snapshot_hash`
+- `fetched_at`
+- `created_at`
+
+#### supplier_rate_items
+
+费率明细。
+
+关键字段：
+
+- `id`
+- `snapshot_id`
+- `model`
+- `billing_mode`
+- `billing_tier`
+- `input_price`
+- `output_price`
+- `cache_creation_price`
+- `cache_read_price`
+- `per_request_price`
+- `image_price`
+- `currency`
+- `unit`
+
+#### supplier_rate_change_events
+
+费率变更事件。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `snapshot_id`
+- `model`
+- `field_name`
+- `old_value`
+- `new_value`
+- `change_percent`
+- `severity`
+- `ack_status`
+- `ack_by_sub2api_admin_id`
+- `ack_at`
+
+#### supplier_promotion_events
+
+供应商优惠活动。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `source_type`
+- `promotion_type`：`topup_bonus`、`rate_discount`、`package_discount`、`limited_time`、`rebate`
+- `title`
+- `description`
+- `starts_at`
+- `ends_at`
+- `min_topup_amount`
+- `bonus_amount`
+- `discount_percent`
+- `applicable_models`
+- `estimated_effective_cost`
+- `estimated_margin_after_topup`
+- `provider_balance_state`：`no_balance`、`low_balance`、`sufficient`
+- `recommendation_type`：`topup_only`、`topup_then_candidate`、`observe`
+- `ack_status`
+- `raw_payload`
+- `created_at`
+
+#### account_procurement_records
+
+账号采购记录，MVP 只预留，不开发采购流程。
+
+关键字段：
+
+- `id`
+- `supplier_account_id`
+- `source_type`：`official_owned`、`marketplace`、`manual_purchase`、`gift`
+- `source_name`
+- `purchase_cost`
+- `currency`
+- `purchased_at`
+- `expires_at`
+- `inventory_status`：`unused`、`active`、`expired`、`renewal_needed`
+- `notes`
+- `raw_payload`
+
+#### supplier_bill_imports
+
+账单导入批次。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `bill_date`
+- `source_type`
+- `file_path`
+- `status`
+- `total_items`
+- `total_cost`
+- `started_at`
+- `finished_at`
+- `error_message`
+
+#### supplier_bill_items
+
+供应商账单明细。
+
+关键字段：
+
+- `id`
+- `import_id`
+- `provider_id`
+- `supplier_account_id`
+- `request_id`
+- `model`
+- `input_tokens`
+- `output_tokens`
+- `cache_tokens`
+- `cost`
+- `currency`
+- `first_token_ms`
+- `duration_ms`
+- `occurred_at`
+- `raw_payload`
+
+#### usage_reconciliation_runs
+
+对账批次。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `bill_date`
+- `status`
+- `local_revenue`
+- `supplier_cost`
+- `gross_profit`
+- `gross_margin`
+- `matched_count`
+- `unmatched_local_count`
+- `unmatched_supplier_count`
+- `diff_count`
+- `created_by_sub2api_admin_id`
+
+#### usage_reconciliation_items
+
+对账明细。
+
+关键字段：
+
+- `id`
+- `run_id`
+- `local_usage_log_id`
+- `supplier_bill_item_id`
+- `match_type`
+- `status`
+- `local_cost`
+- `supplier_cost`
+- `cost_diff`
+- `token_diff`
+- `reason`
+
+#### supplier_health_metrics
+
+供应商健康指标。
+
+关键字段：
+
+- `id`
+- `provider_id`
+- `supplier_account_id`
+- `local_sub2api_account_id`
+- `model`
+- `window_start`
+- `window_end`
+- `success_rate`
+- `error_rate`
+- `first_token_p50_ms`
+- `first_token_p90_ms`
+- `first_token_p95_ms`
+- `duration_p50_ms`
+- `duration_p90_ms`
+- `duration_p95_ms`
+- `current_concurrency`
+- `max_concurrency`
+- `balance`
+- `health_score`
+
+#### chrome_extension_tasks
+
+Chrome 插件任务。
+
+关键字段：
+
+- `id`
+- `device_id`
+- `provider_id`
+- `task_type`
+- `payload`
+- `status`
+- `result`
+- `error_message`
+- `screenshot_path`
+- `created_at`
+- `claimed_at`
+- `finished_at`
+
+## 16. 接口草案
+
+### 16.1 供应商
+
+- `GET /api/admin-plus/suppliers`
+- `POST /api/admin-plus/suppliers`
+- `GET /api/admin-plus/suppliers/:id`
+- `PUT /api/admin-plus/suppliers/:id`
+- `POST /api/admin-plus/suppliers/:id/test`
+- `POST /api/admin-plus/suppliers/:id/disable`
+
+### 16.2 凭据
+
+- `GET /api/admin-plus/suppliers/:id/credentials`
+- `POST /api/admin-plus/suppliers/:id/credentials`
+- `POST /api/admin-plus/credentials/:id/test`
+- `DELETE /api/admin-plus/credentials/:id`
+
+### 16.3 账号映射
+
+- `GET /api/admin-plus/supplier-accounts`
+- `POST /api/admin-plus/supplier-accounts`
+- `PUT /api/admin-plus/supplier-accounts/:id`
+- `POST /api/admin-plus/supplier-accounts/:id/sync`
+
+### 16.4 费率
+
+- `GET /api/admin-plus/rates/snapshots`
+- `POST /api/admin-plus/rates/poll`
+- `GET /api/admin-plus/rates/changes`
+- `POST /api/admin-plus/rates/changes/:id/ack`
+
+### 16.5 优惠
+
+- `GET /api/admin-plus/promotions`
+- `POST /api/admin-plus/promotions/poll`
+- `GET /api/admin-plus/promotions/:id`
+- `POST /api/admin-plus/promotions/:id/ack`
+- `POST /api/admin-plus/promotions/:id/create-topup-advice`
+
+### 16.6 账单与对账
+
+- `POST /api/admin-plus/bills/import`
+- `POST /api/admin-plus/bills/export-task`
+- `GET /api/admin-plus/bills/imports`
+- `POST /api/admin-plus/reconciliation/runs`
+- `GET /api/admin-plus/reconciliation/runs`
+- `GET /api/admin-plus/reconciliation/runs/:id`
+- `GET /api/admin-plus/reconciliation/runs/:id/items`
+- `GET /api/admin-plus/reconciliation/runs/:id/export`
+
+### 16.7 健康监控
+
+- `GET /api/admin-plus/health/overview`
+- `GET /api/admin-plus/health/suppliers/:id`
+- `GET /api/admin-plus/health/accounts/:id`
+- `POST /api/admin-plus/health/collect`
+
+### 16.8 策略建议
+
+- `GET /api/admin-plus/actions`
+- `GET /api/admin-plus/actions/:id`
+- `POST /api/admin-plus/actions/:id/approve`
+- `POST /api/admin-plus/actions/:id/reject`
+- `POST /api/admin-plus/actions/:id/execute`
+
+### 16.9 Chrome 插件
+
+- `POST /api/admin-plus/extension/devices/register`
+- `POST /api/admin-plus/extension/tasks/claim`
+- `POST /api/admin-plus/extension/tasks/:id/heartbeat`
+- `POST /api/admin-plus/extension/tasks/:id/complete`
+- `POST /api/admin-plus/extension/tasks/:id/fail`
+- `POST /api/admin-plus/extension/uploads`
+
+## 17. 与本地 Sub2API 的集成
+
+### 17.1 Admin API 写入
+
+允许 admin-plus 通过本地 Sub2API Admin API 做以下写入：
+
+- 更新账号 `rate_multiplier`。
+- 更新账号 `concurrency`。
+- 更新账号 `priority`。
+- 设置账号 `schedulable`。
+- 清除账号错误。
+- 清除账号临时不可调度状态。
+- 执行账号测试或刷新。
+
+写入前必须：
+
+- 有明确的管理员确认。
+- 记录动作原因。
+- 记录执行前后的关键字段快照。
+- 使用幂等键，避免重复执行。
+
+### 17.2 PostgreSQL 只读
+
+允许读取：
+
+- `accounts`
+- `usage_logs`
+- `channel_monitors`
+- `channel_monitor_histories`
+- `channel_monitor_daily_rollups`
+- `groups`
+- `channel_model_pricing`
+- 其它只读分析所需表
+
+禁止：
+
+- `INSERT`
+- `UPDATE`
+- `DELETE`
+- DDL
+- 直接修复数据
+
+### 17.3 Redis 只读
+
+允许读取：
+
+- `session_limit:account:{accountID}`：账号活跃会话。
+- `window_cost:account:{accountID}`：窗口费用缓存。
+- 其它可明确识别且只读安全的运行态 key。
+
+禁止：
+
+- `DEL`
+- `SET`
+- `ZADD`
+- `ZREM`
+- `FLUSH*`
+- 任何改变调度状态的 Redis 写操作。
+
+## 18. Chrome 插件设计
+
+### 18.1 插件架构
+
+```mermaid
+flowchart LR
+  Popup[插件 Popup] --> BG[Background Service Worker]
+  BG --> API[Admin Plus API]
+  BG --> Content[Content Script]
+  Content --> Page[供应商后台页面]
+  Content --> Download[CSV 下载]
+  BG --> Upload[上传结果]
+```
+
+### 18.2 任务类型
+
+- `login_supplier`
+- `export_usage_csv`
+- `scrape_rate_page`
+- `scrape_promotion_page`
+- `scrape_balance`
+- `scrape_concurrency`
+- `capture_debug_screenshot`
+
+### 18.3 安全要求
+
+- 插件设备需要在 admin-plus 页面配对。
+- 设备 token 有效期可控，可吊销。
+- 插件不长期保存明文密码。
+- 任务 payload 中的敏感字段只在执行窗口短期解密。
+- 上传结果前做供应商 ID 和任务 ID 校验。
+- 失败时允许上传截图，但截图需要按供应商配置决定是否脱敏。
+
+## 19. 健康评分草案
+
+默认健康分 100，按规则扣分：
+
+- 余额低于阈值：扣 40。
+- 错误率超过 5%：扣 30。
+- 首 token P95 超过阈值：扣 20。
+- 总耗时 P95 超过阈值：扣 15。
+- 可用并发低于配置并发：扣 20。
+- 费率在 24 小时内上涨超过阈值：扣 10。
+- 账单连续 2 天未成功导入：扣 15。
+
+评分等级：
+
+- `90-100`：健康。
+- `70-89`：观察。
+- `50-69`：降权建议。
+- `<50`：暂停或切换建议。
+
+## 20. 页面规划
+
+### 20.1 运营看板
+
+展示：
+
+- 今日请求数。
+- 今日收入。
+- 今日供应商成本。
+- 今日毛利。
+- 毛利率。
+- 费率变更事件数。
+- 优惠机会数。
+- 对账异常数。
+- 节点异常数。
+- 余额告警数。
+
+### 20.2 供应商管理
+
+展示：
+
+- 供应商列表。
+- 凭据状态。
+- 最近费率抓取时间。
+- 最近优惠抓取时间。
+- 最近账单导入时间。
+- 最近健康评分。
+- 供应商类型。
+- 运行分类：仅监控、候选、使用中、禁用。
+
+### 20.3 账号映射
+
+展示：
+
+- 本地账号。
+- 供应商账号。
+- 模型范围。
+- 当前费率。
+- 本地并发。
+- 供应商可并发。
+- 余额。
+- 健康状态。
+
+### 20.4 费率监控
+
+展示：
+
+- 最新费率。
+- 历史快照。
+- 变更记录。
+- 影响账号。
+- 确认状态。
+
+### 20.5 优惠监控
+
+展示：
+
+- 供应商优惠活动。
+- 活动有效期。
+- 充值门槛。
+- 预计折后成本。
+- 预计毛利变化。
+- 是否有余额。
+- 建议类型：仅充值、充值后可候选、观察。
+
+### 20.6 账单对账
+
+展示：
+
+- 对账批次。
+- 总收入。
+- 供应商成本。
+- 毛利。
+- 异常数量。
+- 明细列表。
+- CSV 导出。
+
+### 20.7 节点健康
+
+展示：
+
+- 延迟趋势。
+- 错误率趋势。
+- 并发趋势。
+- 余额趋势。
+- 健康分。
+- 切换建议。
+
+### 20.8 自动化建议
+
+展示：
+
+- 建议动作。
+- 触发规则。
+- 影响账号。
+- 预期收益。
+- 风险提示。
+- 确认执行按钮。
+
+## 21. MVP 里程碑
+
+### M1：基础框架与供应商台账
+
+- Go/Gin 后端骨架。
+- Vue/Vite/Tailwind 前端骨架。
+- 复用 Sub2API 管理员鉴权。
+- 复用 Sub2API PostgreSQL 实例，但创建并使用 admin-plus 独立数据库。
+- 复用 Sub2API Redis 实例，但所有 admin-plus 写入 key 强制使用 `ADMIN_PLUS_REDIS_PREFIX`。
+- 建立 Sub2API 后端代码复制目录和来源 commit 记录。
+- 建立 copy sync 脚本，复制目录只同步不手改。
+- 供应商 CRUD。
+- 供应商运行分类：仅监控、候选、使用中、禁用。
+- 凭据加密存储。
+- 本地 Sub2API Admin API 连接测试。
+- 本地 Sub2API DB/Redis 只读连接测试。
+
+### M2：Sub2API 源站账号与中转型上游适配器
+
+- Sub2API Admin API 适配。
+- Sub2API 已添加的 OpenAI / Anthropic / Gemini 源站账号读取与运营适配。
+- 供应商 Sub2API DB 只读适配。
+- 供应商 Redis 只读适配。
+- 供应商账号映射。
+- 费率抓取和快照。
+- 优惠活动抓取和充值建议。
+- 10 分钟调度任务。
+
+### M3：账单导入与对账
+
+- 本地 `usage_logs` 只读查询。
+- 供应商账单 API/DB 导入。
+- CSV 导入。
+- 对账批次。
+- 对账明细。
+- 毛利计算。
+
+### M4：健康监控与建议
+
+- 首 token、总耗时、错误率聚合。
+- 并发和余额采集。
+- 健康评分。
+- 降权、暂停、调并发建议。
+- 人工确认后通过 Admin API 执行动作。
+
+### M5：Chrome 插件
+
+- 插件设备配对。
+- 任务领取。
+- 供应商登录。
+- CSV 导出。
+- 费率、余额、并发页面抓取。
+- 结果上传。
+
+## 22. 验收指标
+
+MVP 必须满足：
+
+- Sub2API 主项目无代码改动即可运行 admin-plus。
+- 不需要 admin-plus 独立账号密码。
+- admin-plus 业务数据写入独立 PostgreSQL 数据库，不写入 Sub2API 主库。
+- admin-plus Redis 写入全部带独立前缀，可以与 Sub2API key 明确区分。
+- 如果复用 Sub2API 后端代码，复制目录可通过同步脚本重建，且不包含 admin-plus 私有业务改动。
+- 能读取至少 1 个 Sub2API 已添加的 OpenAI、Anthropic 或 Gemini 源站账号。
+- 能添加至少 1 个供应商 Sub2API 实例。
+- 能绑定至少 1 个本地账号和供应商账号。
+- 能每 10 分钟生成费率快照。
+- 能识别费率变更并生成事件。
+- 能监控无余额供应商的优惠活动，并生成充值建议。
+- 无余额供应商不能进入自动切换候选。
+- 账号采购/库存字段仅预留，不出现采购下单入口。
+- 能导入一天供应商账单并完成对账。
+- 能计算收入、成本、毛利和毛利率。
+- 能展示首 token P95、总耗时 P95、错误率和健康评分。
+- 能生成人工确认的调度建议。
+- 写入本地 Sub2API 的动作全部通过 Admin API。
+
+## 23. 风险与处理
+
+### 23.1 供应商页面变化
+
+风险：Chrome 插件依赖 DOM，供应商后台升级会导致抓取失败。  
+处理：优先 API/DB；插件只做兜底；DOM 选择器按供应商版本配置化。
+
+### 23.2 对账无法精确匹配
+
+风险：供应商账单没有 request_id。  
+处理：先按 request_id 匹配；缺失时按时间窗口、模型、账号、token 弱匹配，并标记低置信度。
+
+### 23.3 凭据安全
+
+风险：供应商账号密码、Admin API Key 泄露。  
+处理：加密存储、脱敏展示、审计使用、最小权限、只读数据库账号。
+
+### 23.4 读取 DB/Redis 依赖内部结构
+
+风险：Sub2API 升级后表或 key 变化。  
+处理：Admin API 优先；DB/Redis 查询做版本探测；适配器按版本维护。
+
+### 23.5 自动切换误伤
+
+风险：自动暂停或降权导致可用容量不足。  
+处理：MVP 默认只建议不自动执行；执行前展示影响范围；保留操作审计。
+
+### 23.6 共享 Redis key 污染
+
+风险：admin-plus 与 Sub2API 复用 Redis，错误写入无前缀 key 会污染主系统运行态。  
+处理：启动时强制校验 `ADMIN_PLUS_REDIS_PREFIX`；Redis client 封装统一加前缀；清理任务只允许操作此前缀。
+
+### 23.7 复制代码漂移
+
+风险：复制 Sub2API 后端代码后，如果在复制目录中直接修改，会导致后续同步困难。  
+处理：复制目录只同步不手改；自定义行为放到 adapter、hook、wrapper 或独立 service；同步脚本和 `SOURCE.md` 记录来源 commit。
+
+### 23.8 无余额低价供应商误切换
+
+风险：供应商有更低费率或优惠，但当前无余额，如果被自动切换会导致客户请求失败。  
+处理：调度候选必须校验可用余额或有效额度；无余额供应商只能生成充值建议，不能生成切换执行动作。
+
+## 24. 上游 PR 策略
+
+只有以下情况才考虑给 Sub2API 上游提交 PR：
+
+- 增加通用 Admin API 读接口。
+- 增加通用外链菜单入口。
+- 增加通用账单导出能力。
+- 增加通用健康指标导出能力。
+
+不提交：
+
+- 供应商私有适配逻辑。
+- 个人运营策略。
+- admin-plus 业务页面。
+- Chrome 插件业务逻辑。
+
+## 25. 开发约束
+
+- 前后端框架优先复用 Sub2API 技术选型：Go/Gin、PostgreSQL、Redis、Vue 3、Vite、TailwindCSS。
+- PostgreSQL 复用 Sub2API 实例，但 admin-plus 必须使用独立数据库。
+- Redis 复用 Sub2API 实例，但 admin-plus 自有 key 必须使用独立前缀。
+- 如需复用 Sub2API 后端代码，可以复制到 `internal/copied/sub2api`，但复制目录只允许脚本同步，不允许手工业务改动。
+- admin-plus 私有逻辑必须通过 wrapper、hook、adapter、decorator 或独立 service 实现。
+- 代码结构保持业务模块清晰，不把 Provider Adapter 和业务规则混写。
+- 后端任务必须幂等。
+- 所有外部写操作必须有审计日志。
+- 所有凭据字段必须脱敏日志。
+- 所有直接读取 Sub2API DB/Redis 的逻辑必须集中在 adapter/integration 层。
+- 所有 Sub2API 写入必须集中在 Admin API client 层。
+- 所有 admin-plus Redis 写入必须通过统一封装，不允许业务代码手写裸 key。
+
+## 26. 待确认问题
+
+1. Admin Plus 登录代理是否只支持本地 Sub2API 管理员账号密码登录，还是也需要代理 Sub2API 已启用的 OAuth 登录入口。
+2. 供应商 Sub2API 是否都能提供 Admin API Key；不能提供时是否能提供只读数据库连接。
+3. 供应商账单是否包含 request_id；如果没有，需要确认弱匹配容忍度。
+4. 费率来源以供应商渠道定价为准，还是以供应商网页展示价格为准。
+5. 自动调度建议是否允许在特定低风险动作上自动执行，例如余额为 0 时暂停调度。
+6. 首批需要复制的 Sub2API 后端模块范围：只复制 API DTO/client，还是包含 ent schema、repository 和 service 的只读部分。
