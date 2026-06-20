@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func newSupplierSQLMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 
 func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 	db, mock := newSupplierSQLMock(t)
-	repo := NewSQLRepository(db)
+	repo := NewSQLRepository(db, sub2apiapp.ReadDB{DB: db})
 	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	balanceUpdatedAt := now
 
@@ -110,7 +111,7 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 
 func TestSQLRepositoryListFiltersWithParameterizedQuery(t *testing.T) {
 	db, mock := newSupplierSQLMock(t)
-	repo := NewSQLRepository(db)
+	repo := NewSQLRepository(db, sub2apiapp.ReadDB{DB: db})
 	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(`FROM admin_plus_suppliers\s+WHERE 1=1 AND kind = \$1 AND type = \$2 AND runtime_status = \$3 AND health_status = \$4 AND \(LOWER\(name\) LIKE \$5 OR LOWER\(contact\) LIKE \$6 OR LOWER\(notes\) LIKE \$7\)`).
@@ -155,7 +156,7 @@ func TestSQLRepositoryListFiltersWithParameterizedQuery(t *testing.T) {
 
 func TestSQLRepositoryUpdateStatus(t *testing.T) {
 	db, mock := newSupplierSQLMock(t)
-	repo := NewSQLRepository(db)
+	repo := NewSQLRepository(db, sub2apiapp.ReadDB{DB: db})
 	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(`UPDATE admin_plus_suppliers`).
@@ -192,9 +193,110 @@ func TestSQLRepositoryUpdateStatus(t *testing.T) {
 	require.Equal(t, adminplusdomain.SupplierHealthStatusPaused, got.HealthStatus)
 }
 
+func TestSQLRepositoryCreateAccountReadsLocalAccountFromSub2APIReadDB(t *testing.T) {
+	adminDB, adminMock := newSupplierSQLMock(t)
+	readDB, readMock := newSupplierSQLMock(t)
+	repo := NewSQLRepository(adminDB, sub2apiapp.ReadDB{DB: readDB})
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+
+	readMock.ExpectQuery(`FROM accounts\s+WHERE id = \$1 AND deleted_at IS NULL`).
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"name",
+			"platform",
+			"type",
+			"status",
+			"schedulable",
+			"concurrency",
+			"priority",
+			"rate_multiplier",
+		}).AddRow(
+			int64(42),
+			"Real Sub2API Account",
+			"openai",
+			"api_key",
+			"active",
+			true,
+			8,
+			10,
+			1.0,
+		))
+
+	adminMock.ExpectQuery(`INSERT INTO admin_plus_supplier_accounts`).
+		WithArgs(
+			int64(7),
+			int64(42),
+			"Real Sub2API Account",
+			"openai",
+			"api_key",
+			"upstream-key",
+			"Primary",
+			"org-1",
+			"project-1",
+			"default",
+			8,
+			0,
+			int64(1000),
+			int64(2000),
+			"USD",
+			true,
+			"candidate",
+			"normal",
+			now,
+			now,
+		).
+		WillReturnRows(newSupplierAccountRows().AddRow(
+			int64(100),
+			int64(7),
+			int64(42),
+			"Real Sub2API Account",
+			"openai",
+			"api_key",
+			"upstream-key",
+			"Primary",
+			"org-1",
+			"project-1",
+			"default",
+			8,
+			0,
+			int64(1000),
+			int64(2000),
+			"USD",
+			true,
+			"candidate",
+			"normal",
+			now,
+			now,
+		))
+
+	got, err := repo.CreateAccount(context.Background(), &adminplusdomain.SupplierAccount{
+		SupplierID:                7,
+		LocalSub2APIAccountID:     42,
+		SupplierAccountIdentifier: "upstream-key",
+		SupplierAccountLabel:      "Primary",
+		OrganizationID:            "org-1",
+		ProjectID:                 "project-1",
+		RateProfile:               "default",
+		ConfiguredConcurrency:     8,
+		BalanceThresholdCents:     1000,
+		BalanceCents:              2000,
+		BalanceCurrency:           "USD",
+		HasUsableBalance:          true,
+		RuntimeStatus:             adminplusdomain.SupplierRuntimeStatusCandidate,
+		HealthStatus:              adminplusdomain.SupplierHealthStatusNormal,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(100), got.ID)
+	require.Equal(t, "Real Sub2API Account", got.LocalAccountName)
+}
+
 func TestSQLRepositoryGetNotFound(t *testing.T) {
 	db, mock := newSupplierSQLMock(t)
-	repo := NewSQLRepository(db)
+	repo := NewSQLRepository(db, sub2apiapp.ReadDB{DB: db})
 
 	mock.ExpectQuery(`FROM admin_plus_suppliers\s+WHERE id = \$1`).
 		WithArgs(int64(404)).
@@ -228,6 +330,32 @@ func newSupplierRows() *sqlmock.Rows {
 		"balance_cents",
 		"balance_currency",
 		"balance_updated_at",
+		"created_at",
+		"updated_at",
+	})
+}
+
+func newSupplierAccountRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"id",
+		"supplier_id",
+		"local_sub2api_account_id",
+		"local_account_name",
+		"local_account_platform",
+		"local_account_type",
+		"supplier_account_identifier",
+		"supplier_account_label",
+		"organization_id",
+		"project_id",
+		"rate_profile",
+		"configured_concurrency",
+		"observed_max_concurrency",
+		"balance_threshold_cents",
+		"balance_cents",
+		"balance_currency",
+		"has_usable_balance",
+		"runtime_status",
+		"health_status",
 		"created_at",
 		"updated_at",
 	})

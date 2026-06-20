@@ -24,6 +24,10 @@
           <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatMoney(totalCostCents, defaultCurrency) }}</p>
         </div>
         <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">本地用量</p>
+          <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ localUsages.length }}</p>
+        </div>
+        <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">利润</p>
           <p class="mt-2 text-2xl font-semibold" :class="profitCents >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'">
             {{ result ? formatMoney(profitCents, defaultCurrency) : '-' }}
@@ -72,28 +76,24 @@
           </form>
 
           <form class="card p-5" @submit.prevent="runRecon">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">本地收入记录</h2>
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">读取本地用量</h2>
             <div class="mt-5 space-y-4">
-              <label class="block">
-                <span class="input-label">本地请求 ID</span>
-                <input v-model.trim="usageForm.external_request_id" class="input" required />
-              </label>
-              <label class="block">
-                <span class="input-label">模型</span>
-                <input v-model.trim="usageForm.model" class="input" required />
-              </label>
               <div class="grid gap-4 sm:grid-cols-2">
                 <label class="block">
-                  <span class="input-label">收入</span>
-                  <input v-model.number="usageForm.revenue_yuan" type="number" min="0" step="0.01" class="input" required />
+                  <span class="input-label">开始时间</span>
+                  <input v-model="usageForm.from" type="datetime-local" class="input" required />
                 </label>
                 <label class="block">
-                  <span class="input-label">币种</span>
-                  <input v-model.trim="usageForm.currency" class="input" placeholder="CNY" />
+                  <span class="input-label">结束时间</span>
+                  <input v-model="usageForm.to" type="datetime-local" class="input" required />
                 </label>
               </div>
+              <label class="block">
+                <span class="input-label">模型过滤</span>
+                <input v-model.trim="usageForm.model" class="input" placeholder="留空表示全部模型" />
+              </label>
               <button type="submit" class="btn btn-primary w-full" :disabled="reconciling || billLines.length === 0">
-                {{ reconciling ? '对账中...' : '运行对账' }}
+                {{ reconciling ? '对账中...' : '读取本地用量并对账' }}
               </button>
             </div>
           </form>
@@ -124,6 +124,40 @@
                     <td class="px-4 py-4 font-mono text-xs text-gray-500 dark:text-dark-400">{{ line.external_request_id || '-' }}</td>
                     <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">{{ line.model }}</td>
                     <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(line.cost_cents, line.currency) }}</td>
+                    <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(line.started_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card overflow-hidden">
+            <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">本地用量</h2>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full min-w-[820px] divide-y divide-gray-200 dark:divide-dark-700">
+                <thead class="bg-gray-50 dark:bg-dark-800">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">本地账号</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">请求 ID</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">模型</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">收入</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">时间</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
+                  <tr v-if="localUsages.length === 0">
+                    <td colspan="5" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无本地用量</td>
+                  </tr>
+                  <tr v-for="line in localUsages" :key="line.id">
+                    <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">
+                      {{ line.account_name || `#${line.account_id || '-'}` }}
+                      <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ line.account_platform || '-' }}</div>
+                    </td>
+                    <td class="px-4 py-4 font-mono text-xs text-gray-500 dark:text-dark-400">{{ line.external_request_id || '-' }}</td>
+                    <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">{{ line.model }}</td>
+                    <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(line.revenue_cents, line.currency) }}</td>
                     <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(line.started_at) }}</td>
                   </tr>
                 </tbody>
@@ -176,8 +210,10 @@ import { useAppStore } from '@/stores/app'
 import {
   importBillLines,
   listBillLines,
+  listLocalUsageLines,
   listSuppliers,
   runReconciliation,
+  type LocalUsageLine,
   type ReconciliationResult,
   type Supplier,
   type SupplierBillLine
@@ -190,6 +226,7 @@ const importing = ref(false)
 const reconciling = ref(false)
 const suppliers = ref<Supplier[]>([])
 const billLines = ref<SupplierBillLine[]>([])
+const localUsages = ref<LocalUsageLine[]>([])
 const result = ref<ReconciliationResult | null>(null)
 
 const billForm = reactive({
@@ -201,13 +238,12 @@ const billForm = reactive({
 })
 
 const usageForm = reactive({
-  external_request_id: '',
-  model: 'gpt-4o-mini',
-  revenue_yuan: 0,
-  currency: 'CNY'
+  model: '',
+  from: toDateTimeLocal(new Date(Date.now() - 24 * 60 * 60 * 1000)),
+  to: toDateTimeLocal(new Date())
 })
 
-const defaultCurrency = computed(() => billLines.value[0]?.currency || usageForm.currency || 'CNY')
+const defaultCurrency = computed(() => billLines.value[0]?.currency || localUsages.value[0]?.currency || 'CNY')
 const totalCostCents = computed(() => billLines.value.reduce((sum, line) => sum + line.cost_cents, 0))
 const profitCents = computed(() => result.value?.summary.profit_cents || 0)
 
@@ -235,6 +271,15 @@ function formatDateTime(value: string): string {
 
 function supplierName(id: number): string {
   return suppliers.value.find((supplier) => supplier.id === id)?.name || `#${id}`
+}
+
+function toDateTimeLocal(value: Date): string {
+  const offsetMs = value.getTimezoneOffset() * 60 * 1000
+  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 16)
+}
+
+function toRFC3339(value: string): string {
+  return new Date(value).toISOString()
 }
 
 async function loadPage() {
@@ -282,18 +327,16 @@ async function importBill() {
 async function runRecon() {
   reconciling.value = true
   try {
+    const usageResult = await listLocalUsageLines({
+      model: usageForm.model || undefined,
+      from: toRFC3339(usageForm.from),
+      to: toRFC3339(usageForm.to),
+      limit: 1000
+    })
+    localUsages.value = usageResult.items
     result.value = await runReconciliation({
       supplier_bills: billLines.value,
-      local_usages: [{
-        id: Date.now(),
-        external_request_id: usageForm.external_request_id,
-        model: usageForm.model,
-        currency: usageForm.currency || 'CNY',
-        revenue_cents: centsFromYuan(usageForm.revenue_yuan),
-        input_tokens: 0,
-        output_tokens: 0,
-        started_at: new Date().toISOString()
-      }],
+      local_usages: localUsages.value,
       time_tolerance_seconds: 300,
       cost_mismatch_cents: 1
     })

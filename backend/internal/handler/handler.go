@@ -25,6 +25,7 @@ type AdminPlusHandlers struct {
 	Extension      *adminplushandler.ExtensionHandler
 	Action         *adminplushandler.ActionHandler
 	Reconciliation *adminplushandler.ReconciliationHandler
+	Sub2API        *adminplushandler.Sub2APIHandler
 }
 
 // Handlers contains all HTTP handlers

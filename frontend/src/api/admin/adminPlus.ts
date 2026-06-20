@@ -264,6 +264,9 @@ export interface SupplierBillLine {
 
 export interface LocalUsageLine {
   id: number
+  account_id?: number
+  account_name?: string
+  account_platform?: string
   external_request_id?: string
   model: string
   currency: string
@@ -271,6 +274,23 @@ export interface LocalUsageLine {
   input_tokens?: number
   output_tokens?: number
   started_at: string
+}
+
+export interface LocalUsageSummary {
+  account_id: number
+  account_name: string
+  account_platform: string
+  model: string
+  request_count: number
+  input_tokens: number
+  output_tokens: number
+  revenue_cents: number
+  original_cost_cents: number
+  avg_first_token_ms: number
+  avg_total_latency_ms: number
+  window_start: string
+  window_end: string
+  last_request_created_at: string
 }
 
 export interface ReconciliationLine {
@@ -369,6 +389,16 @@ export async function updateSupplierStatus(id: number, payload: UpdateSupplierSt
 
 export async function listLocalSub2APIAccounts(params?: { q?: string; limit?: number }): Promise<AdminPlusListResponse<LocalSub2APIAccount>> {
   const { data } = await apiClient.get<AdminPlusListResponse<LocalSub2APIAccount>>('/admin-plus/sub2api/accounts', { params })
+  return data
+}
+
+export async function listLocalUsageLines(params?: { account_id?: number; model?: string; from?: string; to?: string; limit?: number }): Promise<AdminPlusListResponse<LocalUsageLine>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<LocalUsageLine>>('/admin-plus/sub2api/usage-lines', { params })
+  return data
+}
+
+export async function listLocalUsageSummary(params?: { account_id?: number; model?: string; from?: string; to?: string; limit?: number }): Promise<AdminPlusListResponse<LocalUsageSummary>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<LocalUsageSummary>>('/admin-plus/sub2api/usage-summary', { params })
   return data
 }
 
@@ -598,6 +628,8 @@ export const adminPlusAPI = {
   createSupplier,
   updateSupplierStatus,
   listLocalSub2APIAccounts,
+  listLocalUsageLines,
+  listLocalUsageSummary,
   listSupplierAccounts,
   createSupplierAccount,
   deleteSupplierAccount,

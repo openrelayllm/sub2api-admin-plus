@@ -1,0 +1,2 @@
+ALTER TABLE admin_plus_supplier_accounts
+    DROP CONSTRAINT IF EXISTS admin_plus_supplier_accounts_local_sub2api_account_id_fkey;

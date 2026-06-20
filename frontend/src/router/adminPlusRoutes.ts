@@ -139,6 +139,16 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/operations/local-usage',
+    name: 'AdminPlusLocalUsage',
+    component: () => import('@/views/admin/operations/LocalUsageView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: '本地用量'
+    }
+  },
+  {
     path: '/admin/operations/actions',
     name: 'AdminPlusActions',
     component: () => import('@/views/admin/operations/ActionRecommendationsView.vue'),

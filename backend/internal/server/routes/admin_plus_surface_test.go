@@ -14,6 +14,7 @@ import (
 	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	reconciliationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
+	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
@@ -49,6 +50,7 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			Extension:      adminplushandler.NewExtensionHandler(extensionapp.NewService(extensionapp.NewMemoryRepository())),
 			Action:         adminplushandler.NewActionHandler(actionsapp.NewRuleService()),
 			Reconciliation: adminplushandler.NewReconciliationHandler(reconciliationapp.NewService()),
+			Sub2API:        adminplushandler.NewSub2APIHandler(sub2apiapp.NewService(newRouteSurfaceSub2APIRepository())),
 		},
 	}
 
@@ -97,6 +99,8 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/suppliers/:id/accounts",
 		"DELETE /api/v1/admin-plus/suppliers/:id/accounts/:accountID",
 		"GET /api/v1/admin-plus/sub2api/accounts",
+		"GET /api/v1/admin-plus/sub2api/usage-lines",
+		"GET /api/v1/admin-plus/sub2api/usage-summary",
 		"POST /api/v1/admin-plus/rates/snapshots",
 		"GET /api/v1/admin-plus/rates/snapshots",
 		"GET /api/v1/admin-plus/rates/events",
@@ -225,5 +229,19 @@ func (r *routeSurfaceRateRepository) ListChangeEvents(_ context.Context, _ rates
 }
 
 func (r *routeSurfaceRateRepository) UpdateChangeEventStatus(_ context.Context, _ int64, _ adminplusdomain.RateChangeStatus) (*adminplusdomain.RateChangeEvent, error) {
+	return nil, nil
+}
+
+type routeSurfaceSub2APIRepository struct{}
+
+func newRouteSurfaceSub2APIRepository() *routeSurfaceSub2APIRepository {
+	return &routeSurfaceSub2APIRepository{}
+}
+
+func (r *routeSurfaceSub2APIRepository) ListLocalUsageLines(_ context.Context, _ sub2apiapp.UsageFilter) ([]*adminplusdomain.LocalUsageLine, error) {
+	return nil, nil
+}
+
+func (r *routeSurfaceSub2APIRepository) ListLocalUsageSummaries(_ context.Context, _ sub2apiapp.UsageFilter) ([]*adminplusdomain.LocalUsageSummary, error) {
 	return nil, nil
 }

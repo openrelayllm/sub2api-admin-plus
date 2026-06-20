@@ -175,7 +175,7 @@ admin_plus_rate_change_events
 - 涨价生成 `increase`，降价生成 `decrease`。
 - 小于阈值的变化仍记录事件，但 `threshold_exceeded=false`，方便后续做审计和趋势分析。
 
-当前已落地余额与优惠监控业务规则层：
+当前已落地运营业务 API 与持久化层：
 
 ```text
 backend/internal/adminplus/domain/balance.go
@@ -191,17 +191,81 @@ backend/internal/adminplus/app/extension/
 backend/internal/adminplus/app/billing/
 backend/internal/adminplus/app/reconciliation/
 backend/internal/adminplus/app/actions/
+backend/internal/adminplus/app/sub2api/
 backend/internal/handler/adminplus/balance_handler.go
 backend/internal/handler/adminplus/promotion_handler.go
 backend/internal/handler/adminplus/health_handler.go
+backend/internal/handler/adminplus/billing_handler.go
+backend/internal/handler/adminplus/extension_handler.go
+backend/internal/handler/adminplus/action_handler.go
+backend/internal/handler/adminplus/sub2api_handler.go
 backend/internal/adminplus/ports/provider.go
 ```
 
-这些模块当前已提供业务规则、端口接口和 handler 契约测试。除已注册的供应商、费率路由外，其余模块尚未注册 HTTP 路由，也不进入 Wire 运行时对象图。
+这些模块当前已进入 Wire 运行时对象图，并注册在 `/api/v1/admin-plus/*` 路由下。运行时默认使用 SQL repository；`MemoryRepository` 仅保留给单元测试和路由 surface 测试使用。
 
-当前 `balance_handler` / `promotion_handler` / `health_handler` 不进入 Wire 运行时对象图，避免在没有 SQL repository 的情况下误接内存仓储。`MemoryRepository` 仅用于单元测试。
+已注册业务路由：
 
-`balances` / `promotions` / `health` / `billing` / `extension` / `actions` 已准备 `SQLRepository` 和 sqlmock 测试，但对应表迁移尚未创建，且不进入 Wire 运行时对象图。只有数据库结构变更确认并落地迁移后，才能注册这些路由。
+```text
+GET    /api/v1/admin-plus/suppliers
+POST   /api/v1/admin-plus/suppliers
+GET    /api/v1/admin-plus/suppliers/:id
+PATCH  /api/v1/admin-plus/suppliers/:id/status
+GET    /api/v1/admin-plus/suppliers/:id/accounts
+POST   /api/v1/admin-plus/suppliers/:id/accounts
+DELETE /api/v1/admin-plus/suppliers/:id/accounts/:accountID
+GET    /api/v1/admin-plus/sub2api/accounts
+GET    /api/v1/admin-plus/sub2api/usage-lines
+GET    /api/v1/admin-plus/sub2api/usage-summary
+POST   /api/v1/admin-plus/rates/snapshots
+GET    /api/v1/admin-plus/rates/snapshots
+GET    /api/v1/admin-plus/rates/events
+PATCH  /api/v1/admin-plus/rates/events/:id/ack
+POST   /api/v1/admin-plus/balances/snapshots
+GET    /api/v1/admin-plus/balances/snapshots
+GET    /api/v1/admin-plus/balances/events
+PATCH  /api/v1/admin-plus/balances/events/:id/ack
+POST   /api/v1/admin-plus/promotions
+GET    /api/v1/admin-plus/promotions
+PATCH  /api/v1/admin-plus/promotions/:id/ack
+POST   /api/v1/admin-plus/health/samples
+GET    /api/v1/admin-plus/health/samples
+GET    /api/v1/admin-plus/health/events
+PATCH  /api/v1/admin-plus/health/events/:id/ack
+POST   /api/v1/admin-plus/billing/lines/import
+GET    /api/v1/admin-plus/billing/lines
+POST   /api/v1/admin-plus/extension/tasks
+GET    /api/v1/admin-plus/extension/tasks
+POST   /api/v1/admin-plus/extension/tasks/claim
+POST   /api/v1/admin-plus/extension/tasks/:id/heartbeat
+POST   /api/v1/admin-plus/extension/tasks/:id/complete
+POST   /api/v1/admin-plus/extension/tasks/:id/fail
+POST   /api/v1/admin-plus/reconciliation/run
+POST   /api/v1/admin-plus/actions/generate
+GET    /api/v1/admin-plus/actions/recommendations
+PATCH  /api/v1/admin-plus/actions/recommendations/:id/status
+```
+
+本地 Sub2API 只读适配当前能力：
+
+- `GET /admin-plus/sub2api/accounts` 从 Sub2API 只读库读取真实 `accounts`，用于供应商父级下挂本地账号/Key 子级。
+- `GET /admin-plus/sub2api/usage-lines` 从 `usage_logs` 读取真实本地用量明细，供对账使用。
+- `GET /admin-plus/sub2api/usage-summary` 按账号和模型聚合真实请求数、token、收入、原始成本和延迟。
+- 配置 `SUB2API_READONLY_DATABASE_URL` 后读取独立 Sub2API 库；未配置时回退当前连接，方便本地单库 MVP 验证。
+
+已修正隔离约束：
+
+- `admin_plus_supplier_accounts.local_sub2api_account_id` 是对 Sub2API `accounts.id` 的逻辑引用，不再建立跨库外键。
+- Admin Plus 自有业务数据仍写入 Admin Plus 独立库。
+- 对 Sub2API 数据的读取集中在只读 adapter/repository 层，不直接写 Sub2API 主库。
+
+仍未完成的真实自动化能力：
+
+- Chrome 插件真实登录供应商后台、抓取费率/余额/优惠、导出账单。
+- 10 分钟定时费率任务、每日账单导出任务、健康探测任务。
+- Sub2API Redis 只读并发适配。
+- 确认后调用 Sub2API Admin API 执行动作建议。
+- 通知通道和审计闭环。
 
 余额监控规则：
 
@@ -676,3 +740,34 @@ Chrome 插件 -> Sub2API 管理员 token
 - 是否误做 OpenAI、Anthropic、Gemini 源站账号添加功能。
 - 是否保存了源站账号 API Key、OAuth、Cookie 等应由 Sub2API 管理的凭据。
 - 是否把账号采购预留模块误做成下单、付款、售后系统。
+
+## 15. 下一阶段代码结构
+
+M2/M3 阶段优先补真实数据源和自动化采集，不先做新的抽象层。
+
+```text
+backend/internal/adminplus/
+  app/
+    sub2api/                 # 已落地：本地 Sub2API accounts / usage_logs 只读查询
+    scheduler/               # 待开发：定时任务编排、锁、重试、幂等
+  adapters/
+    sub2api/
+      readonlyredis/         # 待开发：Sub2API Redis 并发/窗口成本只读适配
+      provider/              # 待开发：上游供应商也是 Sub2API 时的 Admin API/DB 适配
+    browser/
+      chromeextension/       # 待开发：插件设备、任务结果、截图/文件上传解析
+  clients/
+    sub2apiadmin/            # 待开发：确认执行动作时调用本地 Sub2API Admin API
+  audit/                     # 待开发：凭据使用、动作确认、外部写操作审计
+
+frontend/src/views/admin/operations/
+  LocalUsageView.vue         # 已落地：真实 usage_logs 聚合查看
+  BillingReconciliationView.vue # 已接入真实本地 usage_lines
+```
+
+下一阶段最小验收：
+
+- `SUB2API_READONLY_DATABASE_URL` 指向真实 Sub2API 库时，账号绑定和本地用量页面不依赖 Admin Plus 自有库中的复制表。
+- `SUB2API_REDIS_READONLY_URL` 或等价配置只读读取并发 key，不写、不删、不 flush。
+- scheduler 生成的任务必须持久化、可重试、可审计。
+- Chrome 插件完成真实网页登录和页面数据回传前，不能把费率/余额/账单自动采集标记为完成。

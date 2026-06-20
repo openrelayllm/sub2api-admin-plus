@@ -237,6 +237,7 @@ const adminNavItems = computed((): NavItem[] => [
   { path: '/admin/operations/promotions', label: '优惠监控', icon: OperationsIcon },
   { path: '/admin/operations/extension-tasks', label: '插件任务', icon: OperationsIcon },
   { path: '/admin/operations/billing', label: '账单对账', icon: ChartIcon },
+  { path: '/admin/operations/local-usage', label: '本地用量', icon: ChartIcon },
   { path: '/admin/operations/actions', label: '动作建议', icon: OperationsIcon },
   { path: '/admin/settings', label: t('nav.settings'), icon: CogIcon }
 ])

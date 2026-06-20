@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
@@ -115,7 +116,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	systemOperationLockService := service.ProvideSystemOperationLockService(idempotencyRepository, configConfig)
 	systemHandler := handler.ProvideSystemHandler(updateService, systemOperationLockService)
 	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, groupHandler, settingHandler, opsHandler, systemHandler)
-	sqlRepository := suppliers.NewSQLRepository(db)
+	readDB := sub2api.ProvideReadSQLDB(db)
+	sqlRepository := suppliers.NewSQLRepository(db, readDB)
 	suppliersService := suppliers.NewService(sqlRepository)
 	supplierHandler := adminplus.NewSupplierHandler(suppliersService)
 	ratesSQLRepository := rates.NewSQLRepository(db)
@@ -141,7 +143,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	actionHandler := adminplus.NewActionHandler(actionsService)
 	reconciliationService := reconciliation.NewService()
 	reconciliationHandler := adminplus.NewReconciliationHandler(reconciliationService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, rateHandler, balanceHandler, promotionHandler, healthHandler, billingHandler, extensionHandler, actionHandler, reconciliationHandler)
+	sub2apiSQLRepository := sub2api.NewSQLRepository(readDB)
+	sub2apiService := sub2api.NewService(sub2apiSQLRepository)
+	sub2APIHandler := adminplus.NewSub2APIHandler(sub2apiService)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, rateHandler, balanceHandler, promotionHandler, healthHandler, billingHandler, extensionHandler, actionHandler, reconciliationHandler, sub2APIHandler)
 	notificationEmailService := service.NewNotificationEmailService(settingRepository, emailService)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)

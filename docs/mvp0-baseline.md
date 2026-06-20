@@ -67,3 +67,20 @@ Generated artifacts are intentionally ignored:
 - Decide whether to keep or disable upstream Sub2API release workflows.
 - Rename Docker image/container/service names after the baseline build is verified.
 - Remove or hide non-MVP user-facing pages only after route and auth impact is understood.
+
+## Post-MVP0 Progress
+
+截至 2026-06-20，项目已经超过纯复制基线阶段，进入 Admin Plus 业务 MVP 开发：
+
+- 后端已注册 `/api/v1/admin-plus/*` 业务路由。
+- 运行时已使用 SQL repository，不再依赖内存仓储。
+- 已完成供应商父级、供应商账号/Key 子级绑定。
+- 已完成费率、余额、健康、优惠、插件任务、账单、对账和动作建议基础 API。
+- 已完成本地 Sub2API 真实只读数据能力：
+  - 读取 `accounts`。
+  - 读取 `usage_logs` 明细。
+  - 聚合账号/模型维度请求数、token、收入、成本和延迟。
+- 前端已提供 Admin Plus 独立业务导航和页面。
+- `tools/admin-plus-e2e.mjs` 覆盖真实 HTTP 和真实 PostgreSQL 链路。
+
+MVP0 的“复制后可运行”目标仍然保留为底线；后续所有业务能力必须继续遵守不修改上游 `/Users/coso/Documents/dev/go/sub2api`、不新增权限系统、Admin Plus 自有数据独立库、只读 Sub2API DB/Redis 的约束。

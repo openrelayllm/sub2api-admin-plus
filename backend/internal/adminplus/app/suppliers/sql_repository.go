@@ -8,16 +8,25 @@ import (
 	"net/http"
 	"strings"
 
+	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 type SQLRepository struct {
-	db *sql.DB
+	db        *sql.DB
+	sub2apiDB *sql.DB
 }
 
-func NewSQLRepository(db *sql.DB) *SQLRepository {
-	return &SQLRepository{db: db}
+func NewSQLRepository(db *sql.DB, sub2apiReadDB sub2apiapp.ReadDB) *SQLRepository {
+	readDB := sub2apiReadDB.DB
+	if readDB == nil {
+		readDB = db
+	}
+	return &SQLRepository{
+		db:        db,
+		sub2apiDB: readDB,
+	}
 }
 
 func (r *SQLRepository) Create(ctx context.Context, supplier *adminplusdomain.Supplier) (*adminplusdomain.Supplier, error) {
@@ -196,6 +205,10 @@ func (r *SQLRepository) CreateAccount(ctx context.Context, account *adminplusdom
 	if r == nil || r.db == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_DB_NOT_CONFIGURED", "admin plus database is not configured")
 	}
+	localAccount, err := r.getLocalAccount(ctx, account.LocalSub2APIAccountID)
+	if err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO admin_plus_supplier_accounts (
 			supplier_id, local_sub2api_account_id,
@@ -205,14 +218,13 @@ func (r *SQLRepository) CreateAccount(ctx context.Context, account *adminplusdom
 			balance_threshold_cents, balance_cents, balance_currency, has_usable_balance,
 			runtime_status, health_status, created_at, updated_at
 		)
-		SELECT
-			$1, a.id, a.name, a.platform, a.type,
-			$3, $4, $5, $6, $7,
-			$8, $9,
-			$10, $11, $12, $13,
-			$14, $15, $16, $17
-		FROM accounts a
-		WHERE a.id = $2 AND a.deleted_at IS NULL
+		VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12,
+			$13, $14, $15, $16,
+			$17, $18, $19, $20
+		)
 		RETURNING id, supplier_id, local_sub2api_account_id,
 			local_account_name, local_account_platform, local_account_type,
 			supplier_account_identifier, supplier_account_label, organization_id, project_id, rate_profile,
@@ -222,6 +234,9 @@ func (r *SQLRepository) CreateAccount(ctx context.Context, account *adminplusdom
 	`,
 		account.SupplierID,
 		account.LocalSub2APIAccountID,
+		localAccount.Name,
+		localAccount.Platform,
+		localAccount.Type,
 		account.SupplierAccountIdentifier,
 		account.SupplierAccountLabel,
 		account.OrganizationID,
@@ -240,9 +255,6 @@ func (r *SQLRepository) CreateAccount(ctx context.Context, account *adminplusdom
 	)
 	created, err := scanSupplierAccount(row)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, infraerrors.New(http.StatusNotFound, "LOCAL_ACCOUNT_NOT_FOUND", "local Sub2API account not found")
-		}
 		return nil, translateSupplierAccountCreateError(err)
 	}
 	return created, nil
@@ -270,8 +282,8 @@ func (r *SQLRepository) DeleteAccount(ctx context.Context, supplierID int64, acc
 }
 
 func (r *SQLRepository) ListLocalAccounts(ctx context.Context, query string, limit int) ([]*adminplusdomain.LocalSub2APIAccount, error) {
-	if r == nil || r.db == nil {
-		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_DB_NOT_CONFIGURED", "admin plus database is not configured")
+	if r == nil || r.sub2apiDB == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "SUB2API_READ_DB_NOT_CONFIGURED", "sub2api read database is not configured")
 	}
 	where := []string{"deleted_at IS NULL"}
 	args := make([]any, 0, 2)
@@ -284,7 +296,7 @@ func (r *SQLRepository) ListLocalAccounts(ctx context.Context, query string, lim
 		where = append(where, "(LOWER(name) LIKE "+addArg(like)+" OR LOWER(platform) LIKE "+addArg(like)+" OR LOWER(type) LIKE "+addArg(like)+")")
 	}
 	limitRef := addArg(limit)
-	rows, err := r.db.QueryContext(ctx, `
+	rows, err := r.sub2apiDB.QueryContext(ctx, `
 		SELECT id, name, platform, type, status, schedulable, concurrency, priority, rate_multiplier
 		FROM accounts
 		WHERE `+strings.Join(where, " AND ")+`
@@ -320,6 +332,35 @@ func (r *SQLRepository) ListLocalAccounts(ctx context.Context, query string, lim
 		return nil, err
 	}
 	return items, nil
+}
+
+func (r *SQLRepository) getLocalAccount(ctx context.Context, id int64) (*adminplusdomain.LocalSub2APIAccount, error) {
+	if r == nil || r.sub2apiDB == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "SUB2API_READ_DB_NOT_CONFIGURED", "sub2api read database is not configured")
+	}
+	row := r.sub2apiDB.QueryRowContext(ctx, `
+		SELECT id, name, platform, type, status, schedulable, concurrency, priority, rate_multiplier
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	var item adminplusdomain.LocalSub2APIAccount
+	if err := row.Scan(
+		&item.ID,
+		&item.Name,
+		&item.Platform,
+		&item.Type,
+		&item.Status,
+		&item.Schedulable,
+		&item.Concurrency,
+		&item.Priority,
+		&item.RateMultiplier,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.New(http.StatusNotFound, "LOCAL_ACCOUNT_NOT_FOUND", "local Sub2API account not found")
+		}
+		return nil, err
+	}
+	return &item, nil
 }
 
 type supplierScanner interface {

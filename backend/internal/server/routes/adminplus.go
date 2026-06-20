@@ -28,6 +28,8 @@ func RegisterAdminPlusRoutes(
 		sub2api := adminPlus.Group("/sub2api")
 		{
 			sub2api.GET("/accounts", h.AdminPlus.Supplier.ListLocalAccounts)
+			sub2api.GET("/usage-lines", h.AdminPlus.Sub2API.ListLocalUsageLines)
+			sub2api.GET("/usage-summary", h.AdminPlus.Sub2API.ListLocalUsageSummaries)
 		}
 
 		rates := adminPlus.Group("/rates")

@@ -32,6 +32,7 @@ describe('adminPlusRoutes', () => {
       '/admin/operations/promotions',
       '/admin/operations/extension-tasks',
       '/admin/operations/billing',
+      '/admin/operations/local-usage',
       '/admin/operations/actions',
       '/admin/settings',
       '/:pathMatch(.*)*'
@@ -81,12 +82,13 @@ describe('adminPlusRoutes', () => {
         '/admin/operations/promotions',
         '/admin/operations/extension-tasks',
         '/admin/operations/billing',
+        '/admin/operations/local-usage',
         '/admin/operations/actions',
         '/admin/settings'
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(12)
+    expect(adminRoutes).toHaveLength(13)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)

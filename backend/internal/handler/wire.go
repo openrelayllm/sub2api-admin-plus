@@ -36,6 +36,7 @@ func ProvideAdminPlusHandlers(
 	extensionHandler *adminplushandler.ExtensionHandler,
 	actionHandler *adminplushandler.ActionHandler,
 	reconciliationHandler *adminplushandler.ReconciliationHandler,
+	sub2apiHandler *adminplushandler.Sub2APIHandler,
 ) *AdminPlusHandlers {
 	return &AdminPlusHandlers{
 		Supplier:       supplierHandler,
@@ -47,6 +48,7 @@ func ProvideAdminPlusHandlers(
 		Extension:      extensionHandler,
 		Action:         actionHandler,
 		Reconciliation: reconciliationHandler,
+		Sub2API:        sub2apiHandler,
 	}
 }
 
@@ -108,6 +110,7 @@ var ProviderSet = wire.NewSet(
 	adminplushandler.NewExtensionHandler,
 	adminplushandler.NewActionHandler,
 	adminplushandler.NewReconciliationHandler,
+	adminplushandler.NewSub2APIHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,
