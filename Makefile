@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend build-datamanagementd test test-backend test-frontend test-frontend-critical test-datamanagementd secret-scan
+.PHONY: build build-backend build-frontend build-datamanagementd dev dev-backend dev-frontend e2e-local test test-backend test-frontend test-frontend-critical test-datamanagementd secret-scan
 
 FRONTEND_CRITICAL_VITEST := \
 	src/router/__tests__/admin-plus-routes.spec.ts \
@@ -25,6 +25,18 @@ build-datamanagementd:
 
 # 运行测试（后端 + 前端）
 test: test-backend test-frontend
+
+dev:
+	@bash scripts/start-dev.sh
+
+dev-backend:
+	@bash scripts/start-backend.sh
+
+dev-frontend:
+	@bash scripts/start-frontend.sh
+
+e2e-local:
+	@bash scripts/run-e2e-local.sh
 
 test-backend:
 	@$(MAKE) -C backend test

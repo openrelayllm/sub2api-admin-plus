@@ -51,6 +51,34 @@ Not implemented yet:
 
 ## Development
 
+Local dev stack:
+
+```bash
+make dev
+```
+
+Defaults:
+
+- Frontend: `http://127.0.0.1:3000`
+- Backend: `http://127.0.0.1:8080`
+- Admin: `admin@sub2api-admin-plus.local` / `AdminPlus@123456`
+- PostgreSQL: `root:root@127.0.0.1:5432/sub2api_admin_plus`
+- Redis: `127.0.0.1:6379/0`
+
+You can override ports and local infrastructure through environment variables:
+
+```bash
+SERVER_PORT=8081 FRONTEND_PORT=3001 make dev
+DATABASE_DBNAME=sub2api_admin_plus REDIS_DB=0 make dev-backend
+```
+
+Single-process startup:
+
+```bash
+make dev-backend
+make dev-frontend
+```
+
 Backend:
 
 ```bash
@@ -80,6 +108,12 @@ pnpm run test:run -- src/router/__tests__/admin-plus-routes.spec.ts
 
 cd ..
 node tools/admin-plus-e2e.mjs
+```
+
+Or start a dedicated backend on port `3010` and run the local E2E script:
+
+```bash
+make e2e-local
 ```
 
 E2E defaults:

@@ -56,9 +56,34 @@ pnpm run build
 整体：
 
 ```bash
+make dev
+make dev-backend
+make dev-frontend
+make e2e-local
 make build
 make test-backend
 make test-frontend
+```
+
+本地启动默认账号：
+
+```text
+admin@sub2api-admin-plus.local / AdminPlus@123456
+```
+
+默认连接：
+
+```text
+Backend  http://127.0.0.1:8080
+Frontend http://127.0.0.1:3000
+PostgreSQL root:root@127.0.0.1:5432/sub2api_admin_plus
+Redis 127.0.0.1:6379/0
+```
+
+如需换端口：
+
+```bash
+SERVER_PORT=8081 FRONTEND_PORT=3001 make dev
 ```
 
 ## 当前注意事项
