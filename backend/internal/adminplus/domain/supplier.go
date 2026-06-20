@@ -76,6 +76,18 @@ type Supplier struct {
 	UpdatedAt            time.Time                `json:"updated_at"`
 }
 
+type SupplierBrowserCredential struct {
+	SupplierID   int64        `json:"supplier_id"`
+	SupplierName string       `json:"supplier_name"`
+	Kind         SupplierKind `json:"supplier_kind"`
+	Type         SupplierType `json:"supplier_type"`
+	DashboardURL string       `json:"dashboard_url"`
+	APIBaseURL   string       `json:"api_base_url,omitempty"`
+	Username     string       `json:"username,omitempty"`
+	Password     string       `json:"password,omitempty"`
+	Token        string       `json:"token,omitempty"`
+}
+
 type SupplierAccount struct {
 	ID                        int64                 `json:"id"`
 	SupplierID                int64                 `json:"supplier_id"`

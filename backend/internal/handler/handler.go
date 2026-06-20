@@ -23,6 +23,7 @@ type AdminPlusHandlers struct {
 	Health         *adminplushandler.HealthHandler
 	Billing        *adminplushandler.BillingHandler
 	Extension      *adminplushandler.ExtensionHandler
+	Scheduler      *adminplushandler.SchedulerHandler
 	Action         *adminplushandler.ActionHandler
 	Reconciliation *adminplushandler.ReconciliationHandler
 	Sub2API        *adminplushandler.Sub2APIHandler

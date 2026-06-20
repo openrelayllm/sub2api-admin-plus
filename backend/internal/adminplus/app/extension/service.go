@@ -20,6 +20,7 @@ const (
 type CreateTaskInput struct {
 	SupplierID     int64
 	Type           adminplusdomain.ExtensionTaskType
+	ScheduleKey    string
 	Priority       int
 	MaxAttempts    int
 	AvailableAfter *time.Time
@@ -55,6 +56,12 @@ type FailTaskInput struct {
 	RetryAfter   *time.Time
 }
 
+type BrowserCredentialInput struct {
+	TaskID     int64
+	DeviceID   string
+	LeaseToken string
+}
+
 type TaskFilter struct {
 	SupplierID int64
 	Status     adminplusdomain.ExtensionTaskStatus
@@ -62,8 +69,13 @@ type TaskFilter struct {
 	Limit      int
 }
 
+type BrowserCredentialProvider interface {
+	GetBrowserCredential(ctx context.Context, supplierID int64) (*adminplusdomain.SupplierBrowserCredential, error)
+}
+
 type Repository interface {
 	CreateTask(ctx context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, error)
+	CreateTaskIfAbsent(ctx context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, bool, error)
 	ClaimNextTask(ctx context.Context, now time.Time, types []adminplusdomain.ExtensionTaskType, lease Lease) (*adminplusdomain.ExtensionTask, error)
 	UpdateTask(ctx context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, error)
 	GetTask(ctx context.Context, id int64) (*adminplusdomain.ExtensionTask, error)
@@ -77,9 +89,11 @@ type Lease struct {
 }
 
 type Service struct {
-	repo     Repository
-	now      func() time.Time
-	newToken func() (string, error)
+	repo            Repository
+	resultProcessor ResultProcessor
+	credentials     BrowserCredentialProvider
+	now             func() time.Time
+	newToken        func() (string, error)
 }
 
 func NewService(repo Repository) *Service {
@@ -90,36 +104,41 @@ func NewService(repo Repository) *Service {
 	}
 }
 
+func NewServiceWithResultProcessor(repo Repository, processor ResultProcessor) *Service {
+	service := NewService(repo)
+	service.resultProcessor = processor
+	return service
+}
+
+func NewServiceWithDependencies(repo Repository, processor ResultProcessor, credentials BrowserCredentialProvider) *Service {
+	service := NewServiceWithResultProcessor(repo, processor)
+	service.credentials = credentials
+	return service
+}
+
 func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (*adminplusdomain.ExtensionTask, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("extension task service is not configured")
 	}
-	if in.SupplierID <= 0 {
-		return nil, badRequest("EXTENSION_TASK_SUPPLIER_ID_INVALID", "invalid supplier id")
+	task, err := s.buildTask(in)
+	if err != nil {
+		return nil, err
 	}
-	if !in.Type.Valid() {
-		return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
+	return s.repo.CreateTask(ctx, task)
+}
+
+func (s *Service) CreateTaskIfAbsent(ctx context.Context, in CreateTaskInput) (*adminplusdomain.ExtensionTask, bool, error) {
+	if s == nil || s.repo == nil {
+		return nil, false, internalError("extension task service is not configured")
 	}
-	maxAttempts := in.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = defaultMaxAttempts
+	task, err := s.buildTask(in)
+	if err != nil {
+		return nil, false, err
 	}
-	availableAfter := s.now().UTC()
-	if in.AvailableAfter != nil {
-		availableAfter = in.AvailableAfter.UTC()
+	if strings.TrimSpace(task.ScheduleKey) == "" {
+		return nil, false, badRequest("EXTENSION_TASK_SCHEDULE_KEY_REQUIRED", "schedule key is required")
 	}
-	now := s.now().UTC()
-	return s.repo.CreateTask(ctx, &adminplusdomain.ExtensionTask{
-		SupplierID:     in.SupplierID,
-		Type:           in.Type,
-		Status:         adminplusdomain.ExtensionTaskStatusPending,
-		Priority:       in.Priority,
-		MaxAttempts:    maxAttempts,
-		AvailableAfter: availableAfter,
-		Payload:        in.Payload,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	})
+	return s.repo.CreateTaskIfAbsent(ctx, task)
 }
 
 func (s *Service) ClaimTask(ctx context.Context, in ClaimTaskInput) (*adminplusdomain.ExtensionTask, error) {
@@ -154,6 +173,36 @@ func (s *Service) ClaimTask(ctx context.Context, in ClaimTaskInput) (*adminplusd
 	return task, nil
 }
 
+func (s *Service) buildTask(in CreateTaskInput) (*adminplusdomain.ExtensionTask, error) {
+	if in.SupplierID <= 0 {
+		return nil, badRequest("EXTENSION_TASK_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if !in.Type.Valid() {
+		return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
+	}
+	maxAttempts := in.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+	availableAfter := s.now().UTC()
+	if in.AvailableAfter != nil {
+		availableAfter = in.AvailableAfter.UTC()
+	}
+	now := s.now().UTC()
+	return &adminplusdomain.ExtensionTask{
+		SupplierID:     in.SupplierID,
+		Type:           in.Type,
+		ScheduleKey:    trimLimit(in.ScheduleKey, 200),
+		Status:         adminplusdomain.ExtensionTaskStatusPending,
+		Priority:       in.Priority,
+		MaxAttempts:    maxAttempts,
+		AvailableAfter: availableAfter,
+		Payload:        in.Payload,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, nil
+}
+
 func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) (*adminplusdomain.ExtensionTask, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("extension task service is not configured")
@@ -180,8 +229,16 @@ func (s *Service) CompleteTask(ctx context.Context, in CompleteTaskInput) (*admi
 		return nil, err
 	}
 	now := s.now().UTC()
+	result := in.Result
+	if s.resultProcessor != nil {
+		ingest, err := s.resultProcessor.ProcessTaskResult(ctx, task, result)
+		if err != nil {
+			return nil, ingestError(err)
+		}
+		result = mergeIngestResult(result, ingest)
+	}
 	task.Status = adminplusdomain.ExtensionTaskStatusSucceeded
-	task.Result = in.Result
+	task.Result = result
 	task.UpdatedAt = now
 	task.FinishedAt = &now
 	return s.repo.UpdateTask(ctx, task)
@@ -231,6 +288,20 @@ func (s *Service) ListTasks(ctx context.Context, filter TaskFilter) ([]*adminplu
 	}
 	filter.Limit = normalizeLimit(filter.Limit)
 	return s.repo.ListTasks(ctx, filter)
+}
+
+func (s *Service) GetBrowserCredential(ctx context.Context, in BrowserCredentialInput) (*adminplusdomain.SupplierBrowserCredential, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	if s.credentials == nil {
+		return nil, internalError("supplier browser credential provider is not configured")
+	}
+	task, err := s.requireLeasedTask(ctx, in.TaskID, in.DeviceID, in.LeaseToken)
+	if err != nil {
+		return nil, err
+	}
+	return s.credentials.GetBrowserCredential(ctx, task.SupplierID)
 }
 
 func (s *Service) requireLeasedTask(ctx context.Context, taskID int64, deviceID string, leaseToken string) (*adminplusdomain.ExtensionTask, error) {

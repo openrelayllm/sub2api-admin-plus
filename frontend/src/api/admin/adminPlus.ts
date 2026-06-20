@@ -293,6 +293,29 @@ export interface LocalUsageSummary {
   last_request_created_at: string
 }
 
+export interface LocalAccountRuntime {
+  account_id: number
+  account_name: string
+  account_platform: string
+  account_type: string
+  status: string
+  schedulable: boolean
+  configured_limit: number
+  current_concurrency: number
+  waiting_count: number
+  load_percent: number
+  switch_eligible: boolean
+  blocked_reason?: string
+  error_message?: string
+  rate_limit_reset_at?: string | null
+  overload_until?: string | null
+  temp_unsched_until?: string | null
+  temp_unsched_reason?: string
+  last_used_at?: string | null
+  collected_at: string
+  redis_read_configured: boolean
+}
+
 export interface ReconciliationLine {
   status: 'matched' | 'supplier_only' | 'local_only' | 'currency_mismatch' | 'cost_mismatch'
   supplier_bill_id?: number
@@ -328,6 +351,7 @@ export interface ExtensionTask {
   id: number
   supplier_id: number
   type: 'fetch_rates' | 'fetch_balance' | 'fetch_promotions' | 'export_bills' | 'fetch_health'
+  schedule_key?: string
   status: 'pending' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   priority: number
   attempts: number
@@ -344,6 +368,46 @@ export interface ExtensionTask {
   created_at: string
   updated_at: string
   finished_at?: string | null
+}
+
+export type ExtensionTaskType = ExtensionTask['type']
+
+export interface ExtensionBrowserCredential {
+  supplier_id: number
+  supplier_name: string
+  supplier_kind: SupplierKind
+  supplier_type: SupplierType
+  dashboard_url: string
+  api_base_url?: string
+  username?: string
+  password?: string
+  token?: string
+}
+
+export interface ScheduledTask {
+  supplier_id: number
+  supplier_name: string
+  task_type: ExtensionTaskType
+  task_id?: number
+  schedule_key: string
+  created: boolean
+  reason?: string
+}
+
+export interface SchedulerRun {
+  run_id: string
+  mode: string
+  requested_at: string
+  task_types: ExtensionTaskType[]
+  created_count: number
+  skipped_count: number
+  items: ScheduledTask[]
+}
+
+export interface SchedulerStatus {
+  enabled: boolean
+  interval_seconds: number
+  queue: string
 }
 
 export interface ActionRecommendation {
@@ -399,6 +463,11 @@ export async function listLocalUsageLines(params?: { account_id?: number; model?
 
 export async function listLocalUsageSummary(params?: { account_id?: number; model?: string; from?: string; to?: string; limit?: number }): Promise<AdminPlusListResponse<LocalUsageSummary>> {
   const { data } = await apiClient.get<AdminPlusListResponse<LocalUsageSummary>>('/admin-plus/sub2api/usage-summary', { params })
+  return data
+}
+
+export async function listLocalAccountRuntime(params?: { account_id?: number; q?: string; limit?: number }): Promise<AdminPlusListResponse<LocalAccountRuntime>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<LocalAccountRuntime>>('/admin-plus/sub2api/account-runtime', { params })
   return data
 }
 
@@ -568,8 +637,31 @@ export async function listExtensionTasks(params?: { supplier_id?: number; status
   return data
 }
 
+export async function getSchedulerStatus(): Promise<SchedulerStatus> {
+  const { data } = await apiClient.get<SchedulerStatus>('/admin-plus/scheduler/status')
+  return data
+}
+
+export async function runScheduler(payload: {
+  mode?: string
+  supplier_id?: number
+  task_types?: ExtensionTaskType[]
+  window_minutes?: number
+}): Promise<SchedulerRun> {
+  const { data } = await apiClient.post<SchedulerRun>('/admin-plus/scheduler/run', payload)
+  return data
+}
+
 export async function claimExtensionTask(payload: { device_id: string; types?: ExtensionTask['type'][]; lease_ttl_seconds?: number }) {
   const { data } = await apiClient.post<ExtensionTask>('/admin-plus/extension/tasks/claim', payload)
+  return data
+}
+
+export async function getExtensionTaskBrowserCredential(task: ExtensionTask): Promise<ExtensionBrowserCredential> {
+  const { data } = await apiClient.post<ExtensionBrowserCredential>(`/admin-plus/extension/tasks/${task.id}/browser-credential`, {
+    device_id: task.device_id,
+    lease_token: task.lease_token
+  })
   return data
 }
 
@@ -653,7 +745,10 @@ export const adminPlusAPI = {
   runReconciliation,
   createExtensionTask,
   listExtensionTasks,
+  getSchedulerStatus,
+  runScheduler,
   claimExtensionTask,
+  getExtensionTaskBrowserCredential,
   heartbeatExtensionTask,
   completeExtensionTask,
   failExtensionTask,

@@ -12,6 +12,8 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus"
+	adminplusscheduler "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
+	adminplussub2api "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
@@ -73,6 +75,8 @@ func provideCleanup(
 	opsSystemLogSink *service.OpsSystemLogSink,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
+	sub2apiRedis adminplussub2api.Sub2APIRedis,
+	adminPlusScheduler *adminplusscheduler.Worker,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -129,9 +133,21 @@ func provideCleanup(
 				billingCache.Stop()
 				return nil
 			}},
+			{"AdminPlusScheduler", func() error {
+				if adminPlusScheduler != nil {
+					adminPlusScheduler.Stop()
+				}
+				return nil
+			}},
 		}
 
 		infraSteps := []cleanupStep{
+			{"Sub2APIReadonlyRedis", func() error {
+				if !sub2apiRedis.Owned || sub2apiRedis.Client == nil {
+					return nil
+				}
+				return sub2apiRedis.Client.Close()
+			}},
 			{"Redis", func() error {
 				if rdb == nil {
 					return nil

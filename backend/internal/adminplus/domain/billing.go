@@ -50,6 +50,29 @@ type LocalUsageSummary struct {
 	LastRequestCreatedAt time.Time `json:"last_request_created_at"`
 }
 
+type LocalAccountRuntime struct {
+	AccountID           int64      `json:"account_id"`
+	AccountName         string     `json:"account_name"`
+	AccountPlatform     string     `json:"account_platform"`
+	AccountType         string     `json:"account_type"`
+	Status              string     `json:"status"`
+	Schedulable         bool       `json:"schedulable"`
+	ConfiguredLimit     int        `json:"configured_limit"`
+	CurrentConcurrency  int        `json:"current_concurrency"`
+	WaitingCount        int        `json:"waiting_count"`
+	LoadPercent         float64    `json:"load_percent"`
+	SwitchEligible      bool       `json:"switch_eligible"`
+	BlockedReason       string     `json:"blocked_reason,omitempty"`
+	ErrorMessage        string     `json:"error_message,omitempty"`
+	RateLimitResetAt    *time.Time `json:"rate_limit_reset_at,omitempty"`
+	OverloadUntil       *time.Time `json:"overload_until,omitempty"`
+	TempUnschedUntil    *time.Time `json:"temp_unsched_until,omitempty"`
+	TempUnschedReason   string     `json:"temp_unsched_reason,omitempty"`
+	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
+	CollectedAt         time.Time  `json:"collected_at"`
+	RedisReadConfigured bool       `json:"redis_read_configured"`
+}
+
 type ReconciliationStatus string
 
 const (

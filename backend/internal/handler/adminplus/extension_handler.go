@@ -161,6 +161,27 @@ func (h *ExtensionHandler) FailTask(c *gin.Context) {
 	response.Success(c, task)
 }
 
+func (h *ExtensionHandler) GetBrowserCredential(c *gin.Context) {
+	id, ok := parseExtensionTaskID(c)
+	if !ok {
+		return
+	}
+	var req extensionTaskLeaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	credential, err := h.service.GetBrowserCredential(c.Request.Context(), extensionapp.BrowserCredentialInput{
+		TaskID:     id,
+		DeviceID:   req.DeviceID,
+		LeaseToken: req.LeaseToken,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, credential)
+}
+
 func (h *ExtensionHandler) ListTasks(c *gin.Context) {
 	items, err := h.service.ListTasks(c.Request.Context(), extensionapp.TaskFilter{
 		SupplierID: parseInt64Query(c, "supplier_id"),

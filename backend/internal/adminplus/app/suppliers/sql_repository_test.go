@@ -47,6 +47,9 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 			true,
 			false,
 			"op***@example.com",
+			"ops@example.com",
+			"secret",
+			"",
 			int64(5000),
 			"USD",
 			&balanceUpdatedAt,
@@ -79,15 +82,17 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 		))
 
 	got, err := repo.Create(context.Background(), &adminplusdomain.Supplier{
-		Name:          "Primary Relay",
-		Kind:          adminplusdomain.SupplierKindRelay,
-		Type:          adminplusdomain.SupplierTypeSub2API,
-		RuntimeStatus: adminplusdomain.SupplierRuntimeStatusCandidate,
-		HealthStatus:  adminplusdomain.SupplierHealthStatusNormal,
-		DashboardURL:  "https://relay.example.com/admin",
-		APIBaseURL:    "https://relay.example.com",
-		Contact:       "ops@example.com",
-		Notes:         "primary upstream",
+		Name:                 "Primary Relay",
+		Kind:                 adminplusdomain.SupplierKindRelay,
+		Type:                 adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:        adminplusdomain.SupplierRuntimeStatusCandidate,
+		HealthStatus:         adminplusdomain.SupplierHealthStatusNormal,
+		DashboardURL:         "https://relay.example.com/admin",
+		APIBaseURL:           "https://relay.example.com",
+		Contact:              "ops@example.com",
+		Notes:                "primary upstream",
+		BrowserLoginUsername: "ops@example.com",
+		BrowserLoginPassword: "secret",
 		Credential: adminplusdomain.SupplierCredentialStatus{
 			PostgresConfigured:             true,
 			RedisConfigured:                true,
@@ -107,6 +112,47 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 	require.Equal(t, int64(7), got.ID)
 	require.Equal(t, adminplusdomain.SupplierRuntimeStatusCandidate, got.RuntimeStatus)
 	require.True(t, got.Credential.PostgresConfigured)
+}
+
+func TestSQLRepositoryGetBrowserCredential(t *testing.T) {
+	db, mock := newSupplierSQLMock(t)
+	repo := NewSQLRepository(db, sub2apiapp.ReadDB{DB: db})
+
+	mock.ExpectQuery(`FROM admin_plus_suppliers\s+WHERE id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"name",
+			"kind",
+			"type",
+			"dashboard_url",
+			"api_base_url",
+			"browser_login_enabled",
+			"browser_login_username_ciphertext",
+			"browser_login_password_ciphertext",
+			"browser_login_token_ciphertext",
+		}).AddRow(
+			int64(7),
+			"Primary Relay",
+			"relay",
+			"sub2api",
+			"https://relay.example.com/admin",
+			"https://relay.example.com/api/v1",
+			true,
+			"ops@example.com",
+			"secret",
+			"session-token",
+		))
+
+	got, err := repo.GetBrowserCredential(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), got.SupplierID)
+	require.Equal(t, adminplusdomain.SupplierTypeSub2API, got.Type)
+	require.Equal(t, "https://relay.example.com/admin", got.DashboardURL)
+	require.Equal(t, "ops@example.com", got.Username)
+	require.Equal(t, "secret", got.Password)
+	require.Equal(t, "session-token", got.Token)
 }
 
 func TestSQLRepositoryListFiltersWithParameterizedQuery(t *testing.T) {

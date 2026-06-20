@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="./popup.css" />
+    <title>Admin Plus Operator</title>
+  </head>
+  <body>
+    <main class="panel">
+      <header>
+        <h1>Admin Plus Operator</h1>
+        <p id="device"></p>
+      </header>
+
+      <label>
+        <span>Admin Plus 地址</span>
+        <input id="baseURL" placeholder="https://sub2api-plus.example.com" />
+      </label>
+
+      <label>
+        <span>管理员 Token</span>
+        <input id="token" type="password" placeholder="从后台页面读取或手动粘贴" />
+      </label>
+
+      <fieldset>
+        <legend>领取任务类型</legend>
+        <label class="check"><input type="checkbox" value="fetch_rates" />费率</label>
+        <label class="check"><input type="checkbox" value="fetch_balance" />余额</label>
+        <label class="check"><input type="checkbox" value="fetch_promotions" />优惠</label>
+        <label class="check"><input type="checkbox" value="export_bills" />账单</label>
+        <label class="check"><input type="checkbox" value="fetch_health" />健康</label>
+      </fieldset>
+
+      <div class="actions">
+        <button id="importToken" type="button">读取当前后台 Token</button>
+        <button id="save" type="button">保存</button>
+        <button id="run" type="button" class="primary">领取并执行</button>
+      </div>
+
+      <pre id="status"></pre>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

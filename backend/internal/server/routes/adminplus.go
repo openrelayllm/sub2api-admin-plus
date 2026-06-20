@@ -28,6 +28,7 @@ func RegisterAdminPlusRoutes(
 		sub2api := adminPlus.Group("/sub2api")
 		{
 			sub2api.GET("/accounts", h.AdminPlus.Supplier.ListLocalAccounts)
+			sub2api.GET("/account-runtime", h.AdminPlus.Sub2API.ListAccountRuntime)
 			sub2api.GET("/usage-lines", h.AdminPlus.Sub2API.ListLocalUsageLines)
 			sub2api.GET("/usage-summary", h.AdminPlus.Sub2API.ListLocalUsageSummaries)
 		}
@@ -75,8 +76,15 @@ func RegisterAdminPlusRoutes(
 			extension.GET("/tasks", h.AdminPlus.Extension.ListTasks)
 			extension.POST("/tasks/claim", h.AdminPlus.Extension.ClaimTask)
 			extension.POST("/tasks/:id/heartbeat", h.AdminPlus.Extension.Heartbeat)
+			extension.POST("/tasks/:id/browser-credential", h.AdminPlus.Extension.GetBrowserCredential)
 			extension.POST("/tasks/:id/complete", h.AdminPlus.Extension.CompleteTask)
 			extension.POST("/tasks/:id/fail", h.AdminPlus.Extension.FailTask)
+		}
+
+		scheduler := adminPlus.Group("/scheduler")
+		{
+			scheduler.GET("/status", h.AdminPlus.Scheduler.Status)
+			scheduler.POST("/run", h.AdminPlus.Scheduler.Run)
 		}
 
 		reconciliation := adminPlus.Group("/reconciliation")

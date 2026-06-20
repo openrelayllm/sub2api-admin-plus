@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -117,7 +118,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	systemHandler := handler.ProvideSystemHandler(updateService, systemOperationLockService)
 	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, groupHandler, settingHandler, opsHandler, systemHandler)
 	readDB := sub2api.ProvideReadSQLDB(db)
-	sqlRepository := suppliers.NewSQLRepository(db, readDB)
+	credentialCipher := suppliers.UseCredentialCipher(secretEncryptor)
+	sqlRepository := suppliers.NewSQLRepositoryWithCipher(db, readDB, credentialCipher)
 	suppliersService := suppliers.NewService(sqlRepository)
 	supplierHandler := adminplus.NewSupplierHandler(suppliersService)
 	ratesSQLRepository := rates.NewSQLRepository(db)
@@ -136,17 +138,22 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	billingService := billing.NewService(billingSQLRepository)
 	billingHandler := adminplus.NewBillingHandler(billingService)
 	extensionSQLRepository := extension.NewSQLRepository(db)
-	extensionService := extension.NewService(extensionSQLRepository)
+	ingestProcessor := extension.NewIngestProcessor(ratesService, balancesService, promotionsService, healthService, billingService)
+	extensionService := extension.NewServiceWithDependencies(extensionSQLRepository, ingestProcessor, suppliersService)
 	extensionHandler := adminplus.NewExtensionHandler(extensionService)
+	schedulerService := scheduler.NewService(suppliersService, extensionService)
+	schedulerHandler := adminplus.NewSchedulerHandler(schedulerService)
 	actionsSQLRepository := actions.NewSQLRepository(db)
 	actionsService := actions.NewService(actionsSQLRepository)
 	actionHandler := adminplus.NewActionHandler(actionsService)
 	reconciliationService := reconciliation.NewService()
 	reconciliationHandler := adminplus.NewReconciliationHandler(reconciliationService)
 	sub2apiSQLRepository := sub2api.NewSQLRepository(readDB)
-	sub2apiService := sub2api.NewService(sub2apiSQLRepository)
+	sub2APIRedis := sub2api.ProvideReadRedis(redisClient, configConfig)
+	runtimeRepository := sub2api.NewRuntimeRepository(readDB, sub2APIRedis)
+	sub2apiService := sub2api.NewService(sub2apiSQLRepository, runtimeRepository)
 	sub2APIHandler := adminplus.NewSub2APIHandler(sub2apiService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, rateHandler, balanceHandler, promotionHandler, healthHandler, billingHandler, extensionHandler, actionHandler, reconciliationHandler, sub2APIHandler)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, rateHandler, balanceHandler, promotionHandler, healthHandler, billingHandler, extensionHandler, schedulerHandler, actionHandler, reconciliationHandler, sub2APIHandler)
 	notificationEmailService := service.NewNotificationEmailService(settingRepository, emailService)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)
@@ -161,7 +168,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorService := service.ProvideChannelMonitorService(channelMonitorRepository, secretEncryptor)
 	opsCleanupService := service.ProvideOpsCleanupService(opsRepository, db, redisClient, configConfig, channelMonitorService, settingRepository, opsService)
 	opsScheduledReportService := service.ProvideOpsScheduledReportService(opsService, userService, emailService, redisClient, configConfig)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, emailQueueService, billingCacheService)
+	worker := scheduler.ProvideWorker(schedulerService)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, emailQueueService, billingCacheService, sub2APIRedis, worker)
 	application := &Application{
 		Server:  httpServer,
 		Cleanup: v,
@@ -194,6 +202,8 @@ func provideCleanup(
 	opsSystemLogSink *service.OpsSystemLogSink,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
+	sub2apiRedis sub2api.Sub2APIRedis,
+	adminPlusScheduler *scheduler.Worker,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -249,9 +259,21 @@ func provideCleanup(
 				billingCache.Stop()
 				return nil
 			}},
+			{"AdminPlusScheduler", func() error {
+				if adminPlusScheduler != nil {
+					adminPlusScheduler.Stop()
+				}
+				return nil
+			}},
 		}
 
 		infraSteps := []cleanupStep{
+			{"Sub2APIReadonlyRedis", func() error {
+				if !sub2apiRedis.Owned || sub2apiRedis.Client == nil {
+					return nil
+				}
+				return sub2apiRedis.Client.Close()
+			}},
 			{"Redis", func() error {
 				if rdb == nil {
 					return nil

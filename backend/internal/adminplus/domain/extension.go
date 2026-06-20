@@ -45,6 +45,7 @@ type ExtensionTask struct {
 	ID              int64               `json:"id"`
 	SupplierID      int64               `json:"supplier_id"`
 	Type            ExtensionTaskType   `json:"type"`
+	ScheduleKey     string              `json:"schedule_key,omitempty"`
 	Status          ExtensionTaskStatus `json:"status"`
 	Priority        int                 `json:"priority"`
 	Attempts        int                 `json:"attempts"`

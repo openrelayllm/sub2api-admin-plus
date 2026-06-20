@@ -23,15 +23,21 @@ type Repository interface {
 	ListLocalUsageSummaries(ctx context.Context, filter UsageFilter) ([]*adminplusdomain.LocalUsageSummary, error)
 }
 
-type Service struct {
-	repo Repository
-	now  func() time.Time
+type RuntimeReader interface {
+	ListAccountRuntime(ctx context.Context, filter RuntimeFilter) ([]*adminplusdomain.LocalAccountRuntime, error)
 }
 
-func NewService(repo Repository) *Service {
+type Service struct {
+	repo        Repository
+	runtimeRepo RuntimeReader
+	now         func() time.Time
+}
+
+func NewService(repo Repository, runtimeRepo RuntimeReader) *Service {
 	return &Service{
-		repo: repo,
-		now:  time.Now,
+		repo:        repo,
+		runtimeRepo: runtimeRepo,
+		now:         time.Now,
 	}
 }
 
@@ -55,6 +61,16 @@ func (s *Service) ListLocalUsageSummaries(ctx context.Context, filter UsageFilte
 		return nil, err
 	}
 	return s.repo.ListLocalUsageSummaries(ctx, normalized)
+}
+
+func (s *Service) ListAccountRuntime(ctx context.Context, filter RuntimeFilter) ([]*adminplusdomain.LocalAccountRuntime, error) {
+	if s == nil || s.runtimeRepo == nil {
+		return nil, internalError("sub2api runtime reader is not configured")
+	}
+	if filter.AccountID < 0 {
+		return nil, badRequest("ACCOUNT_RUNTIME_ACCOUNT_ID_INVALID", "invalid account id")
+	}
+	return s.runtimeRepo.ListAccountRuntime(ctx, filter)
 }
 
 func (s *Service) normalizeFilter(filter UsageFilter) (UsageFilter, error) {

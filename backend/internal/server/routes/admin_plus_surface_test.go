@@ -14,6 +14,7 @@ import (
 	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	reconciliationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
+	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
 	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
@@ -30,6 +31,8 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 
 	router := gin.New()
 	v1 := router.Group("/api/v1")
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	handlers := &handler.Handlers{
 		Auth:    &handler.AuthHandler{},
 		Setting: &handler.SettingHandler{},
@@ -41,16 +44,17 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			System:    &adminhandler.SystemHandler{},
 		},
 		AdminPlus: &handler.AdminPlusHandlers{
-			Supplier:       adminplushandler.NewSupplierHandler(suppliersapp.NewService(suppliersapp.NewMemoryRepository())),
+			Supplier:       adminplushandler.NewSupplierHandler(supplierService),
 			Rate:           adminplushandler.NewRateHandler(ratesapp.NewService(newRouteSurfaceRateRepository())),
 			Balance:        adminplushandler.NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository())),
 			Promotion:      adminplushandler.NewPromotionHandler(promotionsapp.NewService(promotionsapp.NewMemoryRepository())),
 			Health:         adminplushandler.NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository())),
 			Billing:        adminplushandler.NewBillingHandler(billingapp.NewService(billingapp.NewMemoryRepository())),
-			Extension:      adminplushandler.NewExtensionHandler(extensionapp.NewService(extensionapp.NewMemoryRepository())),
+			Extension:      adminplushandler.NewExtensionHandler(extensionService),
+			Scheduler:      adminplushandler.NewSchedulerHandler(schedulerapp.NewService(supplierService, extensionService)),
 			Action:         adminplushandler.NewActionHandler(actionsapp.NewRuleService()),
 			Reconciliation: adminplushandler.NewReconciliationHandler(reconciliationapp.NewService()),
-			Sub2API:        adminplushandler.NewSub2APIHandler(sub2apiapp.NewService(newRouteSurfaceSub2APIRepository())),
+			Sub2API:        adminplushandler.NewSub2APIHandler(sub2apiapp.NewService(newRouteSurfaceSub2APIRepository(), newRouteSurfaceSub2APIRuntimeReader())),
 		},
 	}
 
@@ -99,6 +103,7 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/suppliers/:id/accounts",
 		"DELETE /api/v1/admin-plus/suppliers/:id/accounts/:accountID",
 		"GET /api/v1/admin-plus/sub2api/accounts",
+		"GET /api/v1/admin-plus/sub2api/account-runtime",
 		"GET /api/v1/admin-plus/sub2api/usage-lines",
 		"GET /api/v1/admin-plus/sub2api/usage-summary",
 		"POST /api/v1/admin-plus/rates/snapshots",
@@ -124,6 +129,8 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/extension/tasks/:id/heartbeat",
 		"POST /api/v1/admin-plus/extension/tasks/:id/complete",
 		"POST /api/v1/admin-plus/extension/tasks/:id/fail",
+		"GET /api/v1/admin-plus/scheduler/status",
+		"POST /api/v1/admin-plus/scheduler/run",
 		"POST /api/v1/admin-plus/reconciliation/run",
 		"POST /api/v1/admin-plus/actions/generate",
 		"GET /api/v1/admin-plus/actions/recommendations",
@@ -243,5 +250,15 @@ func (r *routeSurfaceSub2APIRepository) ListLocalUsageLines(_ context.Context, _
 }
 
 func (r *routeSurfaceSub2APIRepository) ListLocalUsageSummaries(_ context.Context, _ sub2apiapp.UsageFilter) ([]*adminplusdomain.LocalUsageSummary, error) {
+	return nil, nil
+}
+
+type routeSurfaceSub2APIRuntimeReader struct{}
+
+func newRouteSurfaceSub2APIRuntimeReader() *routeSurfaceSub2APIRuntimeReader {
+	return &routeSurfaceSub2APIRuntimeReader{}
+}
+
+func (r *routeSurfaceSub2APIRuntimeReader) ListAccountRuntime(_ context.Context, _ sub2apiapp.RuntimeFilter) ([]*adminplusdomain.LocalAccountRuntime, error) {
 	return nil, nil
 }

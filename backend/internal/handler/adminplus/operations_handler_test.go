@@ -2,6 +2,7 @@ package adminplus
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +112,42 @@ func TestExtensionHandlerTaskLifecycle(t *testing.T) {
 	require.Contains(t, completed.Body.String(), `"status":"succeeded"`)
 }
 
+func TestExtensionHandlerBrowserCredentialRequiresLease(t *testing.T) {
+	router := newOperationsHandlerTestRouter()
+
+	created := performJSON(t, router, http.MethodPost, "/extension/tasks", `{
+		"supplier_id": 7,
+		"type": "fetch_rates"
+	}`)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+
+	claimed := performJSON(t, router, http.MethodPost, "/extension/tasks/claim", `{
+		"device_id": "chrome-1",
+		"lease_ttl_seconds": 60
+	}`)
+	require.Equal(t, http.StatusOK, claimed.Code, claimed.Body.String())
+	var claimBody struct {
+		Data struct {
+			LeaseToken string `json:"lease_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(claimed.Body.Bytes(), &claimBody))
+
+	wrongLease := performJSON(t, router, http.MethodPost, "/extension/tasks/1/browser-credential", `{
+		"device_id": "chrome-1",
+		"lease_token": "bad-token"
+	}`)
+	require.Equal(t, http.StatusConflict, wrongLease.Code, wrongLease.Body.String())
+
+	credential := performJSON(t, router, http.MethodPost, "/extension/tasks/1/browser-credential", `{
+		"device_id": "chrome-1",
+		"lease_token": "`+claimBody.Data.LeaseToken+`"
+	}`)
+	require.Equal(t, http.StatusOK, credential.Code, credential.Body.String())
+	require.Contains(t, credential.Body.String(), `"username":"ops@example.com"`)
+	require.Contains(t, credential.Body.String(), `"password":"secret"`)
+}
+
 func TestActionHandlerGenerateDoesNotExecuteActions(t *testing.T) {
 	router := newOperationsHandlerTestRouter()
 
@@ -155,7 +193,7 @@ func newOperationsHandlerTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 
 	billingHandler := NewBillingHandler(billingapp.NewService(billingapp.NewMemoryRepository()))
-	extensionHandler := NewExtensionHandler(extensionapp.NewService(extensionapp.NewMemoryRepository()))
+	extensionHandler := NewExtensionHandler(extensionapp.NewServiceWithDependencies(extensionapp.NewMemoryRepository(), nil, staticCredentialProvider{}))
 	actionHandler := NewActionHandler(actionsapp.NewRuleService())
 
 	router := gin.New()
@@ -164,11 +202,26 @@ func newOperationsHandlerTestRouter() *gin.Engine {
 	router.POST("/extension/tasks", extensionHandler.CreateTask)
 	router.POST("/extension/tasks/claim", extensionHandler.ClaimTask)
 	router.POST("/extension/tasks/:id/heartbeat", extensionHandler.Heartbeat)
+	router.POST("/extension/tasks/:id/browser-credential", extensionHandler.GetBrowserCredential)
 	router.POST("/extension/tasks/:id/complete", extensionHandler.CompleteTask)
 	router.POST("/extension/tasks/:id/fail", extensionHandler.FailTask)
 	router.GET("/extension/tasks", extensionHandler.ListTasks)
 	router.POST("/actions/generate", actionHandler.Generate)
 	return router
+}
+
+type staticCredentialProvider struct{}
+
+func (staticCredentialProvider) GetBrowserCredential(_ context.Context, supplierID int64) (*adminplusdomain.SupplierBrowserCredential, error) {
+	return &adminplusdomain.SupplierBrowserCredential{
+		SupplierID:   supplierID,
+		SupplierName: "Relay",
+		Type:         adminplusdomain.SupplierTypeSub2API,
+		DashboardURL: "https://relay.example.com",
+		Username:     "ops@example.com",
+		Password:     "secret",
+		Token:        "session-token",
+	}, nil
 }
 
 func performJSON(t *testing.T, router *gin.Engine, method string, path string, payload string) *httptest.ResponseRecorder {

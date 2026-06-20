@@ -28,11 +28,27 @@ func (r *MemoryRepository) CreateTask(_ context.Context, task *adminplusdomain.E
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	return r.createTaskLocked(task), nil
+}
+
+func (r *MemoryRepository) CreateTaskIfAbsent(_ context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, existing := range r.tasks {
+		if task.ScheduleKey != "" && existing.ScheduleKey == task.ScheduleKey {
+			return cloneMemoryExtensionTask(existing), false, nil
+		}
+	}
+	return r.createTaskLocked(task), true, nil
+}
+
+func (r *MemoryRepository) createTaskLocked(task *adminplusdomain.ExtensionTask) *adminplusdomain.ExtensionTask {
 	cp := cloneMemoryExtensionTask(task)
 	cp.ID = r.nextID
 	r.nextID++
 	r.tasks[cp.ID] = cp
-	return cloneMemoryExtensionTask(cp), nil
+	return cloneMemoryExtensionTask(cp)
 }
 
 func (r *MemoryRepository) ClaimNextTask(_ context.Context, now time.Time, types []adminplusdomain.ExtensionTaskType, lease Lease) (*adminplusdomain.ExtensionTask, error) {

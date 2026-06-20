@@ -7,6 +7,7 @@ const baseURL = trimTrailingSlash(process.env.ADMIN_PLUS_BASE_URL || 'http://loc
 const email = process.env.ADMIN_PLUS_E2E_EMAIL || 'admin@sub2api-admin-plus.local'
 const password = process.env.ADMIN_PLUS_E2E_PASSWORD || 'AdminPlus@123456'
 const dbURL = process.env.ADMIN_PLUS_E2E_DB_URL || 'postgresql://root:root@127.0.0.1:5432/sub2api_admin_plus?sslmode=disable'
+const redisURL = process.env.ADMIN_PLUS_E2E_REDIS_URL || 'redis://127.0.0.1:6379/0'
 const runID = `e2e-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`
 
 let token = ''
@@ -25,6 +26,7 @@ async function main() {
   await login()
 
   const localAccountID = createLocalAccountFixture()
+  await exerciseLocalAccountRuntime(localAccountID)
   const supplier = await createSupplier()
   await listAndGetSupplier(supplier.id)
   const activeSupplier = await updateSupplierStatus(supplier.id)
@@ -38,6 +40,7 @@ async function main() {
   const healthEvent = await exerciseHealthMonitoring(activeSupplier.id)
   const promotionEvent = await exercisePromotionMonitoring(activeSupplier.id)
   const reconciliation = await exerciseBillingAndReconciliation(activeSupplier.id, localAccountID)
+  await exerciseScheduler(activeSupplier.id)
   await exerciseExtensionTasks(activeSupplier.id)
   const candidateSupplier = await createCandidateSupplier()
   await exerciseActionRecommendations(activeSupplier, candidateSupplier, balanceEvent, promotionEvent, healthEvent, reconciliation.summary)
@@ -119,6 +122,30 @@ function createLocalUsageFixture(localAccountID, requestID, model, actualCostUSD
   assert(Number.isInteger(id) && id > 0, `local usage fixture should return id, got: ${out}`)
   log(`created local usage fixture #${id}`)
   return id
+}
+
+async function exerciseLocalAccountRuntime(localAccountID) {
+  writeRuntimeRedisFixture(localAccountID)
+  const runtime = await api('GET', `/api/v1/admin-plus/sub2api/account-runtime?account_id=${localAccountID}&limit=20`)
+  const item = runtime.items.find((entry) => entry.account_id === localAccountID)
+  assert(item, 'account runtime should include local account fixture')
+  assert(item.current_concurrency === 2, 'account runtime should read Redis concurrency')
+  assert(item.waiting_count === 1, 'account runtime should read Redis waiting queue')
+  assert(item.configured_limit === 8, 'account runtime should read configured concurrency from Sub2API database')
+  assert(item.switch_eligible === true, 'account runtime should mark active account switch eligible')
+  log('local account runtime verified')
+}
+
+function writeRuntimeRedisFixture(localAccountID) {
+  const now = Math.floor(Date.now() / 1000)
+  execFileSync('redis-cli', ['-u', redisURL, 'ZADD', `concurrency:account:${localAccountID}`, String(now), `${runID}-req-a`, String(now), `${runID}-req-b`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  execFileSync('redis-cli', ['-u', redisURL, 'SET', `wait:account:${localAccountID}`, '1', 'EX', '300'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
 }
 
 function ensureLocalUserFixture() {
@@ -205,9 +232,13 @@ async function createCandidateSupplier() {
 async function listAndGetSupplier(supplierID) {
   const list = await api('GET', `/api/v1/admin-plus/suppliers?q=${encodeURIComponent(runID)}`)
   assert(list.total >= 1, 'supplier list should include test supplier')
+  assert(!JSON.stringify(list).includes('e2e-test-only-password'), 'supplier list should not expose browser login password')
+  assert(!JSON.stringify(list).includes('e2e-test-only-token'), 'supplier list should not expose browser login token')
 
   const supplier = await api('GET', `/api/v1/admin-plus/suppliers/${supplierID}`)
   assert(supplier.id === supplierID, 'supplier get should return requested supplier')
+  assert(!JSON.stringify(supplier).includes('e2e-test-only-password'), 'supplier get should not expose browser login password')
+  assert(!JSON.stringify(supplier).includes('e2e-test-only-token'), 'supplier get should not expose browser login token')
   log('supplier list/get verified')
 }
 
@@ -440,6 +471,9 @@ async function exerciseBillingAndReconciliation(supplierID, localAccountID) {
 }
 
 async function exerciseExtensionTasks(supplierID) {
+  const externalRequestID = `${runID}-extension-req`
+  const startedAt = new Date().toISOString()
+  const endedAt = new Date(Date.now() + 1200).toISOString()
   const task = await api('POST', '/api/v1/admin-plus/extension/tasks', {
     supplier_id: supplierID,
     type: 'export_bills',
@@ -465,13 +499,78 @@ async function exerciseExtensionTasks(supplierID) {
   })
   assert(heartbeat.status === 'running', 'extension heartbeat should mark task running')
 
+  const deniedCredential = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/browser-credential`, {
+    device_id: deviceID,
+    lease_token: 'bad-token'
+  }, { expected: 409, allowError: true })
+  assert(deniedCredential.reason === 'EXTENSION_TASK_LEASE_MISMATCH', 'browser credential should require valid lease')
+
+  const credential = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/browser-credential`, {
+    device_id: deviceID,
+    lease_token: claimed.lease_token
+  })
+  assert(credential.supplier_id === supplierID, 'browser credential should belong to task supplier')
+  assert(credential.dashboard_url === 'https://supplier.example.com', 'browser credential should include dashboard url')
+  assert(credential.username === `${runID}@supplier.example.com`, 'browser credential should return configured username')
+  assert(credential.password === 'e2e-test-only-password', 'browser credential should return configured password')
+  assert(credential.token === 'e2e-test-only-token', 'browser credential should return configured token')
+
   const completed = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/complete`, {
     device_id: deviceID,
     lease_token: claimed.lease_token,
-    result: { exported_rows: 1, run_id: runID }
+    result: {
+      source: 'chrome',
+      run_id: runID,
+      lines: [{
+        external_bill_id: `${runID}-extension-bill`,
+        external_request_id: externalRequestID,
+        model: `${runID}-extension-model`,
+        currency: 'USD',
+        cost_cents: 77,
+        input_tokens: 321,
+        output_tokens: 123,
+        started_at: startedAt,
+        ended_at: endedAt,
+        raw_payload: { run_id: runID, source: 'extension-task' }
+      }]
+    }
   })
   assert(completed.status === 'succeeded', 'extension complete should mark task succeeded')
-  log('extension task lifecycle verified')
+  assert(completed.result?.ingest?.bill_lines === 1, 'extension complete should ingest bill lines')
+
+  const bills = await api('GET', `/api/v1/admin-plus/billing/lines?supplier_id=${supplierID}&limit=100`)
+  assert(bills.items.some((item) => item.external_request_id === externalRequestID), 'extension task completion should create supplier bill line')
+  log('extension task lifecycle and result ingest verified')
+}
+
+async function exerciseScheduler(supplierID) {
+  const status = await api('GET', '/api/v1/admin-plus/scheduler/status')
+  assert(status.queue === 'admin_plus_extension_tasks', 'scheduler should use extension task queue')
+
+  const first = await api('POST', '/api/v1/admin-plus/scheduler/run', {
+    mode: 'e2e',
+    supplier_id: supplierID,
+    task_types: ['fetch_rates', 'fetch_balance', 'fetch_promotions'],
+    window_minutes: 10
+  })
+  assert(first.created_count === 3, 'scheduler should create one task for each requested collection type')
+  assert(first.items.every((item) => item.schedule_key), 'scheduler items should include schedule keys')
+
+  const queued = await api('GET', `/api/v1/admin-plus/extension/tasks?supplier_id=${supplierID}&limit=100`)
+  for (const item of first.items) {
+    assert(queued.items.some((task) => task.id === item.task_id && task.schedule_key === item.schedule_key), 'scheduler-created task should be persisted in extension queue')
+  }
+
+  const second = await api('POST', '/api/v1/admin-plus/scheduler/run', {
+    mode: 'e2e',
+    supplier_id: supplierID,
+    task_types: ['fetch_rates', 'fetch_balance', 'fetch_promotions'],
+    window_minutes: 10
+  })
+  assert(second.created_count === 0, 'scheduler should not duplicate tasks in the same window')
+  assert(second.skipped_count === 3, 'scheduler should report skipped duplicates')
+  assert(second.items.every((item) => item.reason === 'duplicate'), 'scheduler duplicate skips should explain the reason')
+  log('scheduler task generation verified')
 }
 
 async function exerciseActionRecommendations(supplier, candidateSupplier, balanceEvent, promotionEvent, healthEvent, reconciliationSummary) {
@@ -518,6 +617,7 @@ async function verifyAllListEndpoints(supplierID) {
   const checks = [
     `/api/v1/admin-plus/suppliers?q=${encodeURIComponent(runID)}`,
     `/api/v1/admin-plus/sub2api/accounts?q=${encodeURIComponent(runID)}&limit=20`,
+    `/api/v1/admin-plus/sub2api/account-runtime?q=${encodeURIComponent(runID)}&limit=20`,
     `/api/v1/admin-plus/sub2api/usage-lines?limit=20`,
     `/api/v1/admin-plus/sub2api/usage-summary?limit=20`,
     `/api/v1/admin-plus/rates/snapshots?supplier_id=${supplierID}`,
@@ -554,6 +654,9 @@ async function api(method, path, body, options = {}) {
   const json = parseJSON(text, `${method} ${path}`)
   const expected = Array.isArray(options.expected) ? options.expected : [options.expected || 200]
   assert(expected.includes(response.status), `${method} ${path} expected ${expected.join('/')} got ${response.status}`, text)
+  if (options.allowError) {
+    return json
+  }
   assert(json.code === 0, `${method} ${path} should return code 0`, text)
   return json.data
 }

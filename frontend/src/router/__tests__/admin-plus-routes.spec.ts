@@ -26,10 +26,12 @@ describe('adminPlusRoutes', () => {
       '/admin/operations',
       '/admin/operations/suppliers',
       '/admin/operations/supplier-accounts',
+      '/admin/operations/account-runtime',
       '/admin/operations/rates',
       '/admin/operations/balances',
       '/admin/operations/health',
       '/admin/operations/promotions',
+      '/admin/operations/scheduler',
       '/admin/operations/extension-tasks',
       '/admin/operations/billing',
       '/admin/operations/local-usage',
@@ -76,10 +78,12 @@ describe('adminPlusRoutes', () => {
         '/admin/ops',
         '/admin/operations/suppliers',
         '/admin/operations/supplier-accounts',
+        '/admin/operations/account-runtime',
         '/admin/operations/rates',
         '/admin/operations/balances',
         '/admin/operations/health',
         '/admin/operations/promotions',
+        '/admin/operations/scheduler',
         '/admin/operations/extension-tasks',
         '/admin/operations/billing',
         '/admin/operations/local-usage',
@@ -88,7 +92,7 @@ describe('adminPlusRoutes', () => {
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(13)
+    expect(adminRoutes).toHaveLength(15)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)

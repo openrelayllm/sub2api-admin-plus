@@ -32,19 +32,20 @@ func (r *SQLRepository) CreateTask(ctx context.Context, task *adminplusdomain.Ex
 	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO admin_plus_extension_tasks (
-			supplier_id, type, status, priority, attempts, max_attempts,
+			supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
 			device_id, lease_token, lease_expires_at, last_heartbeat_at,
 			available_after, payload, result, error_code, error_message,
 			created_at, updated_at, finished_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, '{}'::jsonb, $13, $14, $15, $16, $17)
-		RETURNING id, supplier_id, type, status, priority, attempts, max_attempts,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '{}'::jsonb, $14, $15, $16, $17, $18)
+		RETURNING id, supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
 			device_id, lease_token, lease_expires_at, last_heartbeat_at,
 			available_after, payload, result, error_code, error_message,
 			created_at, updated_at, finished_at
 	`,
 		task.SupplierID,
 		string(task.Type),
+		task.ScheduleKey,
 		string(task.Status),
 		task.Priority,
 		task.Attempts,
@@ -62,6 +63,58 @@ func (r *SQLRepository) CreateTask(ctx context.Context, task *adminplusdomain.Ex
 		nullableTime(task.FinishedAt),
 	)
 	return scanExtensionTask(row)
+}
+
+func (r *SQLRepository) CreateTaskIfAbsent(ctx context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, bool, error) {
+	if r == nil || r.db == nil {
+		return nil, false, dbNotConfigured()
+	}
+	payload, err := marshalJSONMap(task.Payload)
+	if err != nil {
+		return nil, false, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO admin_plus_extension_tasks (
+			supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
+			device_id, lease_token, lease_expires_at, last_heartbeat_at,
+			available_after, payload, result, error_code, error_message,
+			created_at, updated_at, finished_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '{}'::jsonb, $14, $15, $16, $17, $18)
+		ON CONFLICT (schedule_key) WHERE schedule_key <> '' DO NOTHING
+		RETURNING id, supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
+			device_id, lease_token, lease_expires_at, last_heartbeat_at,
+			available_after, payload, result, error_code, error_message,
+			created_at, updated_at, finished_at
+	`,
+		task.SupplierID,
+		string(task.Type),
+		task.ScheduleKey,
+		string(task.Status),
+		task.Priority,
+		task.Attempts,
+		task.MaxAttempts,
+		task.DeviceID,
+		task.LeaseToken,
+		nullableTime(task.LeaseExpiresAt),
+		nullableTime(task.LastHeartbeatAt),
+		task.AvailableAfter,
+		payload,
+		task.ErrorCode,
+		task.ErrorMessage,
+		task.CreatedAt,
+		task.UpdatedAt,
+		nullableTime(task.FinishedAt),
+	)
+	created, err := scanExtensionTask(row)
+	if err == nil {
+		return created, true, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, false, err
+	}
+	existing, err := r.GetTaskByScheduleKey(ctx, task.ScheduleKey)
+	return existing, false, err
 }
 
 func (r *SQLRepository) ClaimNextTask(ctx context.Context, now time.Time, types []adminplusdomain.ExtensionTaskType, lease Lease) (*adminplusdomain.ExtensionTask, error) {
@@ -94,7 +147,7 @@ func (r *SQLRepository) ClaimNextTask(ctx context.Context, now time.Time, types 
 			updated_at = $1
 		FROM next_task
 		WHERE t.id = next_task.id
-		RETURNING t.id, t.supplier_id, t.type, t.status, t.priority, t.attempts, t.max_attempts,
+		RETURNING t.id, t.supplier_id, t.type, t.schedule_key, t.status, t.priority, t.attempts, t.max_attempts,
 			t.device_id, t.lease_token, t.lease_expires_at, t.last_heartbeat_at,
 			t.available_after, t.payload, t.result, t.error_code, t.error_message,
 			t.created_at, t.updated_at, t.finished_at
@@ -136,7 +189,7 @@ func (r *SQLRepository) UpdateTask(ctx context.Context, task *adminplusdomain.Ex
 			updated_at = $15,
 			finished_at = $16
 		WHERE id = $1
-		RETURNING id, supplier_id, type, status, priority, attempts, max_attempts,
+		RETURNING id, supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
 			device_id, lease_token, lease_expires_at, last_heartbeat_at,
 			available_after, payload, result, error_code, error_message,
 			created_at, updated_at, finished_at
@@ -170,13 +223,32 @@ func (r *SQLRepository) GetTask(ctx context.Context, id int64) (*adminplusdomain
 		return nil, dbNotConfigured()
 	}
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, supplier_id, type, status, priority, attempts, max_attempts,
+		SELECT id, supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
 			device_id, lease_token, lease_expires_at, last_heartbeat_at,
 			available_after, payload, result, error_code, error_message,
 			created_at, updated_at, finished_at
 		FROM admin_plus_extension_tasks
 		WHERE id = $1
 	`, id)
+	task, err := scanExtensionTask(row)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusNotFound, "EXTENSION_TASK_NOT_FOUND", "extension task not found")
+	}
+	return task, err
+}
+
+func (r *SQLRepository) GetTaskByScheduleKey(ctx context.Context, scheduleKey string) (*adminplusdomain.ExtensionTask, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
+			device_id, lease_token, lease_expires_at, last_heartbeat_at,
+			available_after, payload, result, error_code, error_message,
+			created_at, updated_at, finished_at
+		FROM admin_plus_extension_tasks
+		WHERE schedule_key = $1 AND schedule_key <> ''
+	`, scheduleKey)
 	task, err := scanExtensionTask(row)
 	if err == sql.ErrNoRows {
 		return nil, infraerrors.New(http.StatusNotFound, "EXTENSION_TASK_NOT_FOUND", "extension task not found")
@@ -205,7 +277,7 @@ func (r *SQLRepository) ListTasks(ctx context.Context, filter TaskFilter) ([]*ad
 	}
 	limitRef := addArg(filter.Limit)
 	query := `
-		SELECT id, supplier_id, type, status, priority, attempts, max_attempts,
+		SELECT id, supplier_id, type, schedule_key, status, priority, attempts, max_attempts,
 			device_id, lease_token, lease_expires_at, last_heartbeat_at,
 			available_after, payload, result, error_code, error_message,
 			created_at, updated_at, finished_at
@@ -240,13 +312,14 @@ type extensionTaskScanner interface {
 
 func scanExtensionTask(scanner extensionTaskScanner) (*adminplusdomain.ExtensionTask, error) {
 	var task adminplusdomain.ExtensionTask
-	var taskType, status string
+	var taskType, scheduleKey, status string
 	var leaseExpiresAt, lastHeartbeatAt, finishedAt sql.NullTime
 	var payload, result []byte
 	err := scanner.Scan(
 		&task.ID,
 		&task.SupplierID,
 		&taskType,
+		&scheduleKey,
 		&status,
 		&task.Priority,
 		&task.Attempts,
@@ -268,6 +341,7 @@ func scanExtensionTask(scanner extensionTaskScanner) (*adminplusdomain.Extension
 		return nil, err
 	}
 	task.Type = adminplusdomain.ExtensionTaskType(taskType)
+	task.ScheduleKey = scheduleKey
 	task.Status = adminplusdomain.ExtensionTaskStatus(status)
 	if leaseExpiresAt.Valid {
 		t := leaseExpiresAt.Time

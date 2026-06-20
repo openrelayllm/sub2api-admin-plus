@@ -16,9 +16,19 @@ import (
 type SQLRepository struct {
 	db        *sql.DB
 	sub2apiDB *sql.DB
+	cipher    CredentialCipher
+}
+
+type CredentialCipher interface {
+	Encrypt(plaintext string) (string, error)
+	Decrypt(ciphertext string) (string, error)
 }
 
 func NewSQLRepository(db *sql.DB, sub2apiReadDB sub2apiapp.ReadDB) *SQLRepository {
+	return NewSQLRepositoryWithCipher(db, sub2apiReadDB, nil)
+}
+
+func NewSQLRepositoryWithCipher(db *sql.DB, sub2apiReadDB sub2apiapp.ReadDB, cipher CredentialCipher) *SQLRepository {
 	readDB := sub2apiReadDB.DB
 	if readDB == nil {
 		readDB = db
@@ -26,6 +36,7 @@ func NewSQLRepository(db *sql.DB, sub2apiReadDB sub2apiapp.ReadDB) *SQLRepositor
 	return &SQLRepository{
 		db:        db,
 		sub2apiDB: readDB,
+		cipher:    cipher,
 	}
 }
 
@@ -33,15 +44,28 @@ func (r *SQLRepository) Create(ctx context.Context, supplier *adminplusdomain.Su
 	if r == nil || r.db == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_DB_NOT_CONFIGURED", "admin plus database is not configured")
 	}
+	usernameCiphertext, err := r.encryptOptional(supplier.BrowserLoginUsername)
+	if err != nil {
+		return nil, err
+	}
+	passwordCiphertext, err := r.encryptOptional(supplier.BrowserLoginPassword)
+	if err != nil {
+		return nil, err
+	}
+	tokenCiphertext, err := r.encryptOptional(supplier.BrowserLoginToken)
+	if err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO admin_plus_suppliers (
 			name, kind, type, runtime_status, health_status,
 			dashboard_url, api_base_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
+			browser_login_username_ciphertext, browser_login_password_ciphertext, browser_login_token_ciphertext,
 			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 		RETURNING id, name, kind, type, runtime_status, health_status,
 			dashboard_url, api_base_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
@@ -64,6 +88,9 @@ func (r *SQLRepository) Create(ctx context.Context, supplier *adminplusdomain.Su
 		supplier.Credential.BrowserLoginPasswordConfigured,
 		supplier.Credential.BrowserLoginTokenConfigured,
 		supplier.Credential.MaskedBrowserLoginUsername,
+		usernameCiphertext,
+		passwordCiphertext,
+		tokenCiphertext,
 		supplier.BalanceCents,
 		supplier.BalanceCurrency,
 		supplier.BalanceUpdatedAt,
@@ -71,6 +98,58 @@ func (r *SQLRepository) Create(ctx context.Context, supplier *adminplusdomain.Su
 		supplier.UpdatedAt,
 	)
 	return scanSupplier(row)
+}
+
+func (r *SQLRepository) GetBrowserCredential(ctx context.Context, id int64) (*adminplusdomain.SupplierBrowserCredential, error) {
+	if r == nil || r.db == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_DB_NOT_CONFIGURED", "admin plus database is not configured")
+	}
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, name, kind, type, dashboard_url, api_base_url,
+			browser_login_enabled,
+			browser_login_username_ciphertext,
+			browser_login_password_ciphertext,
+			browser_login_token_ciphertext
+		FROM admin_plus_suppliers
+		WHERE id = $1
+	`, id)
+	var credential adminplusdomain.SupplierBrowserCredential
+	var kind, supplierType string
+	var loginEnabled bool
+	var usernameCiphertext, passwordCiphertext, tokenCiphertext string
+	err := row.Scan(
+		&credential.SupplierID,
+		&credential.SupplierName,
+		&kind,
+		&supplierType,
+		&credential.DashboardURL,
+		&credential.APIBaseURL,
+		&loginEnabled,
+		&usernameCiphertext,
+		&passwordCiphertext,
+		&tokenCiphertext,
+	)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusNotFound, "SUPPLIER_NOT_FOUND", "supplier not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !loginEnabled {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_BROWSER_LOGIN_DISABLED", "supplier browser login is disabled")
+	}
+	credential.Kind = adminplusdomain.SupplierKind(kind)
+	credential.Type = adminplusdomain.SupplierType(supplierType)
+	if credential.Username, err = r.decryptOptional(usernameCiphertext); err != nil {
+		return nil, err
+	}
+	if credential.Password, err = r.decryptOptional(passwordCiphertext); err != nil {
+		return nil, err
+	}
+	if credential.Token, err = r.decryptOptional(tokenCiphertext); err != nil {
+		return nil, err
+	}
+	return &credential, nil
 }
 
 func (r *SQLRepository) Get(ctx context.Context, id int64) (*adminplusdomain.Supplier, error) {
@@ -456,4 +535,34 @@ func translateSupplierAccountCreateError(err error) error {
 		return infraerrors.New(http.StatusConflict, "SUPPLIER_ACCOUNT_ALREADY_BOUND", "local Sub2API account is already bound to this supplier")
 	}
 	return err
+}
+
+func (r *SQLRepository) encryptOptional(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if r.cipher == nil {
+		return value, nil
+	}
+	encrypted, err := r.cipher.Encrypt(value)
+	if err != nil {
+		return "", infraerrors.New(http.StatusInternalServerError, "SUPPLIER_BROWSER_CREDENTIAL_ENCRYPT_FAILED", "failed to encrypt supplier browser credential")
+	}
+	return encrypted, nil
+}
+
+func (r *SQLRepository) decryptOptional(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if r.cipher == nil {
+		return value, nil
+	}
+	decrypted, err := r.cipher.Decrypt(value)
+	if err != nil {
+		return "", infraerrors.New(http.StatusInternalServerError, "SUPPLIER_BROWSER_CREDENTIAL_DECRYPT_FAILED", "failed to decrypt supplier browser credential")
+	}
+	return decrypted, nil
 }

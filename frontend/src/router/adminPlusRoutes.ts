@@ -79,6 +79,16 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/operations/account-runtime',
+    name: 'AdminPlusAccountRuntime',
+    component: () => import('@/views/admin/operations/AccountRuntimeView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: '账号运行态'
+    }
+  },
+  {
     path: '/admin/operations/rates',
     name: 'AdminPlusRates',
     component: () => import('@/views/admin/operations/RatesView.vue'),
@@ -116,6 +126,16 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
       requiresAuth: true,
       requiresAdmin: true,
       title: '优惠监控'
+    }
+  },
+  {
+    path: '/admin/operations/scheduler',
+    name: 'AdminPlusScheduler',
+    component: () => import('@/views/admin/operations/SchedulerView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: '调度中心'
     }
   },
   {

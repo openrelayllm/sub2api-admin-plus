@@ -40,6 +40,18 @@ func (h *Sub2APIHandler) ListLocalUsageSummaries(c *gin.Context) {
 	response.Success(c, gin.H{"items": items, "total": len(items)})
 }
 
+func (h *Sub2APIHandler) ListAccountRuntime(c *gin.Context) {
+	items, err := h.service.ListAccountRuntime(c.Request.Context(), sub2apiapp.RuntimeFilter{
+		AccountID: parseInt64Query(c, "account_id"),
+		Query:     c.Query("q"),
+		Limit:     parseIntQuery(c, "limit"),
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, gin.H{"items": items, "total": len(items)})
+}
+
 func parseUsageFilter(c *gin.Context) (sub2apiapp.UsageFilter, bool) {
 	from, ok := parseOptionalQueryTime(c, "from")
 	if !ok {

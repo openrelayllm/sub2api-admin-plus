@@ -135,3 +135,56 @@ func TestServiceClaimTaskValidatesInput(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
 	require.Equal(t, "EXTENSION_DEVICE_ID_REQUIRED", infraerrors.Reason(err))
 }
+
+func TestServiceGetBrowserCredentialRequiresLease(t *testing.T) {
+	repo := NewMemoryRepository()
+	credentials := &stubBrowserCredentialProvider{
+		credential: &adminplusdomain.SupplierBrowserCredential{
+			SupplierID:   1,
+			SupplierName: "Relay",
+			Type:         adminplusdomain.SupplierTypeSub2API,
+			DashboardURL: "https://relay.example.com",
+			Username:     "ops@example.com",
+			Password:     "secret",
+		},
+	}
+	svc := NewServiceWithDependencies(repo, nil, credentials)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	svc.newToken = func() (string, error) { return "lease-token", nil }
+	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
+		SupplierID: 1,
+		Type:       adminplusdomain.ExtensionTaskTypeFetchRates,
+	})
+	require.NoError(t, err)
+	task, err := svc.ClaimTask(context.Background(), ClaimTaskInput{DeviceID: "chrome-1"})
+	require.NoError(t, err)
+
+	_, err = svc.GetBrowserCredential(context.Background(), BrowserCredentialInput{
+		TaskID:     task.ID,
+		DeviceID:   "chrome-1",
+		LeaseToken: "bad-token",
+	})
+	require.Error(t, err)
+	require.Equal(t, "EXTENSION_TASK_LEASE_MISMATCH", infraerrors.Reason(err))
+
+	got, err := svc.GetBrowserCredential(context.Background(), BrowserCredentialInput{
+		TaskID:     task.ID,
+		DeviceID:   "chrome-1",
+		LeaseToken: "lease-token",
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), credentials.requestedSupplierID)
+	require.Equal(t, "ops@example.com", got.Username)
+	require.Equal(t, "secret", got.Password)
+}
+
+type stubBrowserCredentialProvider struct {
+	requestedSupplierID int64
+	credential          *adminplusdomain.SupplierBrowserCredential
+}
+
+func (p *stubBrowserCredentialProvider) GetBrowserCredential(_ context.Context, supplierID int64) (*adminplusdomain.SupplierBrowserCredential, error) {
+	p.requestedSupplierID = supplierID
+	return p.credential, nil
+}

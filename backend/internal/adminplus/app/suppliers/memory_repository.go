@@ -65,6 +65,30 @@ func (r *MemoryRepository) Get(_ context.Context, id int64) (*adminplusdomain.Su
 	return cloneSupplier(supplier), nil
 }
 
+func (r *MemoryRepository) GetBrowserCredential(_ context.Context, id int64) (*adminplusdomain.SupplierBrowserCredential, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	supplier, ok := r.suppliers[id]
+	if !ok {
+		return nil, infraerrors.New(http.StatusNotFound, "SUPPLIER_NOT_FOUND", "supplier not found")
+	}
+	if !supplier.Credential.BrowserLoginEnabled {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_BROWSER_LOGIN_DISABLED", "supplier browser login is disabled")
+	}
+	return &adminplusdomain.SupplierBrowserCredential{
+		SupplierID:   supplier.ID,
+		SupplierName: supplier.Name,
+		Kind:         supplier.Kind,
+		Type:         supplier.Type,
+		DashboardURL: supplier.DashboardURL,
+		APIBaseURL:   supplier.APIBaseURL,
+		Username:     supplier.BrowserLoginUsername,
+		Password:     supplier.BrowserLoginPassword,
+		Token:        supplier.BrowserLoginToken,
+	}, nil
+}
+
 func (r *MemoryRepository) List(_ context.Context, filter SupplierFilter) ([]*adminplusdomain.Supplier, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

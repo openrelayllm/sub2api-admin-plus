@@ -31,6 +31,7 @@ func TestSQLRepositoryCreateExtensionTask(t *testing.T) {
 		WithArgs(
 			int64(7),
 			"fetch_rates",
+			"",
 			"pending",
 			10,
 			0,
@@ -51,6 +52,7 @@ func TestSQLRepositoryCreateExtensionTask(t *testing.T) {
 			int64(11),
 			int64(7),
 			"fetch_rates",
+			"",
 			"pending",
 			10,
 			0,
@@ -86,6 +88,148 @@ func TestSQLRepositoryCreateExtensionTask(t *testing.T) {
 	require.Equal(t, "rates", got.Payload["page"])
 }
 
+func TestSQLRepositoryCreateExtensionTaskIfAbsentCreatesTask(t *testing.T) {
+	db, mock := newExtensionSQLMock(t)
+	repo := NewSQLRepository(db)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	scheduleKey := "scheduler:fetch_rates:supplier:7:202606201000"
+
+	mock.ExpectQuery(`INSERT INTO admin_plus_extension_tasks[\s\S]+ON CONFLICT \(schedule_key\)`).
+		WithArgs(
+			int64(7),
+			"fetch_rates",
+			scheduleKey,
+			"pending",
+			80,
+			0,
+			3,
+			"",
+			"",
+			nil,
+			nil,
+			now,
+			sqlmock.AnyArg(),
+			"",
+			"",
+			now,
+			now,
+			nil,
+		).
+		WillReturnRows(newExtensionTaskRows().AddRow(
+			int64(11),
+			int64(7),
+			"fetch_rates",
+			scheduleKey,
+			"pending",
+			80,
+			0,
+			3,
+			"",
+			"",
+			nil,
+			nil,
+			now,
+			[]byte(`{"source":"scheduler"}`),
+			[]byte(`{}`),
+			"",
+			"",
+			now,
+			now,
+			nil,
+		))
+
+	got, created, err := repo.CreateTaskIfAbsent(context.Background(), &adminplusdomain.ExtensionTask{
+		SupplierID:     7,
+		Type:           adminplusdomain.ExtensionTaskTypeFetchRates,
+		ScheduleKey:    scheduleKey,
+		Status:         adminplusdomain.ExtensionTaskStatusPending,
+		Priority:       80,
+		MaxAttempts:    3,
+		AvailableAfter: now,
+		Payload:        map[string]any{"source": "scheduler"},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, int64(11), got.ID)
+	require.Equal(t, scheduleKey, got.ScheduleKey)
+}
+
+func TestSQLRepositoryCreateExtensionTaskIfAbsentReturnsExistingTask(t *testing.T) {
+	db, mock := newExtensionSQLMock(t)
+	repo := NewSQLRepository(db)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	scheduleKey := "scheduler:fetch_rates:supplier:7:202606201000"
+
+	mock.ExpectQuery(`INSERT INTO admin_plus_extension_tasks[\s\S]+ON CONFLICT \(schedule_key\)`).
+		WithArgs(
+			int64(7),
+			"fetch_rates",
+			scheduleKey,
+			"pending",
+			80,
+			0,
+			3,
+			"",
+			"",
+			nil,
+			nil,
+			now,
+			sqlmock.AnyArg(),
+			"",
+			"",
+			now,
+			now,
+			nil,
+		).
+		WillReturnError(sql.ErrNoRows)
+
+	mock.ExpectQuery(`SELECT id, supplier_id, type, schedule_key`).
+		WithArgs(scheduleKey).
+		WillReturnRows(newExtensionTaskRows().AddRow(
+			int64(11),
+			int64(7),
+			"fetch_rates",
+			scheduleKey,
+			"pending",
+			80,
+			0,
+			3,
+			"",
+			"",
+			nil,
+			nil,
+			now,
+			[]byte(`{"source":"scheduler"}`),
+			[]byte(`{}`),
+			"",
+			"",
+			now,
+			now,
+			nil,
+		))
+
+	got, created, err := repo.CreateTaskIfAbsent(context.Background(), &adminplusdomain.ExtensionTask{
+		SupplierID:     7,
+		Type:           adminplusdomain.ExtensionTaskTypeFetchRates,
+		ScheduleKey:    scheduleKey,
+		Status:         adminplusdomain.ExtensionTaskStatusPending,
+		Priority:       80,
+		MaxAttempts:    3,
+		AvailableAfter: now,
+		Payload:        map[string]any{"source": "scheduler"},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, int64(11), got.ID)
+	require.Equal(t, scheduleKey, got.ScheduleKey)
+}
+
 func TestSQLRepositoryClaimNextTaskUsesAtomicUpdate(t *testing.T) {
 	db, mock := newExtensionSQLMock(t)
 	repo := NewSQLRepository(db)
@@ -98,6 +242,7 @@ func TestSQLRepositoryClaimNextTaskUsesAtomicUpdate(t *testing.T) {
 			int64(11),
 			int64(7),
 			"export_bills",
+			"",
 			"claimed",
 			10,
 			1,
@@ -202,6 +347,7 @@ func TestSQLRepositoryListExtensionTasksFiltersWithParameterizedQuery(t *testing
 			int64(11),
 			int64(7),
 			"fetch_rates",
+			"",
 			"pending",
 			10,
 			0,
@@ -237,6 +383,7 @@ func newExtensionTaskRows() *sqlmock.Rows {
 		"id",
 		"supplier_id",
 		"type",
+		"schedule_key",
 		"status",
 		"priority",
 		"attempts",

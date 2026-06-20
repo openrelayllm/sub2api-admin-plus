@@ -1,0 +1,244 @@
+package extension
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
+	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
+	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
+	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCompleteTaskIngestsRateResult(t *testing.T) {
+	rateRepo := newIngestRateRepository()
+	processor := NewIngestProcessor(
+		ratesapp.NewService(rateRepo),
+		balancesapp.NewService(balancesapp.NewMemoryRepository()),
+		promotionsapp.NewService(promotionsapp.NewMemoryRepository()),
+		healthapp.NewService(healthapp.NewMemoryRepository()),
+		billingapp.NewService(billingapp.NewMemoryRepository()),
+	)
+	svc := NewServiceWithResultProcessor(NewMemoryRepository(), processor)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	svc.newToken = func() (string, error) { return "lease-token", nil }
+
+	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
+		SupplierID: 7,
+		Type:       adminplusdomain.ExtensionTaskTypeFetchRates,
+	})
+	require.NoError(t, err)
+	task, err := svc.ClaimTask(context.Background(), ClaimTaskInput{DeviceID: "chrome-1"})
+	require.NoError(t, err)
+	_, err = svc.Heartbeat(context.Background(), HeartbeatInput{
+		TaskID:     task.ID,
+		DeviceID:   "chrome-1",
+		LeaseToken: "lease-token",
+	})
+	require.NoError(t, err)
+
+	completed, err := svc.CompleteTask(context.Background(), CompleteTaskInput{
+		TaskID:     task.ID,
+		DeviceID:   "chrome-1",
+		LeaseToken: "lease-token",
+		Result: map[string]any{
+			"source":            "chrome",
+			"threshold_percent": float64(1),
+			"entries": []any{
+				map[string]any{
+					"model":        "gpt-4o-mini",
+					"billing_mode": "token",
+					"price_item":   "input",
+					"unit":         "1m_tokens",
+					"currency":     "USD",
+					"price_micros": float64(100000),
+				},
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, adminplusdomain.ExtensionTaskStatusSucceeded, completed.Status)
+	require.Len(t, rateRepo.snapshots, 1)
+	require.Len(t, rateRepo.events, 1)
+	require.Equal(t, "gpt-4o-mini", rateRepo.snapshots[0].Model)
+	require.Equal(t, 1, completed.Result["ingest"].(map[string]any)["rate_snapshots"])
+}
+
+func TestCompleteTaskIngestsBillExportResult(t *testing.T) {
+	billRepo := billingapp.NewMemoryRepository()
+	processor := NewIngestProcessor(
+		ratesapp.NewService(newIngestRateRepository()),
+		balancesapp.NewService(balancesapp.NewMemoryRepository()),
+		promotionsapp.NewService(promotionsapp.NewMemoryRepository()),
+		healthapp.NewService(healthapp.NewMemoryRepository()),
+		billingapp.NewService(billRepo),
+	)
+	svc := NewServiceWithResultProcessor(NewMemoryRepository(), processor)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	svc.newToken = func() (string, error) { return "lease-token", nil }
+
+	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
+		SupplierID: 7,
+		Type:       adminplusdomain.ExtensionTaskTypeExportBills,
+	})
+	require.NoError(t, err)
+	task, err := svc.ClaimTask(context.Background(), ClaimTaskInput{DeviceID: "chrome-1"})
+	require.NoError(t, err)
+	_, err = svc.Heartbeat(context.Background(), HeartbeatInput{
+		TaskID:     task.ID,
+		DeviceID:   "chrome-1",
+		LeaseToken: "lease-token",
+	})
+	require.NoError(t, err)
+
+	completed, err := svc.CompleteTask(context.Background(), CompleteTaskInput{
+		TaskID:     task.ID,
+		DeviceID:   "chrome-1",
+		LeaseToken: "lease-token",
+		Result: map[string]any{
+			"source": "chrome",
+			"lines": []any{
+				map[string]any{
+					"external_bill_id":    "bill-1",
+					"external_request_id": "req-1",
+					"model":               "gpt-4o-mini",
+					"currency":            "USD",
+					"cost_cents":          float64(120),
+					"input_tokens":        float64(1000),
+					"output_tokens":       float64(300),
+					"started_at":          "2026-06-20T10:00:00Z",
+					"ended_at":            "2026-06-20T10:00:02Z",
+				},
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, adminplusdomain.ExtensionTaskStatusSucceeded, completed.Status)
+	lines, err := billRepo.ListBillLines(context.Background(), billingapp.BillLineFilter{SupplierID: 7, Limit: 20})
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	require.Equal(t, "req-1", lines[0].ExternalRequestID)
+	require.Equal(t, 1, completed.Result["ingest"].(map[string]any)["bill_lines"])
+}
+
+type ingestRateRepository struct {
+	nextSnapshotID int64
+	nextEventID    int64
+	snapshots      []*adminplusdomain.RateSnapshot
+	events         []*adminplusdomain.RateChangeEvent
+}
+
+func newIngestRateRepository() *ingestRateRepository {
+	return &ingestRateRepository{
+		nextSnapshotID: 1,
+		nextEventID:    1,
+	}
+}
+
+func (r *ingestRateRepository) CreateSnapshot(_ context.Context, snapshot *adminplusdomain.RateSnapshot) (*adminplusdomain.RateSnapshot, error) {
+	cp := cloneIngestRateSnapshot(snapshot)
+	cp.ID = r.nextSnapshotID
+	r.nextSnapshotID++
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = cp.CapturedAt
+	}
+	r.snapshots = append(r.snapshots, cp)
+	return cloneIngestRateSnapshot(cp), nil
+}
+
+func (r *ingestRateRepository) FindLatestComparableSnapshot(_ context.Context, snapshot *adminplusdomain.RateSnapshot) (*adminplusdomain.RateSnapshot, error) {
+	var latest *adminplusdomain.RateSnapshot
+	for _, item := range r.snapshots {
+		if item.SupplierID != snapshot.SupplierID ||
+			item.Model != snapshot.Model ||
+			item.BillingMode != snapshot.BillingMode ||
+			item.PriceItem != snapshot.PriceItem ||
+			item.Unit != snapshot.Unit ||
+			item.Currency != snapshot.Currency {
+			continue
+		}
+		if item.CapturedAt.After(snapshot.CapturedAt) {
+			continue
+		}
+		if latest == nil || item.CapturedAt.After(latest.CapturedAt) || (item.CapturedAt.Equal(latest.CapturedAt) && item.ID > latest.ID) {
+			latest = item
+		}
+	}
+	return cloneIngestRateSnapshot(latest), nil
+}
+
+func (r *ingestRateRepository) CreateChangeEvent(_ context.Context, event *adminplusdomain.RateChangeEvent) (*adminplusdomain.RateChangeEvent, error) {
+	cp := cloneIngestRateChangeEvent(event)
+	cp.ID = r.nextEventID
+	r.nextEventID++
+	r.events = append(r.events, cp)
+	return cloneIngestRateChangeEvent(cp), nil
+}
+
+func (r *ingestRateRepository) ListSnapshots(_ context.Context, _ ratesapp.SnapshotFilter) ([]*adminplusdomain.RateSnapshot, error) {
+	items := make([]*adminplusdomain.RateSnapshot, 0, len(r.snapshots))
+	for _, item := range r.snapshots {
+		items = append(items, cloneIngestRateSnapshot(item))
+	}
+	return items, nil
+}
+
+func (r *ingestRateRepository) ListChangeEvents(_ context.Context, _ ratesapp.EventFilter) ([]*adminplusdomain.RateChangeEvent, error) {
+	items := make([]*adminplusdomain.RateChangeEvent, 0, len(r.events))
+	for _, item := range r.events {
+		items = append(items, cloneIngestRateChangeEvent(item))
+	}
+	return items, nil
+}
+
+func (r *ingestRateRepository) UpdateChangeEventStatus(_ context.Context, id int64, status adminplusdomain.RateChangeStatus) (*adminplusdomain.RateChangeEvent, error) {
+	for _, event := range r.events {
+		if event.ID == id {
+			event.Status = status
+			return cloneIngestRateChangeEvent(event), nil
+		}
+	}
+	return nil, nil
+}
+
+func cloneIngestRateSnapshot(in *adminplusdomain.RateSnapshot) *adminplusdomain.RateSnapshot {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.RawPayload != nil {
+		out.RawPayload = make(map[string]any, len(in.RawPayload))
+		for key, value := range in.RawPayload {
+			out.RawPayload[key] = value
+		}
+	}
+	return &out
+}
+
+func cloneIngestRateChangeEvent(in *adminplusdomain.RateChangeEvent) *adminplusdomain.RateChangeEvent {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.OldPriceMicros != nil {
+		value := *in.OldPriceMicros
+		out.OldPriceMicros = &value
+	}
+	if in.ChangePercent != nil {
+		value := *in.ChangePercent
+		out.ChangePercent = &value
+	}
+	if in.AcknowledgedAt != nil {
+		value := *in.AcknowledgedAt
+		out.AcknowledgedAt = &value
+	}
+	return &out
+}

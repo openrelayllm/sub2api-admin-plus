@@ -63,6 +63,7 @@ type SupplierFilter struct {
 type Repository interface {
 	Create(ctx context.Context, supplier *adminplusdomain.Supplier) (*adminplusdomain.Supplier, error)
 	Get(ctx context.Context, id int64) (*adminplusdomain.Supplier, error)
+	GetBrowserCredential(ctx context.Context, id int64) (*adminplusdomain.SupplierBrowserCredential, error)
 	List(ctx context.Context, filter SupplierFilter) ([]*adminplusdomain.Supplier, error)
 	UpdateStatus(ctx context.Context, id int64, runtimeStatus adminplusdomain.SupplierRuntimeStatus, healthStatus adminplusdomain.SupplierHealthStatus) (*adminplusdomain.Supplier, error)
 	ListAccounts(ctx context.Context, supplierID int64) ([]*adminplusdomain.SupplierAccount, error)
@@ -172,6 +173,26 @@ func (s *Service) Get(ctx context.Context, id int64) (*adminplusdomain.Supplier,
 		return nil, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
 	}
 	return s.repo.Get(ctx, id)
+}
+
+func (s *Service) GetBrowserCredential(ctx context.Context, id int64) (*adminplusdomain.SupplierBrowserCredential, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("supplier service is not configured")
+	}
+	if id <= 0 {
+		return nil, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	credential, err := s.repo.GetBrowserCredential(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(credential.DashboardURL) == "" {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DASHBOARD_URL_REQUIRED", "supplier dashboard url is required for browser automation")
+	}
+	if strings.TrimSpace(credential.Username) == "" && strings.TrimSpace(credential.Password) == "" && strings.TrimSpace(credential.Token) == "" {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_BROWSER_CREDENTIAL_REQUIRED", "supplier browser credential is required")
+	}
+	return credential, nil
 }
 
 func (s *Service) List(ctx context.Context, filter SupplierFilter) ([]*adminplusdomain.Supplier, error) {

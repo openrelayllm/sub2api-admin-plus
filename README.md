@@ -2,7 +2,7 @@
 
 Sub2API Admin Plus is an operations automation extension built from the Sub2API codebase.
 
-MVP 0 keeps the Sub2API frontend/backend architecture, UI conventions, build scripts, and deployment layout as a runnable baseline. The current business layer already includes the first real operations APIs and pages; Chrome extension collection and scheduler automation are still pending.
+MVP 0 keeps the Sub2API frontend/backend architecture, UI conventions, build scripts, and deployment layout as a runnable baseline. The current business layer already includes real operations APIs, pages, scheduler task generation, Chrome-extension result ingestion, and a minimal Chrome MV3 executor. Supplier-specific browser page adapters are still being built.
 
 ## Scope
 
@@ -19,15 +19,19 @@ Implemented:
 - Supplier parent records.
 - Supplier account/key child bindings to local Sub2API `accounts.id`.
 - Rate, balance, health, promotion, billing, reconciliation, extension task, and action recommendation APIs.
+- Scheduler API and page for generating idempotent Chrome extension tasks.
+- Chrome extension task result ingestion into rate, balance, promotion, health, and billing tables.
+- Browser login credentials encrypted at rest and exposed only through a valid extension task lease.
+- Minimal Chrome extension executor in `extension/`.
 - Local Sub2API read adapter for real `accounts` and `usage_logs`.
-- Admin Plus operation pages, including supplier bindings, billing reconciliation, and local usage.
-- API E2E script using real HTTP and PostgreSQL.
+- Local Sub2API Redis read adapter for account concurrency and waiting queue runtime.
+- Admin Plus operation pages, including supplier bindings, account runtime, billing reconciliation, and local usage.
+- API E2E script using real HTTP, PostgreSQL, and Redis fixtures.
 
 Not implemented yet:
 
-- Real Chrome extension login/scraping/export.
-- 10-minute scheduler jobs.
-- Sub2API Redis concurrency read adapter.
+- Supplier-specific Chrome extension adapters for stable Sub2API/New API page login, scraping, and bill export.
+- Sub2API window-cost/runtime limit adapter beyond current concurrency keys.
 - Notification and audit execution loop.
 - Confirmed action execution through Sub2API Admin API.
 
@@ -82,8 +86,23 @@ E2E defaults:
 - `ADMIN_PLUS_E2E_EMAIL=admin@sub2api-admin-plus.local`
 - `ADMIN_PLUS_E2E_PASSWORD=AdminPlus@123456`
 - `ADMIN_PLUS_E2E_DB_URL=postgresql://root:root@127.0.0.1:5432/sub2api_admin_plus?sslmode=disable`
+- `ADMIN_PLUS_E2E_REDIS_URL=redis://127.0.0.1:6379/0`
 
-The E2E script creates `e2e-*` rows in PostgreSQL to verify real API and DB paths. These rows are test fixtures, not mock production collection.
+The E2E script creates `e2e-*` rows in PostgreSQL and temporary Redis runtime keys to verify real API/DB/Redis paths. These rows and keys are test fixtures, not mock production collection.
+
+## Chrome Extension
+
+The minimal MV3 executor lives in `extension/`.
+
+It can:
+
+- import the current Admin Plus `auth_token` from an Admin Plus tab;
+- claim extension tasks;
+- fetch supplier browser credentials with `task_id + device_id + lease_token`;
+- open the supplier dashboard and run generic Sub2API/New API-like DOM extraction;
+- complete the task only when real page data is parsed, otherwise fail the task.
+
+Generic DOM extraction is intentionally conservative. Production support still requires supplier-specific adapters for each real dashboard shape.
 
 ## Sub2API Read Integration
 
@@ -94,6 +113,15 @@ export SUB2API_READONLY_DATABASE_URL='postgresql://root:root@127.0.0.1:5432/sub2
 ```
 
 If this variable is not set, the backend falls back to the current database connection for local MVP verification.
+
+To read Sub2API runtime concurrency from another Redis DB or URL, set one of:
+
+```bash
+export SUB2API_READONLY_REDIS_DB=0
+export SUB2API_READONLY_REDIS_URL='redis://127.0.0.1:6379/0'
+```
+
+If neither variable is set, Admin Plus reuses the current Redis client. The runtime adapter only reads Sub2API keys such as `concurrency:account:{id}` and `wait:account:{id}`.
 
 ## Documentation
 

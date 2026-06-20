@@ -7,6 +7,8 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,4 +122,112 @@ func TestSQLRepositoryListLocalUsageSummariesGroupsByAccountAndModel(t *testing.
 	require.Equal(t, int64(3), items[0].RequestCount)
 	require.Equal(t, int64(456), items[0].RevenueCents)
 	require.Equal(t, int64(800), items[0].AvgFirstTokenMs)
+}
+
+func TestRuntimeRepositoryListAccountRuntimeReadsSQLAndRedis(t *testing.T) {
+	db, mock := newSub2APISQLMock(t)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() {
+		require.NoError(t, rdb.Close())
+	})
+	repo := NewRuntimeRepository(ReadDB{DB: db}, Sub2APIRedis{Client: rdb, Configured: true})
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	repo.now = func() time.Time { return now }
+	resetAt := now.Add(30 * time.Minute)
+
+	require.NoError(t, rdb.ZAdd(context.Background(), "concurrency:account:7", redis.Z{Score: float64(now.Unix()), Member: "req-1"}).Err())
+	require.NoError(t, rdb.ZAdd(context.Background(), "concurrency:account:7", redis.Z{Score: float64(now.Unix()), Member: "req-2"}).Err())
+	require.NoError(t, rdb.Set(context.Background(), "wait:account:7", "1", time.Hour).Err())
+
+	mock.ExpectQuery(`FROM accounts\s+WHERE deleted_at IS NULL AND id = \$1\s+ORDER BY id DESC\s+LIMIT \$2`).
+		WithArgs(int64(7), 20).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"name",
+			"platform",
+			"type",
+			"status",
+			"schedulable",
+			"concurrency",
+			"error_message",
+			"rate_limit_reset_at",
+			"overload_until",
+			"temp_unschedulable_until",
+			"temp_unschedulable_reason",
+			"last_used_at",
+		}).AddRow(
+			int64(7),
+			"OpenAI Production",
+			"openai",
+			"api_key",
+			"active",
+			true,
+			4,
+			"",
+			nil,
+			nil,
+			nil,
+			"",
+			resetAt,
+		))
+
+	items, err := repo.ListAccountRuntime(context.Background(), RuntimeFilter{AccountID: 7, Limit: 20})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(7), items[0].AccountID)
+	require.Equal(t, 2, items[0].CurrentConcurrency)
+	require.Equal(t, 1, items[0].WaitingCount)
+	require.Equal(t, float64(75), items[0].LoadPercent)
+	require.True(t, items[0].SwitchEligible)
+	require.True(t, items[0].RedisReadConfigured)
+}
+
+func TestRuntimeRepositoryListAccountRuntimeMarksRateLimitedAccountIneligible(t *testing.T) {
+	db, mock := newSub2APISQLMock(t)
+	repo := NewRuntimeRepository(ReadDB{DB: db}, Sub2APIRedis{})
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	repo.now = func() time.Time { return now }
+	resetAt := now.Add(time.Hour)
+
+	mock.ExpectQuery(`FROM accounts\s+WHERE deleted_at IS NULL\s+ORDER BY id DESC\s+LIMIT \$1`).
+		WithArgs(defaultRuntimeLimit).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"name",
+			"platform",
+			"type",
+			"status",
+			"schedulable",
+			"concurrency",
+			"error_message",
+			"rate_limit_reset_at",
+			"overload_until",
+			"temp_unschedulable_until",
+			"temp_unschedulable_reason",
+			"last_used_at",
+		}).AddRow(
+			int64(8),
+			"Anthropic",
+			"anthropic",
+			"oauth",
+			"active",
+			true,
+			2,
+			"",
+			resetAt,
+			nil,
+			nil,
+			"",
+			nil,
+		))
+
+	items, err := repo.ListAccountRuntime(context.Background(), RuntimeFilter{})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.False(t, items[0].SwitchEligible)
+	require.Equal(t, "rate_limited", items[0].BlockedReason)
+	require.False(t, items[0].RedisReadConfigured)
 }
