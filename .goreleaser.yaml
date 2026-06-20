@@ -31,9 +31,6 @@ archives:
     format: tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    format_overrides:
-      - goos: windows
-        format: zip
     files:
       - LICENSE*
       - README*
@@ -195,7 +192,7 @@ release:
     ```
 
     **Manual download:**
-    Download the appropriate archive for your platform from the assets below.
+    Download the Linux `amd64` or `arm64` archive from the assets below.
 
     ## 📚 Documentation
 
