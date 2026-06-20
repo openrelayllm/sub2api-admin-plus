@@ -15,6 +15,7 @@ import (
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
+	supplierkeysapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/supplierkeys"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	"github.com/google/wire"
 )
@@ -27,6 +28,7 @@ var ProviderSet = wire.NewSet(
 	extensionapp.ProviderSet,
 	wire.Bind(new(extensionapp.BrowserCredentialProvider), new(*suppliersapp.Service)),
 	wire.Bind(new(sessionsapp.SupplierLookup), new(*suppliersapp.Service)),
+	wire.Bind(new(ratesapp.SessionReader), new(*sessionsapp.Service)),
 	healthapp.ProviderSet,
 	notificationsapp.ProviderSet,
 	promotionsapp.ProviderSet,
@@ -36,5 +38,6 @@ var ProviderSet = wire.NewSet(
 	sessionsapp.ProviderSet,
 	sub2apiapp.ProviderSet,
 	suppliergroupsapp.ProviderSet,
+	supplierkeysapp.ProviderSet,
 	suppliersapp.ProviderSet,
 )

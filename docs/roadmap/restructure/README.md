@@ -134,6 +134,8 @@ flowchart TD
 验收：
 
 - 至少一个真实 Sub2API 供应商可以通过会话 API 读取当前用户余额。
+- Sub2API 同源供应商可以通过已保存浏览器会话触发 `POST /api/v1/admin-plus/suppliers/:id/groups/sync` 同步分组。
+- Sub2API 同源供应商可以通过已保存浏览器会话触发 `POST /api/v1/admin-plus/suppliers/:id/rates/sync` 同步模型/计费项费率，并写入 `admin_plus_rate_snapshots`。
 - 失败时写入明确错误：`session_required`、`session_expired`、`permission_denied`、`capability_missing`、`provider_unreachable`。
 - 不生成 mock 成功数据。
 
@@ -272,7 +274,8 @@ P1/P2 紧随其后：
 - [x] 明确供应商余额表和余额事件的口径字段。
 - [x] 实现 Sub2API 供应商用户侧 profile 读取。
 - [x] 实现会话探测和错误码。
-- [ ] 实现分组读取。
+- [x] 实现分组读取。
+- [x] 实现费率读取和快照写入。
 - [ ] 实现真实采集失败可观测。
 
 P3 之后：

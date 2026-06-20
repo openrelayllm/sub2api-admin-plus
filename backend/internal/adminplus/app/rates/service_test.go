@@ -7,6 +7,7 @@ import (
 	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -182,6 +183,45 @@ func TestServiceRecordSnapshotValidatesInput(t *testing.T) {
 	require.Equal(t, "RATE_SUPPLIER_ID_INVALID", infraerrors.Reason(err))
 }
 
+func TestServiceSyncFromSessionReadsProviderRates(t *testing.T) {
+	repo := newFakeRateRepository()
+	session := &fakeRateSessionReader{
+		input: ports.SessionProbeInput{SupplierID: 7, Origin: "https://relay.example.com"},
+	}
+	reader := &fakeSessionRateReader{
+		result: &ports.ReadRatesResult{
+			SupplierID: 7,
+			SystemType: "sub2api",
+			Origin:     "https://relay.example.com",
+			APIBaseURL: "https://relay.example.com/api/v1",
+			CapturedAt: time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC),
+			Entries: []ports.ProviderRateEntry{
+				{
+					Model:       "gpt-5-mini",
+					BillingMode: "token",
+					PriceItem:   "input",
+					Unit:        "1m_tokens",
+					Currency:    "usd",
+					PriceMicros: 1500000,
+				},
+			},
+		},
+	}
+	svc := NewServiceWithDependencies(repo, nil, session, reader)
+
+	result, err := svc.SyncFromSession(context.Background(), SyncFromSessionInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), session.seenSupplierID)
+	require.Equal(t, int64(7), reader.seen.SupplierID)
+	require.Equal(t, "sub2api", result.SystemType)
+	require.Equal(t, 1, result.Total)
+	require.Len(t, result.Snapshot.Snapshots, 1)
+	require.Equal(t, "provider_session", result.Snapshot.Snapshots[0].Source)
+	require.Equal(t, "gpt-5-mini", result.Snapshot.Snapshots[0].Model)
+	require.Equal(t, int64(1500000), result.Snapshot.Snapshots[0].PriceMicros)
+}
+
 type fakeRateRepository struct {
 	nextSnapshotID int64
 	nextEventID    int64
@@ -191,6 +231,26 @@ type fakeRateRepository struct {
 
 type fakeRateNotifier struct {
 	events []*adminplusdomain.RateChangeEvent
+}
+
+type fakeRateSessionReader struct {
+	input          ports.SessionProbeInput
+	seenSupplierID int64
+}
+
+func (r *fakeRateSessionReader) DecryptedProbeInput(_ context.Context, supplierID int64) (ports.SessionProbeInput, error) {
+	r.seenSupplierID = supplierID
+	return r.input, nil
+}
+
+type fakeSessionRateReader struct {
+	result *ports.ReadRatesResult
+	seen   ports.SessionProbeInput
+}
+
+func (r *fakeSessionRateReader) ReadRates(_ context.Context, in ports.SessionProbeInput) (*ports.ReadRatesResult, error) {
+	r.seen = in
+	return r.result, nil
 }
 
 func (n *fakeRateNotifier) NotifyRateChange(_ context.Context, event *adminplusdomain.RateChangeEvent, _ *adminplusdomain.RateSnapshot) error {

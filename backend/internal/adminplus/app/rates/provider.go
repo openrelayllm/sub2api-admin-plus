@@ -7,5 +7,5 @@ var ProviderSet = wire.NewSet(
 	NewFeishuNotifierFromEnv,
 	wire.Bind(new(Repository), new(*SQLRepository)),
 	wire.Bind(new(Notifier), new(*FeishuNotifier)),
-	NewServiceWithNotifier,
+	NewServiceWithDependencies,
 )

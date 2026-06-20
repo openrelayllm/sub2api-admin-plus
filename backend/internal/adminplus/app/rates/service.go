@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -39,6 +40,21 @@ type RecordSnapshotResult struct {
 	Events    []*adminplusdomain.RateChangeEvent `json:"events"`
 }
 
+type SyncFromSessionInput struct {
+	SupplierID       int64
+	ThresholdPercent float64
+}
+
+type SyncFromSessionResult struct {
+	SupplierID int64                 `json:"supplier_id"`
+	SystemType string                `json:"system_type"`
+	Origin     string                `json:"origin"`
+	APIBaseURL string                `json:"api_base_url"`
+	SyncedAt   time.Time             `json:"synced_at"`
+	Total      int                   `json:"total"`
+	Snapshot   *RecordSnapshotResult `json:"snapshot"`
+}
+
 type SnapshotFilter struct {
 	SupplierID int64
 	Model      string
@@ -64,9 +80,15 @@ type Notifier interface {
 	NotifyRateChange(ctx context.Context, event *adminplusdomain.RateChangeEvent, snapshot *adminplusdomain.RateSnapshot) error
 }
 
+type SessionReader interface {
+	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
+}
+
 type Service struct {
 	repo     Repository
 	notifier Notifier
+	session  SessionReader
+	reader   ports.SessionRateAdapter
 	now      func() time.Time
 }
 
@@ -80,6 +102,13 @@ func NewServiceWithNotifier(repo Repository, notifier Notifier) *Service {
 		notifier: notifier,
 		now:      time.Now,
 	}
+}
+
+func NewServiceWithDependencies(repo Repository, notifier Notifier, session SessionReader, reader ports.SessionRateAdapter) *Service {
+	service := NewServiceWithNotifier(repo, notifier)
+	service.session = session
+	service.reader = reader
+	return service
 }
 
 func (s *Service) RecordSnapshot(ctx context.Context, in RecordSnapshotInput) (*RecordSnapshotResult, error) {
@@ -136,6 +165,64 @@ func (s *Service) RecordSnapshot(ctx context.Context, in RecordSnapshotInput) (*
 		s.notifyRateChange(ctx, createdEvent, created)
 	}
 	return result, nil
+}
+
+func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("rate service is not configured")
+	}
+	if s.session == nil {
+		return nil, internalError("supplier browser session service is not configured")
+	}
+	if s.reader == nil {
+		return nil, internalError("supplier rate provider adapter is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("RATE_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	probeInput, err := s.session.DecryptedProbeInput(ctx, in.SupplierID)
+	if err != nil {
+		return nil, err
+	}
+	readResult, err := s.reader.ReadRates(ctx, probeInput)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]RateEntryInput, 0, len(readResult.Entries))
+	for _, entry := range readResult.Entries {
+		entries = append(entries, RateEntryInput{
+			Model:       entry.Model,
+			BillingMode: entry.BillingMode,
+			PriceItem:   entry.PriceItem,
+			Unit:        entry.Unit,
+			Currency:    entry.Currency,
+			PriceMicros: entry.PriceMicros,
+			RawPayload:  entry.RawPayload,
+		})
+	}
+	capturedAt := readResult.CapturedAt.UTC()
+	if capturedAt.IsZero() {
+		capturedAt = s.now().UTC()
+	}
+	snapshot, err := s.RecordSnapshot(ctx, RecordSnapshotInput{
+		SupplierID:       in.SupplierID,
+		Source:           "provider_session",
+		CapturedAt:       &capturedAt,
+		ThresholdPercent: in.ThresholdPercent,
+		Entries:          entries,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &SyncFromSessionResult{
+		SupplierID: in.SupplierID,
+		SystemType: readResult.SystemType,
+		Origin:     readResult.Origin,
+		APIBaseURL: readResult.APIBaseURL,
+		SyncedAt:   capturedAt,
+		Total:      len(snapshot.Snapshots),
+		Snapshot:   snapshot,
+	}, nil
 }
 
 func (s *Service) notifyRateChange(ctx context.Context, event *adminplusdomain.RateChangeEvent, snapshot *adminplusdomain.RateSnapshot) {

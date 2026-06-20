@@ -346,7 +346,7 @@ func (r *SQLRepository) ListAccounts(ctx context.Context, supplierID int64) ([]*
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_DB_NOT_CONFIGURED", "admin plus database is not configured")
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, supplier_id, local_sub2api_account_id,
+		SELECT id, supplier_id, supplier_key_id, local_sub2api_account_id,
 			local_account_name, local_account_platform, local_account_type,
 			supplier_account_identifier, supplier_account_label, organization_id, project_id, rate_profile,
 			configured_concurrency, observed_max_concurrency,
@@ -401,7 +401,7 @@ func (r *SQLRepository) CreateAccount(ctx context.Context, account *adminplusdom
 			$13, $14, $15, $16,
 			$17, $18, $19, $20
 		)
-		RETURNING id, supplier_id, local_sub2api_account_id,
+		RETURNING id, supplier_id, supplier_key_id, local_sub2api_account_id,
 			local_account_name, local_account_platform, local_account_type,
 			supplier_account_identifier, supplier_account_label, organization_id, project_id, rate_profile,
 			configured_concurrency, observed_max_concurrency,
@@ -457,7 +457,7 @@ func (r *SQLRepository) UpdateAccount(ctx context.Context, account *adminplusdom
 			health_status = $15,
 			updated_at = $16
 		WHERE supplier_id = $1 AND id = $2
-		RETURNING id, supplier_id, local_sub2api_account_id,
+		RETURNING id, supplier_id, supplier_key_id, local_sub2api_account_id,
 			local_account_name, local_account_platform, local_account_type,
 			supplier_account_identifier, supplier_account_label, organization_id, project_id, rate_profile,
 			configured_concurrency, observed_max_concurrency,
@@ -646,6 +646,7 @@ func scanSupplierAccount(scanner supplierScanner) (*adminplusdomain.SupplierAcco
 	err := scanner.Scan(
 		&account.ID,
 		&account.SupplierID,
+		&account.SupplierKeyID,
 		&account.LocalSub2APIAccountID,
 		&account.LocalAccountName,
 		&account.LocalAccountPlatform,

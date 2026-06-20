@@ -53,7 +53,7 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 		AdminPlus: &handler.AdminPlusHandlers{
 			Supplier:       adminplushandler.NewSupplierHandler(supplierService),
 			SupplierGroup:  adminplushandler.NewSupplierGroupHandler(supplierGroupService),
-			Rate:           adminplushandler.NewRateHandler(ratesapp.NewService(newRouteSurfaceRateRepository())),
+			Rate:           adminplushandler.NewRateHandler(ratesapp.NewServiceWithDependencies(newRouteSurfaceRateRepository(), nil, &routeSurfaceSessionReader{}, &routeSurfaceRateReader{})),
 			Balance:        adminplushandler.NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository())),
 			Promotion:      adminplushandler.NewPromotionHandler(promotionsapp.NewService(promotionsapp.NewMemoryRepository())),
 			Health:         adminplushandler.NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository())),
@@ -113,6 +113,7 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"DELETE /api/v1/admin-plus/suppliers/:id/accounts/:accountID",
 		"GET /api/v1/admin-plus/suppliers/:id/groups",
 		"POST /api/v1/admin-plus/suppliers/:id/groups/sync",
+		"POST /api/v1/admin-plus/suppliers/:id/rates/sync",
 		"GET /api/v1/admin-plus/suppliers/:id/session",
 		"POST /api/v1/admin-plus/suppliers/:id/session/probe",
 		"POST /api/v1/admin-plus/suppliers/:id/browser-sessions",
@@ -235,6 +236,12 @@ type routeSurfaceGroupReader struct{}
 
 func (r *routeSurfaceGroupReader) ReadGroups(_ context.Context, in ports.SessionProbeInput) (*ports.ReadGroupsResult, error) {
 	return &ports.ReadGroupsResult{SupplierID: in.SupplierID, SystemType: "sub2api"}, nil
+}
+
+type routeSurfaceRateReader struct{}
+
+func (r *routeSurfaceRateReader) ReadRates(_ context.Context, in ports.SessionProbeInput) (*ports.ReadRatesResult, error) {
+	return &ports.ReadRatesResult{SupplierID: in.SupplierID, SystemType: "sub2api"}, nil
 }
 
 func newRouteSurfaceRateRepository() *routeSurfaceRateRepository {

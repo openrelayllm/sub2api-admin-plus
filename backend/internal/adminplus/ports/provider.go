@@ -100,16 +100,16 @@ type SessionGroupAdapter interface {
 }
 
 type CreateProviderKeyInput struct {
-	SupplierID       int64
+	SupplierID      int64
 	ExternalGroupID string
-	Name             string
-	QuotaUSD         float64
-	ExpiresInDays    *int
-	Metadata         map[string]any
+	Name            string
+	QuotaUSD        float64
+	ExpiresInDays   *int
+	Metadata        map[string]any
 }
 
 type ProviderKeyResult struct {
-	SupplierID       int64
+	SupplierID      int64
 	ExternalGroupID string
 	ExternalKeyID   string
 	Name            string

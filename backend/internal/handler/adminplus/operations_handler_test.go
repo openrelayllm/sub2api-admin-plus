@@ -18,6 +18,7 @@ import (
 	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	notificationsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
+	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
@@ -468,6 +469,66 @@ func TestSupplierGroupSyncReadsProviderSessionAndListsGroups(t *testing.T) {
 	require.Contains(t, listed.Body.String(), `"name":"GPT-5.5 Low Cost"`)
 }
 
+func TestSupplierRateSyncReadsProviderSession(t *testing.T) {
+	var seenAuth string
+	var seenCookie string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/api/v1/rates/snapshots":
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case "/api/v1/channels/available":
+			seenAuth = req.Header.Get("Authorization")
+			seenCookie = req.Header.Get("Cookie")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"name": "OpenAI",
+						"supported_models": [
+							{
+								"name": "gpt-5-mini",
+								"pricing": {
+									"billing_mode": "token",
+									"input_price": 0.0000015,
+									"output_price_micros": 6000000
+								}
+							}
+						]
+					}
+				]
+			}`))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer server.Close()
+
+	router := newOperationsHandlerTestRouterWithSupplierURLs(server.URL, server.URL)
+	created := performJSON(t, router, http.MethodPost, "/suppliers/1/browser-sessions", `{
+		"origin": "`+server.URL+`",
+		"session_bundle": {
+			"origin": "`+server.URL+`",
+			"tokens": {"access_token": "secret-token"},
+			"required_headers": {"cookie": "sid=secret-cookie"},
+			"context": {"api_base_url": "`+server.URL+`"}
+		}
+	}`)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+
+	synced := performJSON(t, router, http.MethodPost, "/suppliers/1/rates/sync", `{}`)
+	require.Equal(t, http.StatusCreated, synced.Code, synced.Body.String())
+	require.Equal(t, "Bearer secret-token", seenAuth)
+	require.Equal(t, "sid=secret-cookie", seenCookie)
+	require.Contains(t, synced.Body.String(), `"source":"provider_session"`)
+	require.Contains(t, synced.Body.String(), `"model":"gpt-5-mini"`)
+	require.Contains(t, synced.Body.String(), `"price_item":"input"`)
+	require.Contains(t, synced.Body.String(), `"price_micros":1500000`)
+	require.Contains(t, synced.Body.String(), `"price_item":"output"`)
+	require.Contains(t, synced.Body.String(), `"price_micros":6000000`)
+	require.NotContains(t, synced.Body.String(), "secret-token")
+	require.NotContains(t, synced.Body.String(), "secret-cookie")
+}
+
 func TestExtensionHandlerManifestAndPackage(t *testing.T) {
 	router := newOperationsHandlerTestRouter()
 
@@ -618,6 +679,12 @@ func newOperationsHandlerTestRouterWithSupplierURLs(dashboardURL string, apiBase
 		sub2apiprovider.NewSessionProfileClient(nil),
 	)
 	sessionGroupClient := sub2apiprovider.NewSessionProfileClient(http.DefaultClient)
+	rateService := ratesapp.NewServiceWithDependencies(
+		newOperationsRateRepository(),
+		nil,
+		sessionSvc,
+		sessionGroupClient,
+	)
 	supplierGroupHandler := NewSupplierGroupHandler(suppliergroupsapp.NewService(
 		suppliergroupsapp.NewMemoryRepository(),
 		sessionSvc,
@@ -640,6 +707,7 @@ func newOperationsHandlerTestRouterWithSupplierURLs(dashboardURL string, apiBase
 	notificationHandler := NewNotificationHandler(notificationRepo)
 	supplierHandler := NewSupplierHandler(supplierSvc)
 	balanceHandler := NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository()))
+	rateHandler := NewRateHandler(rateService)
 	sessionHandler := NewSessionHandler(sessionSvc, balanceHandler.service)
 
 	router := gin.New()
@@ -649,6 +717,7 @@ func newOperationsHandlerTestRouterWithSupplierURLs(dashboardURL string, apiBase
 	router.POST("/suppliers/:id/browser-sessions", sessionHandler.Upsert)
 	router.GET("/suppliers/:id/groups", supplierGroupHandler.List)
 	router.POST("/suppliers/:id/groups/sync", supplierGroupHandler.Sync)
+	router.POST("/suppliers/:id/rates/sync", rateHandler.SyncSupplierRates)
 	router.POST("/billing/lines/import", billingHandler.ImportBillLines)
 	router.GET("/billing/lines", billingHandler.ListBillLines)
 	router.POST("/extension/tasks", extensionHandler.CreateTask)
@@ -676,6 +745,96 @@ func performJSON(t *testing.T, router *gin.Engine, method string, path string, p
 }
 
 type plainSessionCipher struct{}
+
+type operationsRateRepository struct {
+	nextSnapshotID int64
+	nextEventID    int64
+	snapshots      []*adminplusdomain.RateSnapshot
+	events         []*adminplusdomain.RateChangeEvent
+}
+
+func newOperationsRateRepository() *operationsRateRepository {
+	return &operationsRateRepository{nextSnapshotID: 1, nextEventID: 1}
+}
+
+func (r *operationsRateRepository) CreateSnapshot(_ context.Context, snapshot *adminplusdomain.RateSnapshot) (*adminplusdomain.RateSnapshot, error) {
+	cp := cloneOperationsRateSnapshot(snapshot)
+	cp.ID = r.nextSnapshotID
+	r.nextSnapshotID++
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = cp.CapturedAt
+	}
+	r.snapshots = append(r.snapshots, cp)
+	return cloneOperationsRateSnapshot(cp), nil
+}
+
+func (r *operationsRateRepository) FindLatestComparableSnapshot(_ context.Context, snapshot *adminplusdomain.RateSnapshot) (*adminplusdomain.RateSnapshot, error) {
+	var latest *adminplusdomain.RateSnapshot
+	for _, item := range r.snapshots {
+		if item.SupplierID != snapshot.SupplierID ||
+			item.Model != snapshot.Model ||
+			item.BillingMode != snapshot.BillingMode ||
+			item.PriceItem != snapshot.PriceItem ||
+			item.Unit != snapshot.Unit ||
+			item.Currency != snapshot.Currency {
+			continue
+		}
+		if latest == nil || item.CapturedAt.After(latest.CapturedAt) || (item.CapturedAt.Equal(latest.CapturedAt) && item.ID > latest.ID) {
+			latest = item
+		}
+	}
+	return cloneOperationsRateSnapshot(latest), nil
+}
+
+func (r *operationsRateRepository) CreateChangeEvent(_ context.Context, event *adminplusdomain.RateChangeEvent) (*adminplusdomain.RateChangeEvent, error) {
+	cp := *event
+	cp.ID = r.nextEventID
+	r.nextEventID++
+	r.events = append(r.events, &cp)
+	return &cp, nil
+}
+
+func (r *operationsRateRepository) ListSnapshots(_ context.Context, _ ratesapp.SnapshotFilter) ([]*adminplusdomain.RateSnapshot, error) {
+	items := make([]*adminplusdomain.RateSnapshot, 0, len(r.snapshots))
+	for _, item := range r.snapshots {
+		items = append(items, cloneOperationsRateSnapshot(item))
+	}
+	return items, nil
+}
+
+func (r *operationsRateRepository) ListChangeEvents(_ context.Context, _ ratesapp.EventFilter) ([]*adminplusdomain.RateChangeEvent, error) {
+	items := make([]*adminplusdomain.RateChangeEvent, 0, len(r.events))
+	for _, item := range r.events {
+		cp := *item
+		items = append(items, &cp)
+	}
+	return items, nil
+}
+
+func (r *operationsRateRepository) UpdateChangeEventStatus(_ context.Context, id int64, status adminplusdomain.RateChangeStatus) (*adminplusdomain.RateChangeEvent, error) {
+	for _, event := range r.events {
+		if event.ID == id {
+			event.Status = status
+			cp := *event
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func cloneOperationsRateSnapshot(in *adminplusdomain.RateSnapshot) *adminplusdomain.RateSnapshot {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.RawPayload != nil {
+		out.RawPayload = make(map[string]any, len(in.RawPayload))
+		for key, value := range in.RawPayload {
+			out.RawPayload[key] = value
+		}
+	}
+	return &out
+}
 
 func (plainSessionCipher) Encrypt(plaintext string) (string, error) {
 	return "encrypted:" + plaintext, nil

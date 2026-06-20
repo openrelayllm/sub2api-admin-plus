@@ -27,6 +27,10 @@ type recordRateSnapshotRequest struct {
 	Entries          []rateSnapshotEntryDTO `json:"entries" binding:"required"`
 }
 
+type syncSupplierRatesRequest struct {
+	ThresholdPercent float64 `json:"threshold_percent"`
+}
+
 type rateSnapshotEntryDTO struct {
 	Model       string         `json:"model" binding:"required"`
 	BillingMode string         `json:"billing_mode" binding:"required"`
@@ -68,6 +72,26 @@ func (h *RateHandler) RecordSnapshot(c *gin.Context) {
 		CapturedAt:       capturedAt,
 		ThresholdPercent: req.ThresholdPercent,
 		Entries:          entries,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Created(c, result)
+}
+
+func (h *RateHandler) SyncSupplierRates(c *gin.Context) {
+	supplierID, ok := parseSupplierID(c)
+	if !ok {
+		return
+	}
+	var req syncSupplierRatesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	result, err := h.service.SyncFromSession(c.Request.Context(), ratesapp.SyncFromSessionInput{
+		SupplierID:       supplierID,
+		ThresholdPercent: req.ThresholdPercent,
 	})
 	if response.ErrorFrom(c, err) {
 		return

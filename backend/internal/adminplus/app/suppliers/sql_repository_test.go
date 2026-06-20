@@ -295,6 +295,7 @@ func TestSQLRepositoryCreateAccountReadsLocalAccountFromSub2APIReadDB(t *testing
 		WillReturnRows(newSupplierAccountRows().AddRow(
 			int64(100),
 			int64(7),
+			int64(0),
 			int64(42),
 			"Real Sub2API Account",
 			"openai",
@@ -385,6 +386,7 @@ func newSupplierAccountRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id",
 		"supplier_id",
+		"supplier_key_id",
 		"local_sub2api_account_id",
 		"local_account_name",
 		"local_account_platform",

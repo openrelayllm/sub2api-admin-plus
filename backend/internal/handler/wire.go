@@ -29,6 +29,7 @@ func ProvideAdminHandlers(
 func ProvideAdminPlusHandlers(
 	supplierHandler *adminplushandler.SupplierHandler,
 	supplierGroupHandler *adminplushandler.SupplierGroupHandler,
+	supplierKeyHandler *adminplushandler.SupplierKeyHandler,
 	rateHandler *adminplushandler.RateHandler,
 	balanceHandler *adminplushandler.BalanceHandler,
 	promotionHandler *adminplushandler.PromotionHandler,
@@ -45,6 +46,7 @@ func ProvideAdminPlusHandlers(
 	return &AdminPlusHandlers{
 		Supplier:       supplierHandler,
 		SupplierGroup:  supplierGroupHandler,
+		SupplierKey:    supplierKeyHandler,
 		Rate:           rateHandler,
 		Balance:        balanceHandler,
 		Promotion:      promotionHandler,
@@ -111,6 +113,7 @@ var ProviderSet = wire.NewSet(
 	ProvideSystemHandler,
 	adminplushandler.NewSupplierHandler,
 	adminplushandler.NewSupplierGroupHandler,
+	adminplushandler.NewSupplierKeyHandler,
 	adminplushandler.NewRateHandler,
 	adminplushandler.NewBalanceHandler,
 	adminplushandler.NewPromotionHandler,

@@ -18,6 +18,7 @@ type AdminHandlers struct {
 type AdminPlusHandlers struct {
 	Supplier       *adminplushandler.SupplierHandler
 	SupplierGroup  *adminplushandler.SupplierGroupHandler
+	SupplierKey    *adminplushandler.SupplierKeyHandler
 	Rate           *adminplushandler.RateHandler
 	Balance        *adminplushandler.BalanceHandler
 	Promotion      *adminplushandler.PromotionHandler
