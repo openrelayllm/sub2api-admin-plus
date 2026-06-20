@@ -25,10 +25,6 @@ func SetupRouter(
 	handlers *handler.Handlers,
 	jwtAuth middleware2.JWTAuthMiddleware,
 	adminAuth middleware2.AdminAuthMiddleware,
-	apiKeyAuth middleware2.APIKeyAuthMiddleware,
-	apiKeyService *service.APIKeyService,
-	subscriptionService *service.SubscriptionService,
-	opsService *service.OpsService,
 	settingService *service.SettingService,
 	cfg *config.Config,
 	redisClient *redis.Client,
@@ -81,7 +77,7 @@ func SetupRouter(
 	}
 
 	// 注册路由
-	registerRoutes(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, redisClient)
+	registerRoutes(r, handlers, jwtAuth, adminAuth, settingService, redisClient)
 
 	return r
 }
@@ -92,12 +88,7 @@ func registerRoutes(
 	h *handler.Handlers,
 	jwtAuth middleware2.JWTAuthMiddleware,
 	adminAuth middleware2.AdminAuthMiddleware,
-	apiKeyAuth middleware2.APIKeyAuthMiddleware,
-	apiKeyService *service.APIKeyService,
-	subscriptionService *service.SubscriptionService,
-	opsService *service.OpsService,
 	settingService *service.SettingService,
-	cfg *config.Config,
 	redisClient *redis.Client,
 ) {
 	// 通用路由（健康检查、状态等）
@@ -106,12 +97,7 @@ func registerRoutes(
 	// API v1
 	v1 := r.Group("/api/v1")
 
-	// 注册各模块路由
 	routes.RegisterAuthRoutes(v1, h, jwtAuth, redisClient, settingService)
-	routes.RegisterUserRoutes(v1, h, jwtAuth, settingService)
-	routes.RegisterAdminRoutes(v1, h, adminAuth, settingService)
-	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg)
-	routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, settingService)
-
-	handler.RegisterPageRoutes(v1, cfg.Pricing.DataDir, gin.HandlerFunc(jwtAuth), gin.HandlerFunc(adminAuth), settingService)
+	routes.RegisterAdminRoutes(v1, h, adminAuth)
+	routes.RegisterAdminPlusRoutes(v1, h, adminAuth)
 }

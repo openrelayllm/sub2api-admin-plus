@@ -187,11 +187,11 @@ export default {
 
   // Setup Wizard
   setup: {
-    title: 'Sub2API Setup',
-    description: 'Configure your Sub2API instance',
+    title: 'Sub2API Admin Plus Setup',
+    description: 'Configure your Admin Plus operations instance',
     database: {
       title: 'Database Configuration',
-      description: 'Connect to your PostgreSQL database',
+      description: 'Connect to the dedicated Admin Plus PostgreSQL database',
       host: 'Host',
       port: 'Port',
       username: 'Username',
@@ -219,7 +219,7 @@ export default {
     },
     admin: {
       title: 'Admin Account',
-      description: 'Create your administrator account',
+      description: 'Create the local development administrator account',
       email: 'Email',
       password: 'Password',
       confirmPassword: 'Confirm Password',
@@ -229,7 +229,7 @@ export default {
     },
     ready: {
       title: 'Ready to Install',
-      description: 'Review your configuration and complete setup',
+      description: 'Review the Admin Plus configuration and complete setup',
       database: 'Database',
       redis: 'Redis',
       adminEmail: 'Admin Email'
@@ -5422,7 +5422,7 @@ export default {
     // Settings
     settings: {
       title: 'System Settings',
-      description: 'Manage registration, email verification, default values, and SMTP settings',
+      description: 'Manage Admin Plus site basics and automation integration keys',
       tabs: {
         general: 'General',
         agreement: 'Agreement',
@@ -5813,10 +5813,10 @@ export default {
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
         siteName: 'Site Name',
-        siteNamePlaceholder: 'Sub2API',
+        siteNamePlaceholder: 'Sub2API Admin Plus',
         siteNameHint: 'Displayed in emails and page titles',
         siteSubtitle: 'Site Subtitle',
-        siteSubtitlePlaceholder: 'Subscription to API Conversion Platform',
+        siteSubtitlePlaceholder: 'Operations Automation Console',
         siteSubtitleHint: 'Displayed on login and register pages',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',
@@ -6103,7 +6103,7 @@ export default {
         fromEmail: 'From Email',
         fromEmailPlaceholder: "noreply{'@'}example.com",
         fromName: 'From Name',
-        fromNamePlaceholder: 'Sub2API',
+        fromNamePlaceholder: 'Sub2API Admin Plus',
         useTls: 'Use TLS',
         useTlsHint: 'Enable TLS encryption for SMTP connection'
       },

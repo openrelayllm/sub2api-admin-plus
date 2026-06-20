@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -161,10 +162,36 @@ func NeedsSetup() bool {
 }
 
 func buildPostgresDSN(cfg *DatabaseConfig, dbName string) string {
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, dbName, cfg.SSLMode,
-	)
+	host := cfg.Host
+	if host != "" {
+		host = net.JoinHostPort(host, strconv.Itoa(cfg.Port))
+	}
+	sslMode := strings.TrimSpace(cfg.SSLMode)
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+
+	values := make([]string, 0, 6)
+	values = append(values, "host="+quotePostgresDSNValue(host))
+	values = append(values, "user="+quotePostgresDSNValue(cfg.User))
+	if cfg.Password != "" {
+		values = append(values, "password="+quotePostgresDSNValue(cfg.Password))
+	}
+	values = append(values, "dbname="+quotePostgresDSNValue(dbName))
+	values = append(values, "sslmode="+quotePostgresDSNValue(sslMode))
+	return strings.Join(values, " ")
+}
+
+func quotePostgresDSNValue(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(value, " \\'") {
+		return value
+	}
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
 }
 
 func buildDatabaseConnectionDSNs(cfg *DatabaseConfig) (bootstrapDSN, targetDSN string) {

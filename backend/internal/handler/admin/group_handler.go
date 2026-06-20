@@ -71,12 +71,14 @@ func (f optionalLimitField) ToServiceInput() *float64 {
 	return &zero
 }
 
-// NewGroupHandler creates a new admin group handler
-func NewGroupHandler(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService) *GroupHandler {
+// NewGroupHandler creates a new admin group handler.
+//
+// Admin Plus MVP0 only registers the read-only /groups/all endpoint. The optional
+// services are kept on the struct for legacy methods that remain compiled but are
+// not mounted.
+func NewGroupHandler(adminService service.AdminService, legacyDeps ...any) *GroupHandler {
 	return &GroupHandler{
-		adminService:         adminService,
-		dashboardService:     dashboardService,
-		groupCapacityService: groupCapacityService,
+		adminService: adminService,
 	}
 }
 

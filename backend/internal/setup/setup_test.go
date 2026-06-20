@@ -110,3 +110,22 @@ func TestBuildDatabaseConnectionDSNsUsesPostgresForBootstrap(t *testing.T) {
 		t.Fatalf("target DSN = %q, want configured database", targetDSN)
 	}
 }
+
+func TestBuildPostgresDSNOmitsEmptyPassword(t *testing.T) {
+	cfg := &DatabaseConfig{
+		Host:    "127.0.0.1",
+		Port:    5432,
+		User:    "root",
+		DBName:  "sub2api_admin_plus",
+		SSLMode: "disable",
+	}
+
+	_, targetDSN := buildDatabaseConnectionDSNs(cfg)
+
+	if strings.Contains(targetDSN, "password=") {
+		t.Fatalf("target DSN = %q, empty password should be omitted", targetDSN)
+	}
+	if !strings.Contains(targetDSN, "dbname=sub2api_admin_plus") {
+		t.Fatalf("target DSN = %q, want configured database", targetDSN)
+	}
+}

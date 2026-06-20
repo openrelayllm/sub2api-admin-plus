@@ -89,6 +89,196 @@ backend/
 
 暂不建议新增 `cmd/admin-plus-api` 和 `cmd/admin-plus-worker`。当前阶段继续复用 `cmd/server`，通过独立路由、独立包和独立调度模块完成业务隔离。只有当后台 worker 与 Web 生命周期明显冲突时，再拆第二个入口。
 
+### 3.1 已落地的 MVP1 后端业务面
+
+当前已落地供应商台账最小闭环：
+
+```text
+backend/internal/adminplus/domain/supplier.go
+backend/internal/adminplus/app/suppliers/
+backend/internal/handler/adminplus/supplier_handler.go
+backend/internal/server/routes/adminplus.go
+```
+
+已注册路由：
+
+```text
+GET   /api/v1/admin-plus/suppliers
+POST  /api/v1/admin-plus/suppliers
+GET   /api/v1/admin-plus/suppliers/:id
+PATCH /api/v1/admin-plus/suppliers/:id/status
+```
+
+当前运行时使用 `SQLRepository` 持久化到 Admin Plus 自有表：
+
+```text
+admin_plus_suppliers
+```
+
+`MemoryRepository` 仅保留给单元测试使用，不进入 Wire 运行时对象图。部署时应把 Admin Plus 指向独立 PostgreSQL 库，例如 `sub2api_admin_plus`；可以复用同一个 PostgreSQL 实例，但不得指向 Sub2API 原生产库。
+
+供应商状态规则已在业务层固化：
+
+- `monitor_only` 允许无余额，用于无充值供应商的优惠/费率监控。
+- `candidate` 和 `active` 必须有正余额，否则不允许作为切换候选。
+- 凭据响应只返回是否配置和脱敏值，不返回 Admin API Key、PostgreSQL DSN 或 Redis DSN 明文。
+
+当前已落地费率快照与变更事件最小闭环：
+
+```text
+backend/internal/adminplus/domain/rate.go
+backend/internal/adminplus/app/rates/
+backend/internal/handler/adminplus/rate_handler.go
+backend/internal/server/routes/adminplus.go
+```
+
+已注册路由：
+
+```text
+POST  /api/v1/admin-plus/rates/snapshots
+GET   /api/v1/admin-plus/rates/snapshots
+GET   /api/v1/admin-plus/rates/events
+PATCH /api/v1/admin-plus/rates/events/:id/ack
+```
+
+当前运行时使用 `SQLRepository` 持久化到 Admin Plus 自有表：
+
+```text
+admin_plus_rate_snapshots
+admin_plus_rate_change_events
+```
+
+费率监控当前只提供统一录入和查询入口，不直接实现真实抓取器。Sub2API/New API 适配器、Chrome 插件、手工导入和后续 10 分钟调度任务都应调用 `rates.Service.RecordSnapshot`，由同一业务规则比较上一条可比快照并生成变更事件。
+
+费率可比维度：
+
+- `supplier_id`
+- `model`
+- `billing_mode`
+- `price_item`
+- `unit`
+- `currency`
+
+变更事件规则：
+
+- 第一次出现的费率生成 `new` 事件。
+- 同价不生成事件。
+- 涨价生成 `increase`，降价生成 `decrease`。
+- 小于阈值的变化仍记录事件，但 `threshold_exceeded=false`，方便后续做审计和趋势分析。
+
+当前已落地余额与优惠监控业务规则层：
+
+```text
+backend/internal/adminplus/domain/balance.go
+backend/internal/adminplus/domain/promotion.go
+backend/internal/adminplus/domain/health.go
+backend/internal/adminplus/domain/extension.go
+backend/internal/adminplus/domain/billing.go
+backend/internal/adminplus/domain/action.go
+backend/internal/adminplus/app/balances/
+backend/internal/adminplus/app/promotions/
+backend/internal/adminplus/app/health/
+backend/internal/adminplus/app/extension/
+backend/internal/adminplus/app/billing/
+backend/internal/adminplus/app/reconciliation/
+backend/internal/adminplus/app/actions/
+backend/internal/handler/adminplus/balance_handler.go
+backend/internal/handler/adminplus/promotion_handler.go
+backend/internal/handler/adminplus/health_handler.go
+backend/internal/adminplus/ports/provider.go
+```
+
+这些模块当前已提供业务规则、端口接口和 handler 契约测试。除已注册的供应商、费率路由外，其余模块尚未注册 HTTP 路由，也不进入 Wire 运行时对象图。
+
+当前 `balance_handler` / `promotion_handler` / `health_handler` 不进入 Wire 运行时对象图，避免在没有 SQL repository 的情况下误接内存仓储。`MemoryRepository` 仅用于单元测试。
+
+`balances` / `promotions` / `health` / `billing` / `extension` / `actions` 已准备 `SQLRepository` 和 sqlmock 测试，但对应表迁移尚未创建，且不进入 Wire 运行时对象图。只有数据库结构变更确认并落地迁移后，才能注册这些路由。
+
+余额监控规则：
+
+- 记录供应商余额快照时计算 `switch_eligible`。
+- 只有 `candidate` / `active` 且余额大于 0 的供应商可以作为切换候选。
+- `monitor_only` 即使有余额，也只监控，不参与切换。
+- 余额从正数变成 0 生成 `depleted` 事件。
+- 余额首次或从高于阈值跌到低于阈值生成 `low_balance` 事件。
+- 余额从 0 或低余额恢复到可用区间生成 `recovered` 事件。
+
+优惠监控规则：
+
+- 无余额供应商仍可记录优惠活动。
+- 无余额供应商的优惠只生成 `recharge_to_unlock` 建议，提醒及时充值以获取更低成本。
+- 有余额且状态为 `candidate` / `active` 的供应商优惠生成 `switch_candidate` 建议。
+- `disabled` 供应商优惠仅作为 `informational` 信息，不进入切换候选。
+
+健康监控规则：
+
+- 记录供应商首 token 耗时、总耗时、HTTP 状态码、错误类别、观察到的并发数。
+- 首 token 超过阈值生成 `slow_first_token` 事件。
+- 总耗时超过阈值生成 `slow_total` 事件。
+- HTTP 状态码大于等于 400 或存在错误类别时生成 `request_error` 事件。
+- 观察并发达到配置饱和比例时生成 `concurrency_full` 事件，用于后续切换或降权建议。
+
+Chrome 插件任务规则：
+
+- 任务类型覆盖费率抓取、余额抓取、优惠抓取、账单导出和健康采样。
+- 插件设备通过 `device_id` 领取任务，领取后获得短期 `lease_token`。
+- SQL repository 领取任务使用 `FOR UPDATE SKIP LOCKED` 原子更新，避免多个 Chrome 设备同时领取同一任务。
+- 心跳会刷新租约并把任务推进到 `running`。
+- 完成任务写入结果并进入 `succeeded`。
+- 失败任务在未超过 `max_attempts` 前回到 `pending`，超过后进入 `failed`。
+- 当前 `MemoryRepository` 仅用于单元测试，不进入运行时对象图。
+
+账单与对账规则：
+
+- 供应商账单导入统一归一化为 `SupplierBillLine`，金额以 cents 计。
+- 本地 Sub2API 使用记录归一化为 `LocalUsageLine`，后续由只读适配器从 Sub2API 主库读取。
+- 优先按 `external_request_id` 匹配供应商账单和本地使用记录。
+- 无请求 ID 时按 `model + 时间容忍窗口` 匹配。
+- 供应商有账单但本地无使用记录标记为 `supplier_only`。
+- 本地有使用记录但供应商无账单标记为 `local_only`。
+- 币种不一致标记为 `currency_mismatch`。
+- 收入低于成本或过于接近成本标记为 `cost_mismatch`。
+- 对账输出收入、成本、毛利和毛利率，用于判断中转商是否仍有合理利润。
+
+动作建议规则：
+
+- 只生成 `ActionRecommendation`，不直接调用 Sub2API Admin API。
+- 动作建议 SQL repository 只负责保存、查询和更新状态，不参与建议生成算法。
+- `active` 供应商余额耗尽时生成暂停和切换建议。
+- 无余额供应商的优惠只生成充值建议，不生成切换建议。
+- 请求错误生成暂停建议；如果存在可用候选，再生成切换建议。
+- 首 token 慢、总耗时慢或并发饱和生成降权建议。
+- 低毛利率生成利润排查建议，避免中转商长期亏损。
+- 所有动作默认 `requires_approval=true`，后续执行层必须由管理员确认。
+
+### 3.2 当前治理分类
+
+后续开发必须继续收敛到以下事实源：
+
+```text
+current:
+  backend/internal/adminplus/domain/*
+  backend/internal/adminplus/app/suppliers/*
+  backend/internal/adminplus/app/rates/*
+  backend/internal/adminplus/app/balances/*
+  backend/internal/adminplus/app/promotions/*
+  backend/internal/adminplus/app/health/*
+  backend/internal/adminplus/app/extension/*
+  backend/internal/adminplus/app/billing/*
+  backend/internal/adminplus/app/reconciliation/*
+  backend/internal/adminplus/app/actions/*
+  backend/internal/adminplus/ports/*
+  backend/internal/handler/adminplus/*
+  backend/internal/server/routes/adminplus.go
+  /api/v1/admin-plus/*
+
+compat:
+  复制自 Sub2API 的 service/repository/schema/cache，只允许为 Admin Plus 读取、认证复用、运行时依赖和后续迁移服务。
+
+dead:
+  用户端 API、支付、公开网关、OAuth 注册、非运营扩展后台页面。不得在这些入口上继续新增 Admin Plus 业务。
+```
+
 ## 4. 前端目标结构
 
 前端不是当前重点，但如果需要页面，应沿用 Sub2API 现有 Vue 结构和 UI 风格。
@@ -187,10 +377,10 @@ admin_plus_supplier_accounts
 admin_plus_rate_snapshots
 admin_plus_rate_change_events
 admin_plus_promotions
-admin_plus_bills
+admin_plus_supplier_bill_lines
 admin_plus_reconciliation_runs
 admin_plus_health_samples
-admin_plus_actions
+admin_plus_action_recommendations
 admin_plus_extension_tasks
 admin_plus_audit_logs
 ```

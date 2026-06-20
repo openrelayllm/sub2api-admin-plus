@@ -66,12 +66,13 @@
 import { computed, onMounted } from 'vue'
 import { useAppStore } from '@/stores'
 import { sanitizeUrl } from '@/utils/url'
+import { DEFAULT_SITE_NAME, DEFAULT_SITE_SUBTITLE } from '@/constants/product'
 
 const appStore = useAppStore()
 
-const siteName = computed(() => appStore.siteName || 'Sub2API')
+const siteName = computed(() => appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'Subscription to API Conversion Platform')
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || DEFAULT_SITE_SUBTITLE)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
 const currentYear = computed(() => new Date().getFullYear())

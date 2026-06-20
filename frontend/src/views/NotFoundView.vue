@@ -57,7 +57,7 @@
           <Icon name="arrowLeft" size="md" class="mr-2" />
           Go Back
         </button>
-        <router-link to="/dashboard" class="btn btn-primary">
+        <router-link to="/admin/dashboard" class="btn btn-primary">
           <Icon name="home" size="md" class="mr-2" />
           Go to Dashboard
         </router-link>

@@ -38,6 +38,8 @@ frontend/dist/
 *.tsbuildinfo
 vite.config.d.ts
 vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.playwright-mcp/
 
 # 日志
 npm-debug.log*

@@ -66,16 +66,12 @@ type SettingHandler struct {
 	notificationEmailService *service.NotificationEmailService
 }
 
-// NewSettingHandler 创建系统设置处理器
-func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService) *SettingHandler {
+// NewSettingHandler 创建系统设置处理器。
+// legacyDeps 仅用于兼容旧测试调用签名；Admin Plus 运行时只注入 settingService 和 opsService。
+func NewSettingHandler(settingService *service.SettingService, opsService *service.OpsService, legacyDeps ...any) *SettingHandler {
 	return &SettingHandler{
-		settingService:       settingService,
-		emailService:         emailService,
-		turnstileService:     turnstileService,
-		opsService:           opsService,
-		paymentConfigService: paymentConfigService,
-		paymentService:       paymentService,
-		userAttributeService: userAttributeService,
+		settingService: settingService,
+		opsService:     opsService,
 	}
 }
 

@@ -1,0 +1,127 @@
+package adminplus
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+)
+
+type supplierResponseEnvelope struct {
+	Code int `json:"code"`
+	Data struct {
+		ID            int64  `json:"id"`
+		Name          string `json:"name"`
+		RuntimeStatus string `json:"runtime_status"`
+		HealthStatus  string `json:"health_status"`
+		Credential    struct {
+			AdminAPIKeyConfigured bool   `json:"admin_api_key_configured"`
+			MaskedAdminAPIKey     string `json:"masked_admin_api_key"`
+		} `json:"credential"`
+	} `json:"data"`
+}
+
+type supplierListResponseEnvelope struct {
+	Code int `json:"code"`
+	Data struct {
+		Items []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"items"`
+		Total int `json:"total"`
+	} `json:"data"`
+}
+
+func newSupplierHandlerTestRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	h := NewSupplierHandler(suppliersapp.NewService(suppliersapp.NewMemoryRepository()))
+	router := gin.New()
+	router.GET("/suppliers", h.List)
+	router.POST("/suppliers", h.Create)
+	router.GET("/suppliers/:id", h.Get)
+	router.PATCH("/suppliers/:id/status", h.UpdateStatus)
+	return router
+}
+
+func TestSupplierHandlerCreateAndGet(t *testing.T) {
+	router := newSupplierHandlerTestRouter()
+
+	body := bytes.NewBufferString(`{
+		"name": "Primary Sub2API Relay",
+		"kind": "relay",
+		"type": "sub2api",
+		"runtime_status": "candidate",
+		"balance_cents": 5000,
+		"admin_api_key": "admin-secret-token"
+	}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/suppliers", body)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created supplierResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	require.Equal(t, int64(1), created.Data.ID)
+	require.Equal(t, "Primary Sub2API Relay", created.Data.Name)
+	require.Equal(t, "candidate", created.Data.RuntimeStatus)
+	require.True(t, created.Data.Credential.AdminAPIKeyConfigured)
+	require.Equal(t, "admi...oken", created.Data.Credential.MaskedAdminAPIKey)
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/suppliers/1", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got supplierResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, created.Data.ID, got.Data.ID)
+	require.Equal(t, created.Data.Name, got.Data.Name)
+}
+
+func TestSupplierHandlerList(t *testing.T) {
+	router := newSupplierHandlerTestRouter()
+	createSupplier(t, router, `{"name":"Relay A","kind":"relay","type":"sub2api"}`)
+	createSupplier(t, router, `{"name":"OpenAI Source","kind":"source_account","type":"openai"}`)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/suppliers?kind=source_account", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body supplierListResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 1, body.Data.Total)
+	require.Equal(t, "OpenAI Source", body.Data.Items[0].Name)
+}
+
+func TestSupplierHandlerRejectsCandidateWithoutBalance(t *testing.T) {
+	router := newSupplierHandlerTestRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/suppliers", bytes.NewBufferString(`{
+		"name": "No Balance Relay",
+		"kind": "relay",
+		"type": "sub2api",
+		"runtime_status": "candidate"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "candidate supplier must have positive balance")
+}
+
+func createSupplier(t *testing.T, router *gin.Engine, payload string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/suppliers", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+}

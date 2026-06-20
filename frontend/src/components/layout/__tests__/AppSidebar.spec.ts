@@ -9,13 +9,18 @@ const componentSource = readFileSync(componentPath, 'utf8')
 const stylePath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../style.css')
 const styleSource = readFileSync(stylePath, 'utf8')
 
-describe('AppSidebar custom SVG styles', () => {
-  it('does not override uploaded SVG fill or stroke colors', () => {
-    expect(componentSource).toContain('.sidebar-svg-icon {')
-    expect(componentSource).toContain('color: currentColor;')
-    expect(componentSource).toContain('display: block;')
-    expect(componentSource).not.toContain('stroke: currentColor;')
-    expect(componentSource).not.toContain('fill: none;')
+describe('AppSidebar Admin Plus navigation', () => {
+  it('只保留 Admin Plus MVP0 后台导航入口', () => {
+    expect(componentSource).toContain("path: '/admin/dashboard'")
+    expect(componentSource).toContain("path: '/admin/ops'")
+    expect(componentSource).toContain("path: '/admin/settings'")
+
+    expect(componentSource).not.toContain("path: '/admin/users'")
+    expect(componentSource).not.toContain("path: '/admin/accounts'")
+    expect(componentSource).not.toContain("path: '/admin/channels'")
+    expect(componentSource).not.toContain("path: '/admin/payment'")
+    expect(componentSource).not.toContain("path: '/keys'")
+    expect(componentSource).not.toContain("path: '/payment'")
   })
 })
 

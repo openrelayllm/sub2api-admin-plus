@@ -1,0 +1,303 @@
+package extension
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"net/http"
+	"strings"
+	"time"
+
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+)
+
+const (
+	defaultLeaseTTL    = 5 * time.Minute
+	defaultMaxAttempts = 3
+)
+
+type CreateTaskInput struct {
+	SupplierID     int64
+	Type           adminplusdomain.ExtensionTaskType
+	Priority       int
+	MaxAttempts    int
+	AvailableAfter *time.Time
+	Payload        map[string]any
+}
+
+type ClaimTaskInput struct {
+	DeviceID string
+	Types    []adminplusdomain.ExtensionTaskType
+	LeaseTTL time.Duration
+}
+
+type HeartbeatInput struct {
+	TaskID     int64
+	DeviceID   string
+	LeaseToken string
+	LeaseTTL   time.Duration
+}
+
+type CompleteTaskInput struct {
+	TaskID     int64
+	DeviceID   string
+	LeaseToken string
+	Result     map[string]any
+}
+
+type FailTaskInput struct {
+	TaskID       int64
+	DeviceID     string
+	LeaseToken   string
+	ErrorCode    string
+	ErrorMessage string
+	RetryAfter   *time.Time
+}
+
+type TaskFilter struct {
+	SupplierID int64
+	Status     adminplusdomain.ExtensionTaskStatus
+	Type       adminplusdomain.ExtensionTaskType
+	Limit      int
+}
+
+type Repository interface {
+	CreateTask(ctx context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, error)
+	ClaimNextTask(ctx context.Context, now time.Time, types []adminplusdomain.ExtensionTaskType, lease Lease) (*adminplusdomain.ExtensionTask, error)
+	UpdateTask(ctx context.Context, task *adminplusdomain.ExtensionTask) (*adminplusdomain.ExtensionTask, error)
+	GetTask(ctx context.Context, id int64) (*adminplusdomain.ExtensionTask, error)
+	ListTasks(ctx context.Context, filter TaskFilter) ([]*adminplusdomain.ExtensionTask, error)
+}
+
+type Lease struct {
+	DeviceID  string
+	Token     string
+	ExpiresAt time.Time
+}
+
+type Service struct {
+	repo     Repository
+	now      func() time.Time
+	newToken func() (string, error)
+}
+
+func NewService(repo Repository) *Service {
+	return &Service{
+		repo:     repo,
+		now:      time.Now,
+		newToken: randomToken,
+	}
+}
+
+func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("EXTENSION_TASK_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if !in.Type.Valid() {
+		return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
+	}
+	maxAttempts := in.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+	availableAfter := s.now().UTC()
+	if in.AvailableAfter != nil {
+		availableAfter = in.AvailableAfter.UTC()
+	}
+	now := s.now().UTC()
+	return s.repo.CreateTask(ctx, &adminplusdomain.ExtensionTask{
+		SupplierID:     in.SupplierID,
+		Type:           in.Type,
+		Status:         adminplusdomain.ExtensionTaskStatusPending,
+		Priority:       in.Priority,
+		MaxAttempts:    maxAttempts,
+		AvailableAfter: availableAfter,
+		Payload:        in.Payload,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+}
+
+func (s *Service) ClaimTask(ctx context.Context, in ClaimTaskInput) (*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	deviceID := strings.TrimSpace(in.DeviceID)
+	if deviceID == "" {
+		return nil, badRequest("EXTENSION_DEVICE_ID_REQUIRED", "extension device id is required")
+	}
+	for _, taskType := range in.Types {
+		if !taskType.Valid() {
+			return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
+		}
+	}
+	now := s.now().UTC()
+	token, err := s.newToken()
+	if err != nil {
+		return nil, internalError("failed to generate extension task lease token")
+	}
+	task, err := s.repo.ClaimNextTask(ctx, now, in.Types, Lease{
+		DeviceID:  deviceID,
+		Token:     token,
+		ExpiresAt: now.Add(normalizeLeaseTTL(in.LeaseTTL)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, infraerrors.New(http.StatusNotFound, "EXTENSION_TASK_NOT_AVAILABLE", "no claimable extension task")
+	}
+	return task, nil
+}
+
+func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) (*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	task, err := s.requireLeasedTask(ctx, in.TaskID, in.DeviceID, in.LeaseToken)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	task.Status = adminplusdomain.ExtensionTaskStatusRunning
+	task.LastHeartbeatAt = &now
+	task.UpdatedAt = now
+	expiresAt := now.Add(normalizeLeaseTTL(in.LeaseTTL))
+	task.LeaseExpiresAt = &expiresAt
+	return s.repo.UpdateTask(ctx, task)
+}
+
+func (s *Service) CompleteTask(ctx context.Context, in CompleteTaskInput) (*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	task, err := s.requireLeasedTask(ctx, in.TaskID, in.DeviceID, in.LeaseToken)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	task.Status = adminplusdomain.ExtensionTaskStatusSucceeded
+	task.Result = in.Result
+	task.UpdatedAt = now
+	task.FinishedAt = &now
+	return s.repo.UpdateTask(ctx, task)
+}
+
+func (s *Service) FailTask(ctx context.Context, in FailTaskInput) (*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	task, err := s.requireLeasedTask(ctx, in.TaskID, in.DeviceID, in.LeaseToken)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	task.ErrorCode = trimLimit(in.ErrorCode, 80)
+	task.ErrorMessage = trimLimit(in.ErrorMessage, 1000)
+	task.UpdatedAt = now
+	if task.Attempts >= task.MaxAttempts {
+		task.Status = adminplusdomain.ExtensionTaskStatusFailed
+		task.FinishedAt = &now
+		return s.repo.UpdateTask(ctx, task)
+	}
+	task.Status = adminplusdomain.ExtensionTaskStatusPending
+	task.DeviceID = ""
+	task.LeaseToken = ""
+	task.LeaseExpiresAt = nil
+	task.LastHeartbeatAt = nil
+	task.AvailableAfter = now
+	if in.RetryAfter != nil {
+		task.AvailableAfter = in.RetryAfter.UTC()
+	}
+	return s.repo.UpdateTask(ctx, task)
+}
+
+func (s *Service) ListTasks(ctx context.Context, filter TaskFilter) ([]*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	if filter.SupplierID < 0 {
+		return nil, badRequest("EXTENSION_TASK_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if filter.Status != "" && !filter.Status.Valid() {
+		return nil, badRequest("EXTENSION_TASK_STATUS_INVALID", "invalid extension task status")
+	}
+	if filter.Type != "" && !filter.Type.Valid() {
+		return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
+	}
+	filter.Limit = normalizeLimit(filter.Limit)
+	return s.repo.ListTasks(ctx, filter)
+}
+
+func (s *Service) requireLeasedTask(ctx context.Context, taskID int64, deviceID string, leaseToken string) (*adminplusdomain.ExtensionTask, error) {
+	if taskID <= 0 {
+		return nil, badRequest("EXTENSION_TASK_ID_INVALID", "invalid extension task id")
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	leaseToken = strings.TrimSpace(leaseToken)
+	if deviceID == "" || leaseToken == "" {
+		return nil, badRequest("EXTENSION_TASK_LEASE_REQUIRED", "extension task lease is required")
+	}
+	task, err := s.repo.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.DeviceID != deviceID || task.LeaseToken != leaseToken {
+		return nil, infraerrors.New(http.StatusConflict, "EXTENSION_TASK_LEASE_MISMATCH", "extension task lease mismatch")
+	}
+	if task.LeaseExpiresAt == nil || task.LeaseExpiresAt.Before(s.now().UTC()) {
+		return nil, infraerrors.New(http.StatusConflict, "EXTENSION_TASK_LEASE_EXPIRED", "extension task lease expired")
+	}
+	if task.Status != adminplusdomain.ExtensionTaskStatusClaimed && task.Status != adminplusdomain.ExtensionTaskStatusRunning {
+		return nil, infraerrors.New(http.StatusConflict, "EXTENSION_TASK_NOT_RUNNING", "extension task is not running")
+	}
+	return task, nil
+}
+
+func normalizeLeaseTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		return defaultLeaseTTL
+	}
+	if ttl > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return ttl
+}
+
+func trimLimit(value string, limit int) string {
+	v := strings.TrimSpace(value)
+	if len(v) <= limit {
+		return v
+	}
+	return v[:limit]
+}
+
+func normalizeLimit(limit int) int {
+	if limit <= 0 {
+		return 200
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
+}
+
+func randomToken() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func badRequest(reason string, message string) error {
+	return infraerrors.New(http.StatusBadRequest, reason, message)
+}
+
+func internalError(message string) error {
+	return infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", message)
+}

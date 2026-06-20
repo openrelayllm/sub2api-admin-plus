@@ -91,18 +91,6 @@
             </div>
           </div>
 
-          <div class="flex items-center justify-between rounded-xl border border-gray-200 p-3 dark:border-dark-700">
-            <div>
-              <p class="text-sm font-medium text-gray-900 dark:text-white">
-                {{ t("setup.redis.enableTls") }}
-              </p>
-              <p class="text-xs text-gray-500 dark:text-dark-400">
-                {{ t("setup.redis.enableTlsHint") }}
-              </p>
-            </div>
-            <Toggle v-model="formData.redis.enable_tls" />
-          </div>
-
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="input-label">{{ t('setup.database.username') }}</label>
@@ -110,7 +98,7 @@
                 v-model="formData.database.user"
                 type="text"
                 class="input"
-                placeholder="postgres"
+                placeholder="root"
               />
             </div>
             <div>
@@ -131,7 +119,7 @@
                 v-model="formData.database.dbname"
                 type="text"
                 class="input"
-                placeholder="sub2api"
+                placeholder="sub2api_admin_plus"
               />
             </div>
             <div>
@@ -519,30 +507,20 @@ const installing = ref(false)
 const confirmPassword = ref('')
 const serviceReady = ref(false)
 
-// Default server port
-const getCurrentPort = (): number => {
-  const port = window.location.port
-  if (port) {
-    return parseInt(port, 10)
-  }
-
-  return window.location.protocol === 'https:' ? 443 : 80
-}
-
 const formData = reactive<InstallRequest>({
   database: {
-    host: 'localhost',
+    host: '127.0.0.1',
     port: 5432,
-    user: 'postgres',
+    user: 'root',
     password: '',
-    dbname: 'sub2api',
+    dbname: 'sub2api_admin_plus',
     sslmode: 'disable'
   },
   redis: {
-    host: 'localhost',
+    host: '127.0.0.1',
     port: 6379,
     password: '',
-    db: 0,
+    db: 1,
     enable_tls: false
   },
   admin: {
@@ -551,7 +529,7 @@ const formData = reactive<InstallRequest>({
   },
   server: {
     host: '0.0.0.0',
-    port: getCurrentPort(), // Use current port from browser
+    port: 8080,
     mode: 'release'
   }
 })

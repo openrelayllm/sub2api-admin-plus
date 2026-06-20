@@ -187,11 +187,11 @@ export default {
 
   // Setup Wizard
   setup: {
-    title: 'Sub2API 安装向导',
-    description: '配置您的 Sub2API 实例',
+    title: 'Sub2API Admin Plus 安装向导',
+    description: '配置您的 Admin Plus 自动化运营实例',
     database: {
       title: '数据库配置',
-      description: '连接到您的 PostgreSQL 数据库',
+      description: '连接到 Admin Plus 独立 PostgreSQL 数据库',
       host: '主机',
       port: '端口',
       username: '用户名',
@@ -219,7 +219,7 @@ export default {
     },
     admin: {
       title: '管理员账户',
-      description: '创建您的管理员账户',
+      description: '创建本地开发管理员账户',
       email: '邮箱',
       password: '密码',
       confirmPassword: '确认密码',
@@ -229,7 +229,7 @@ export default {
     },
     ready: {
       title: '准备安装',
-      description: '检查您的配置并完成安装',
+      description: '检查 Admin Plus 配置并完成安装',
       database: '数据库',
       redis: 'Redis',
       adminEmail: '管理员邮箱'
@@ -5582,7 +5582,7 @@ export default {
     // Settings
     settings: {
       title: '系统设置',
-      description: '管理注册、邮箱验证、默认值和 SMTP 设置',
+      description: '管理 Admin Plus 基础站点信息与自动化集成密钥',
       tabs: {
         general: '通用设置',
         agreement: '登录条款',
@@ -5968,10 +5968,10 @@ export default {
           '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
         siteName: '站点名称',
         siteNameHint: '显示在邮件和页面标题中',
-        siteNamePlaceholder: 'Sub2API',
+        siteNamePlaceholder: 'Sub2API Admin Plus',
         siteSubtitle: '站点副标题',
         siteSubtitleHint: '显示在登录和注册页面',
-        siteSubtitlePlaceholder: '订阅转 API 转换平台',
+        siteSubtitlePlaceholder: '自动化运营控制台',
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"和"导入到 CC Switch"功能，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
@@ -6259,7 +6259,7 @@ export default {
         fromEmail: '发件人邮箱',
         fromEmailPlaceholder: "noreply{'@'}example.com",
         fromName: '发件人名称',
-        fromNamePlaceholder: 'Sub2API',
+        fromNamePlaceholder: 'Sub2API Admin Plus',
         useTls: '使用 TLS',
         useTlsHint: '为 SMTP 连接启用 TLS 加密'
       },

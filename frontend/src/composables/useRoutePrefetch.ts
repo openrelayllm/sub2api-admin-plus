@@ -20,18 +20,10 @@ type ComponentImportFn = () => Promise<unknown>
  * 只存储路由路径，不存储 import 函数，避免打包问题
  */
 const PREFETCH_ADJACENCY: Record<string, string[]> = {
-  // Admin routes - 预加载最常访问的相邻页面
-  '/admin/dashboard': ['/admin/accounts', '/admin/users'],
-  '/admin/accounts': ['/admin/dashboard', '/admin/users'],
-  '/admin/users': ['/admin/groups', '/admin/dashboard'],
-  '/admin/groups': ['/admin/subscriptions', '/admin/users'],
-  '/admin/subscriptions': ['/admin/groups', '/admin/redeem'],
-  // User routes
-  '/dashboard': ['/keys', '/usage'],
-  '/keys': ['/dashboard', '/usage'],
-  '/usage': ['/keys', '/redeem'],
-  '/redeem': ['/usage', '/profile'],
-  '/profile': ['/dashboard', '/keys']
+  // Admin Plus current routes only. 用户端、支付、旧后台页面属于 dead 路径。
+  '/admin/dashboard': ['/admin/ops', '/admin/settings'],
+  '/admin/ops': ['/admin/dashboard', '/admin/settings'],
+  '/admin/settings': ['/admin/dashboard', '/admin/ops']
 }
 
 /**
@@ -197,6 +189,6 @@ export function useRoutePrefetch(router?: Router) {
   }
 }
 
-// 兼容旧测试的导出
+// 兼容旧测试的导出；Admin Plus 已不保留用户端预加载表。
 export const _adminPrefetchMap = PREFETCH_ADJACENCY
-export const _userPrefetchMap = PREFETCH_ADJACENCY
+export const _userPrefetchMap: Record<string, string[]> = {}
