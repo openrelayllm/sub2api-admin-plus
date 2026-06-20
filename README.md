@@ -20,6 +20,7 @@ Implemented:
 - Supplier account/key child bindings to local Sub2API `accounts.id`.
 - Rate, balance, health, promotion, billing, reconciliation, extension task, and action recommendation APIs.
 - OpenAI-compatible Responses health probe for bound local OpenAI accounts, defaulting to `gpt-5.5`.
+- Feishu/Lark webhook notifications for supplier balance events.
 - Scheduler API and page for generating idempotent Chrome extension tasks.
 - Chrome extension task result ingestion into rate, balance, promotion, health, and billing tables.
 - Browser login credentials encrypted at rest and exposed only through a valid extension task lease.
@@ -131,6 +132,17 @@ The E2E script creates `e2e-*` rows in PostgreSQL, temporary Redis runtime keys,
 `POST /api/v1/admin-plus/health/probe` probes a supplier account child binding through the local Sub2API `accounts` row. The frontend never accepts or displays an API key. The backend reads the bound account credentials, calls OpenAI-compatible `/v1/responses` with streaming enabled, records TTFT and total latency, then persists a health sample and derived events.
 
 The default probe model is `gpt-5.5`. Real external probing requires a valid OpenAI-compatible key and base URL in the bound Sub2API account. Without that, only local fixture verification can pass.
+
+## Balance Notifications
+
+Supplier balance events can be sent to a Feishu/Lark custom bot:
+
+```bash
+export ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_URL='https://open.feishu.cn/open-apis/bot/v2/hook/...'
+export ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_SECRET='optional-signature-secret'
+```
+
+Notifications are emitted only when a balance event is created, for example `low_balance`, `depleted`, or `recovered`. Delivery failure is logged and does not roll back the balance snapshot or event.
 
 ## Chrome Extension
 

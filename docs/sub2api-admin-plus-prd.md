@@ -483,6 +483,7 @@ MVP 不做：
 - 可以配置余额阈值和预计耗尽时间阈值。
 - 余额不足时生成告警并显示影响的本地账号、模型和客户分组。
 - 余额不足时可以生成暂停、降权或切换建议。
+- MVP 余额事件通知优先使用飞书自定义机器人 Webhook。
 
 ### 8.6 费率变化自动发现
 
@@ -1926,6 +1927,10 @@ MVP 必须满足：
 - 新增供应商不要求 Admin API Key，支持记录浏览器登录账号、密码、临时 token 的配置状态和脱敏展示。
 - 完成费率快照、费率变更事件、事件确认。
 - 完成余额快照、余额事件、低余额/耗尽/恢复规则。
+- 完成余额事件飞书通知：
+  - `ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_URL` 启用飞书自定义机器人通知。
+  - `ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_SECRET` 可选启用飞书签名。
+  - 通知失败只记录日志，不回滚余额快照或余额事件。
 - 完成优惠事件、无余额供应商充值建议规则。
 - 完成健康样本、首 token/总耗时/错误/并发饱和事件。
 - 完成 OpenAI-compatible Responses 健康探测接口和前端入口：
@@ -1990,7 +1995,7 @@ MVP 必须满足：
 - 第三方供应商 Sub2API/New API Admin API client。
 - Sub2API Redis 窗口成本 adapter。
 - 每日自动账单导出和定时对账。
-- 通知通道、审计日志和动作执行闭环。
+- 多通道通知、通知审计日志和动作执行闭环。
 - 源站 Anthropic/Gemini 账号的额度/限速/模型探测运营适配。
 - 真实外部 OpenAI 账号的生产可用性探测验证；当前只完成 OpenAI-compatible 请求链路和本地 fake upstream E2E，不代表已有生产 Key 可用。
 
