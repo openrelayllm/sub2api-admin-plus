@@ -772,7 +772,7 @@ POST /api/v1/admin-plus/suppliers/:id/keys/provision
 }
 ```
 
-当前已落地的是同步返回的基础链路。第三方 Key 明文只用于创建本地 Sub2API 账号，不在接口响应、`provision_response` 或列表接口中回显。幂等 run、失败补偿和人工修复入口仍是后续工作。
+当前已落地的是同步返回的基础链路。第三方 Key 明文只用于创建本地 Sub2API 账号，不在接口响应、`provision_response` 或列表接口中回显。`POST /api/v1/admin-plus/suppliers/:id/keys/provision` 已接入 `Idempotency-Key` 去重和结果重放；未携带 key 的旧客户端仍依赖供应商分组唯一约束兜底。失败补偿、人工修复入口和操作审计仍是后续工作。
 
 ### 14.7 插件上报供应商会话
 
@@ -848,6 +848,13 @@ GET  /api/v1/admin-plus/suppliers/:id/keys
 - 操作日期或显式 run id
 
 不能只用页面按钮点击时间。否则插件重试可能重复创建第三方密钥。
+
+当前 `keys/provision` 已接入通用 `idempotency_records`：
+
+- 同一个 `Idempotency-Key` 和相同 payload 会重放首次成功结果，并返回 `X-Idempotency-Replayed: true`。
+- 同一个 `Idempotency-Key` 但 payload 不同会返回冲突。
+- 并发或短时间重复提交不会二次调用供应商创建 Key API。
+- 同一供应商分组只允许存在一个 `provisioning` / `bound` / `manual_secret_required` Key，防止未携带幂等键的旧客户端重复创建。
 
 一致性策略：
 

@@ -94,6 +94,68 @@ func TestServiceProvisionCreatesProviderKeyLocalAccountAndBinding(t *testing.T) 
 	}}, keyAdapter.calls)
 }
 
+func TestServiceProvisionRejectsGroupWithExistingBoundKeyBeforeProviderCall(t *testing.T) {
+	repo := NewMemoryRepository()
+	repo.PutSupplier(&adminplusdomain.Supplier{
+		ID:            7,
+		Name:          "Relay",
+		Type:          adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus: adminplusdomain.SupplierRuntimeStatusMonitorOnly,
+		HealthStatus:  adminplusdomain.SupplierHealthStatusNormal,
+	})
+	repo.PutGroup(&adminplusdomain.SupplierGroup{
+		ID:              10,
+		SupplierID:      7,
+		ExternalGroupID: "88",
+		Name:            "Low Cost",
+		ProviderFamily:  "openai",
+		Status:          adminplusdomain.SupplierGroupStatusActive,
+	})
+	_, err := repo.CreateKey(context.Background(), &adminplusdomain.SupplierKey{
+		SupplierID:      7,
+		SupplierGroupID: 10,
+		ExternalGroupID: "88",
+		ExternalKeyID:   "99",
+		Name:            "existing",
+		KeyFingerprint:  "fingerprint",
+		KeyLast4:        "cret",
+		Status:          adminplusdomain.SupplierKeyStatusBound,
+		ProviderFamily:  "openai",
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	keyAdapter := &stubKeyAdapter{
+		result: &ports.ProviderKeyResult{
+			SupplierID:      7,
+			ExternalGroupID: "88",
+			ExternalKeyID:   "100",
+			Name:            "new-key",
+			Secret:          "sk-provider-secret",
+		},
+	}
+	svc := NewService(repo, &stubSessionReader{}, keyAdapter, &stubLocalAccountCreator{})
+
+	result, err := svc.Provision(context.Background(), ProvisionKeyInput{
+		SupplierID:              7,
+		SupplierGroupID:         10,
+		Name:                    "new-key",
+		LocalAccountPlatform:    service.PlatformOpenAI,
+		LocalAccountName:        "local-upstream",
+		LocalAccountBaseURL:     "https://relay.example.com/v1",
+		BalanceCurrency:         "USD",
+		RuntimeStatus:           adminplusdomain.SupplierRuntimeStatusMonitorOnly,
+		HealthStatus:            adminplusdomain.SupplierHealthStatusNormal,
+		LocalAccountConcurrency: 1,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SUPPLIER_GROUP_KEY_ALREADY_BOUND")
+	require.Empty(t, keyAdapter.calls)
+}
+
 type stubSessionReader struct {
 	input ports.SessionProbeInput
 }

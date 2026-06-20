@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	sub2apiprovider "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
@@ -601,6 +604,71 @@ func TestSupplierKeyProvisionCreatesProviderKeyLocalAccountAndBinding(t *testing
 	require.NotContains(t, listed.Body.String(), "sk-provider-secret")
 }
 
+func TestSupplierKeyProvisionReplaysWithIdempotencyKey(t *testing.T) {
+	repo := newOperationsIdempotencyRepository()
+	cfg := service.DefaultIdempotencyConfig()
+	service.SetDefaultIdempotencyCoordinator(service.NewIdempotencyCoordinator(repo, cfg))
+	t.Cleanup(func() {
+		service.SetDefaultIdempotencyCoordinator(nil)
+	})
+
+	var providerCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		require.Equal(t, http.MethodPost, req.Method)
+		require.Equal(t, "/api/v1/api-keys", req.URL.Path)
+		providerCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"id": 99,
+				"name": "ops-key",
+				"key": "sk-provider-secret",
+				"group_id": 10,
+				"status": "active"
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	router := newOperationsHandlerTestRouterWithSupplierURLs(server.URL, server.URL)
+	created := performJSON(t, router, http.MethodPost, "/suppliers/1/browser-sessions", `{
+		"origin": "`+server.URL+`",
+		"session_bundle": {
+			"origin": "`+server.URL+`",
+			"tokens": {"access_token": "secret-token"},
+			"required_headers": {"cookie": "sid=secret-cookie"},
+			"context": {"api_base_url": "`+server.URL+`"}
+		}
+	}`)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+
+	payload := `{
+		"supplier_group_id": 10,
+		"name": "ops-key",
+		"quota_usd": 25,
+		"local_account_platform": "openai",
+		"local_account_name": "local-upstream",
+		"local_account_base_url": "` + server.URL + `/v1",
+		"local_account_concurrency": 3,
+		"local_account_priority": 40,
+		"balance_currency": "USD"
+	}`
+	first := performJSONWithHeaders(t, router, http.MethodPost, "/suppliers/1/keys/provision", payload, map[string]string{
+		"Idempotency-Key": "supplier-1-group-10-ops-key",
+	})
+	require.Equal(t, http.StatusCreated, first.Code, first.Body.String())
+	require.Empty(t, first.Header().Get("X-Idempotency-Replayed"))
+
+	second := performJSONWithHeaders(t, router, http.MethodPost, "/suppliers/1/keys/provision", payload, map[string]string{
+		"Idempotency-Key": "supplier-1-group-10-ops-key",
+	})
+	require.Equal(t, http.StatusCreated, second.Code, second.Body.String())
+	require.Equal(t, "true", second.Header().Get("X-Idempotency-Replayed"))
+	require.Equal(t, 1, providerCalls)
+	require.Contains(t, second.Body.String(), `"external_key_id":"99"`)
+	require.NotContains(t, second.Body.String(), "sk-provider-secret")
+}
+
 func TestExtensionHandlerManifestAndPackage(t *testing.T) {
 	router := newOperationsHandlerTestRouter()
 
@@ -835,9 +903,17 @@ func newOperationsHandlerTestRouterWithSupplierURLs(dashboardURL string, apiBase
 
 func performJSON(t *testing.T, router *gin.Engine, method string, path string, payload string) *httptest.ResponseRecorder {
 	t.Helper()
+	return performJSONWithHeaders(t, router, method, path, payload, nil)
+}
+
+func performJSONWithHeaders(t *testing.T, router *gin.Engine, method string, path string, payload string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(payload))
 	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	router.ServeHTTP(rec, req)
 	return rec
 }
@@ -849,6 +925,153 @@ type operationsRateRepository struct {
 	nextEventID    int64
 	snapshots      []*adminplusdomain.RateSnapshot
 	events         []*adminplusdomain.RateChangeEvent
+}
+
+type operationsIdempotencyRepository struct {
+	mu     sync.Mutex
+	nextID int64
+	data   map[string]*service.IdempotencyRecord
+}
+
+func newOperationsIdempotencyRepository() *operationsIdempotencyRepository {
+	return &operationsIdempotencyRepository{
+		nextID: 1,
+		data:   make(map[string]*service.IdempotencyRecord),
+	}
+}
+
+func (r *operationsIdempotencyRepository) CreateProcessing(_ context.Context, record *service.IdempotencyRecord) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := r.key(record.Scope, record.IdempotencyKeyHash)
+	if _, ok := r.data[key]; ok {
+		return false, nil
+	}
+	cp := cloneOperationsIdempotencyRecord(record)
+	cp.ID = r.nextID
+	r.nextID++
+	r.data[key] = cp
+	record.ID = cp.ID
+	return true, nil
+}
+
+func (r *operationsIdempotencyRepository) GetByScopeAndKeyHash(_ context.Context, scope string, keyHash string) (*service.IdempotencyRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return cloneOperationsIdempotencyRecord(r.data[r.key(scope, keyHash)]), nil
+}
+
+func (r *operationsIdempotencyRepository) TryReclaim(_ context.Context, id int64, fromStatus string, now time.Time, newLockedUntil time.Time, newExpiresAt time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, record := range r.data {
+		if record.ID != id {
+			continue
+		}
+		if record.Status != fromStatus {
+			return false, nil
+		}
+		if record.LockedUntil != nil && record.LockedUntil.After(now) {
+			return false, nil
+		}
+		record.Status = service.IdempotencyStatusProcessing
+		record.LockedUntil = &newLockedUntil
+		record.ExpiresAt = newExpiresAt
+		record.ErrorReason = nil
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *operationsIdempotencyRepository) ExtendProcessingLock(_ context.Context, id int64, requestFingerprint string, newLockedUntil time.Time, newExpiresAt time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, record := range r.data {
+		if record.ID != id {
+			continue
+		}
+		if record.Status != service.IdempotencyStatusProcessing || record.RequestFingerprint != requestFingerprint {
+			return false, nil
+		}
+		record.LockedUntil = &newLockedUntil
+		record.ExpiresAt = newExpiresAt
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *operationsIdempotencyRepository) MarkSucceeded(_ context.Context, id int64, responseStatus int, responseBody string, expiresAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, record := range r.data {
+		if record.ID != id {
+			continue
+		}
+		record.Status = service.IdempotencyStatusSucceeded
+		record.LockedUntil = nil
+		record.ResponseStatus = &responseStatus
+		record.ResponseBody = &responseBody
+		record.ExpiresAt = expiresAt
+		return nil
+	}
+	return errors.New("idempotency record not found")
+}
+
+func (r *operationsIdempotencyRepository) MarkFailedRetryable(_ context.Context, id int64, errorReason string, lockedUntil time.Time, expiresAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, record := range r.data {
+		if record.ID != id {
+			continue
+		}
+		record.Status = service.IdempotencyStatusFailedRetryable
+		record.LockedUntil = &lockedUntil
+		record.ExpiresAt = expiresAt
+		record.ErrorReason = &errorReason
+		return nil
+	}
+	return errors.New("idempotency record not found")
+}
+
+func (r *operationsIdempotencyRepository) DeleteExpired(_ context.Context, now time.Time, _ int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var deleted int64
+	for key, record := range r.data {
+		if !record.ExpiresAt.After(now) {
+			delete(r.data, key)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func (r *operationsIdempotencyRepository) key(scope string, keyHash string) string {
+	return scope + "|" + keyHash
+}
+
+func cloneOperationsIdempotencyRecord(in *service.IdempotencyRecord) *service.IdempotencyRecord {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.ResponseStatus != nil {
+		value := *in.ResponseStatus
+		out.ResponseStatus = &value
+	}
+	if in.ResponseBody != nil {
+		value := *in.ResponseBody
+		out.ResponseBody = &value
+	}
+	if in.ErrorReason != nil {
+		value := *in.ErrorReason
+		out.ErrorReason = &value
+	}
+	if in.LockedUntil != nil {
+		value := *in.LockedUntil
+		out.LockedUntil = &value
+	}
+	return &out
 }
 
 type operationsLocalAccountCreator struct{}

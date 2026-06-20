@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS admin_plus_supplier_keys (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_plus_supplier_keys_fingerprint
     ON admin_plus_supplier_keys(supplier_id, key_fingerprint);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_plus_supplier_keys_one_active_group
+    ON admin_plus_supplier_keys(supplier_id, supplier_group_id)
+    WHERE status IN ('provisioning', 'bound', 'manual_secret_required');
+
 CREATE INDEX IF NOT EXISTS idx_admin_plus_supplier_keys_supplier_status
     ON admin_plus_supplier_keys(supplier_id, status, updated_at DESC, id DESC);
 

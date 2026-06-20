@@ -68,9 +68,32 @@ func (r *MemoryRepository) GetGroup(_ context.Context, supplierID int64, groupID
 	return cloneGroup(group), nil
 }
 
+func (r *MemoryRepository) FindActiveByGroup(_ context.Context, supplierID int64, groupID int64) (*adminplusdomain.SupplierKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest *adminplusdomain.SupplierKey
+	for _, key := range r.keys {
+		if key.SupplierID != supplierID || key.SupplierGroupID != groupID {
+			continue
+		}
+		if !isBlockingKeyStatus(key.Status) {
+			continue
+		}
+		if latest == nil || key.ID > latest.ID {
+			latest = key
+		}
+	}
+	return cloneKey(latest), nil
+}
+
 func (r *MemoryRepository) CreateKey(_ context.Context, key *adminplusdomain.SupplierKey) (*adminplusdomain.SupplierKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.keys {
+		if existing.SupplierID == key.SupplierID && existing.SupplierGroupID == key.SupplierGroupID && isBlockingKeyStatus(existing.Status) {
+			return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_GROUP_KEY_ALREADY_BOUND", "supplier group already has a bound or provisioning key")
+		}
+	}
 	cp := cloneKey(key)
 	cp.ID = r.nextKeyID
 	r.nextKeyID++
@@ -95,6 +118,15 @@ func (r *MemoryRepository) UpdateKeyAfterLocalBind(_ context.Context, keyID int6
 	key.ErrorCode = errorCode
 	key.ErrorMessage = errorMessage
 	return cloneKey(key), nil
+}
+
+func isBlockingKeyStatus(status adminplusdomain.SupplierKeyStatus) bool {
+	switch status {
+	case adminplusdomain.SupplierKeyStatusProvisioning, adminplusdomain.SupplierKeyStatusBound, adminplusdomain.SupplierKeyStatusManualSecretRequired:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *MemoryRepository) CreateBinding(_ context.Context, account *adminplusdomain.SupplierAccount) (*adminplusdomain.SupplierAccount, error) {

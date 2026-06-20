@@ -141,7 +141,8 @@ admin_plus_supplier_accounts       # 账号/Key 子级，绑定第三方 Key 和
 - `GET /api/v1/admin-plus/suppliers/:id/groups` 读取分组事实表。
 - `GET /api/v1/admin-plus/suppliers/:id/keys` 读取该供应商已开通 Key，并按 `supplier_group_id` 映射到分组行。
 - 未绑定分组行通过 `POST /api/v1/admin-plus/suppliers/:id/keys/provision` 创建第三方 Key、同步创建本地 Sub2API 账号，并写入 `admin_plus_supplier_keys` 和 `admin_plus_supplier_accounts`。
-- 独立账号/Key 绑定页只作为失败修复、审计和历史绑定入口，不再作为新增主路径。
+- `keys/provision` 已接入通用 `Idempotency-Key` 去重和结果重放；同一供应商分组还通过 `admin_plus_supplier_keys` 唯一索引限制只能存在一个 `provisioning` / `bound` / `manual_secret_required` Key。
+- 独立账号/Key 绑定页当前只读展示已生成绑定，用作审计和历史查看；失败修复入口后续单独设计，不在该页保留创建、编辑或删除按钮。
 
 当前已落地费率快照与变更事件最小闭环：
 
@@ -723,7 +724,7 @@ MVP 1 优先实现：
 
 - 管理接口必须通过 Sub2API 管理员身份校验。
 - 插件接口使用短期设备 token。
-- 写操作必须带幂等键或业务去重键。
+- 写操作必须带幂等键或业务去重键；当前 `keys/provision` 使用 `Idempotency-Key` 和同分组唯一 Key 守卫。
 - 执行动作必须记录审计。
 
 ## 11. 定时任务

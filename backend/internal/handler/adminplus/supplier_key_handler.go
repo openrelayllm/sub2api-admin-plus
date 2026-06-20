@@ -1,6 +1,7 @@
 package adminplus
 
 import (
+	"context"
 	"net/http"
 
 	supplierkeysapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/supplierkeys"
@@ -46,7 +47,7 @@ func (h *SupplierKeyHandler) Provision(c *gin.Context) {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
 	}
-	result, err := h.service.Provision(c.Request.Context(), supplierkeysapp.ProvisionKeyInput{
+	input := supplierkeysapp.ProvisionKeyInput{
 		SupplierID:                 supplierID,
 		SupplierGroupID:            req.SupplierGroupID,
 		Name:                       req.Name,
@@ -64,14 +65,9 @@ func (h *SupplierKeyHandler) Provision(c *gin.Context) {
 		BalanceThresholdCents:      req.BalanceThresholdCents,
 		BalanceCents:               req.BalanceCents,
 		BalanceCurrency:            req.BalanceCurrency,
-	})
-	if response.ErrorFrom(c, err) {
-		return
 	}
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
+	executeAdminPlusIdempotentJSON(c, "admin-plus.supplier-key.provision", input, 0, http.StatusCreated, func(ctx context.Context) (any, error) {
+		return h.service.Provision(ctx, input)
 	})
 }
 

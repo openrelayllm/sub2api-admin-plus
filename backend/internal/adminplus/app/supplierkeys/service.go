@@ -49,6 +49,7 @@ type ListFilter struct {
 type Repository interface {
 	GetSupplier(ctx context.Context, supplierID int64) (*adminplusdomain.Supplier, error)
 	GetGroup(ctx context.Context, supplierID int64, groupID int64) (*adminplusdomain.SupplierGroup, error)
+	FindActiveByGroup(ctx context.Context, supplierID int64, groupID int64) (*adminplusdomain.SupplierKey, error)
 	CreateKey(ctx context.Context, key *adminplusdomain.SupplierKey) (*adminplusdomain.SupplierKey, error)
 	UpdateKeyAfterLocalBind(ctx context.Context, keyID int64, localAccount *service.Account, status adminplusdomain.SupplierKeyStatus, errorCode string, errorMessage string) (*adminplusdomain.SupplierKey, error)
 	CreateBinding(ctx context.Context, account *adminplusdomain.SupplierAccount) (*adminplusdomain.SupplierAccount, error)
@@ -111,6 +112,13 @@ func (s *Service) Provision(ctx context.Context, in ProvisionKeyInput) (*Provisi
 	}
 	if group.Status != adminplusdomain.SupplierGroupStatusActive {
 		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_GROUP_NOT_ACTIVE", "supplier group is not active")
+	}
+	existing, err := s.repo.FindActiveByGroup(ctx, normalized.SupplierID, group.ID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_GROUP_KEY_ALREADY_BOUND", "supplier group already has a bound or provisioning key")
 	}
 	input, err := s.session.DecryptedProbeInput(ctx, normalized.SupplierID)
 	if err != nil {
@@ -180,10 +188,7 @@ func (s *Service) Provision(ctx context.Context, in ProvisionKeyInput) (*Provisi
 		SkipMixedChannelCheck: true,
 	})
 	if localErr != nil {
-		updated, updateErr := s.repo.UpdateKeyAfterLocalBind(ctx, savedKey.ID, nil, adminplusdomain.SupplierKeyStatusFailed, "LOCAL_ACCOUNT_CREATE_FAILED", localErr.Error())
-		if updateErr == nil {
-			savedKey = updated
-		}
+		_, _ = s.repo.UpdateKeyAfterLocalBind(ctx, savedKey.ID, nil, adminplusdomain.SupplierKeyStatusFailed, "LOCAL_ACCOUNT_CREATE_FAILED", localErr.Error())
 		return nil, infraerrors.New(http.StatusBadGateway, "LOCAL_SUB2API_ACCOUNT_CREATE_FAILED", "failed to create local Sub2API account").WithCause(localErr)
 	}
 
@@ -209,10 +214,7 @@ func (s *Service) Provision(ctx context.Context, in ProvisionKeyInput) (*Provisi
 	}
 	savedBinding, err := s.repo.CreateBinding(ctx, binding)
 	if err != nil {
-		updated, updateErr := s.repo.UpdateKeyAfterLocalBind(ctx, savedKey.ID, localAccount, adminplusdomain.SupplierKeyStatusFailed, "SUPPLIER_ACCOUNT_BIND_FAILED", err.Error())
-		if updateErr == nil {
-			savedKey = updated
-		}
+		_, _ = s.repo.UpdateKeyAfterLocalBind(ctx, savedKey.ID, localAccount, adminplusdomain.SupplierKeyStatusFailed, "SUPPLIER_ACCOUNT_BIND_FAILED", err.Error())
 		return nil, err
 	}
 	savedKey, err = s.repo.UpdateKeyAfterLocalBind(ctx, savedKey.ID, localAccount, adminplusdomain.SupplierKeyStatusBound, "", "")

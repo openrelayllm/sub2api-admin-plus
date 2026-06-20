@@ -54,6 +54,30 @@ func (r *SQLRepository) GetGroup(ctx context.Context, supplierID int64, groupID 
 	return scanSupplierGroup(row)
 }
 
+func (r *SQLRepository) FindActiveByGroup(ctx context.Context, supplierID int64, groupID int64) (*adminplusdomain.SupplierKey, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, supplier_id, supplier_group_id, external_group_id, external_key_id,
+			name, key_fingerprint, key_last4, status, provider_family,
+			local_sub2api_account_id, local_account_name, local_account_platform, local_account_type,
+			provision_request, provision_response, error_code, error_message,
+			created_at, updated_at
+		FROM admin_plus_supplier_keys
+		WHERE supplier_id = $1
+			AND supplier_group_id = $2
+			AND status IN ('provisioning', 'bound', 'manual_secret_required')
+		ORDER BY id DESC
+		LIMIT 1
+	`, supplierID, groupID)
+	item, err := scanSupplierKey(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return item, err
+}
+
 func (r *SQLRepository) CreateKey(ctx context.Context, key *adminplusdomain.SupplierKey) (*adminplusdomain.SupplierKey, error) {
 	if r == nil || r.db == nil {
 		return nil, dbNotConfigured()
@@ -95,7 +119,11 @@ func (r *SQLRepository) CreateKey(ctx context.Context, key *adminplusdomain.Supp
 		key.CreatedAt,
 		key.UpdatedAt,
 	)
-	return scanSupplierKey(row)
+	item, err := scanSupplierKey(row)
+	if err != nil {
+		return nil, translateKeyCreateError(err)
+	}
+	return item, nil
 }
 
 func (r *SQLRepository) UpdateKeyAfterLocalBind(ctx context.Context, keyID int64, localAccount *service.Account, status adminplusdomain.SupplierKeyStatus, errorCode string, errorMessage string) (*adminplusdomain.SupplierKey, error) {
@@ -456,6 +484,17 @@ func translateBindingCreateError(err error) error {
 	if strings.Contains(message, "admin_plus_supplier_accounts_unique_local_account") ||
 		strings.Contains(message, "admin_plus_supplier_accounts_supplier_id_local_sub2api_account_id_key") {
 		return infraerrors.New(http.StatusConflict, "SUPPLIER_ACCOUNT_ALREADY_BOUND", "local Sub2API account is already bound to this supplier")
+	}
+	return err
+}
+
+func translateKeyCreateError(err error) error {
+	message := err.Error()
+	if strings.Contains(message, "idx_admin_plus_supplier_keys_one_active_group") {
+		return infraerrors.New(http.StatusConflict, "SUPPLIER_GROUP_KEY_ALREADY_BOUND", "supplier group already has a bound or provisioning key")
+	}
+	if strings.Contains(message, "idx_admin_plus_supplier_keys_fingerprint") {
+		return infraerrors.New(http.StatusConflict, "SUPPLIER_KEY_ALREADY_EXISTS", "supplier key already exists for this supplier")
 	}
 	return err
 }
