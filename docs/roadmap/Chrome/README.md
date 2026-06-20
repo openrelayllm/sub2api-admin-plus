@@ -978,6 +978,8 @@ POST /api/v1/admin-plus/suppliers/:id/session/revoke
 GET  /api/v1/admin-plus/suppliers/:id/capabilities
 ```
 
+插件侧旧任务类型中的 `fetch_rates`、`fetch_balance`、`fetch_promotions`、`fetch_usage_bills` 只保留为兼容语义。当前主路径是插件上报供应商会话，后端 Provider Adapter 再读取余额、分组、费率等业务数据；插件不得解析或上报业务费率作为主事实源。
+
 说明：
 
 - 当前主路径通过 `capture_supplier_session` 短租约任务上报会话包，插件完成任务时把 `session_bundle` 放在 `complete.result.session_bundle`；后端 ingest 会删除明文、加密保存，并在任务结果中只保留摘要。

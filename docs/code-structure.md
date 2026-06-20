@@ -148,6 +148,7 @@ POST  /api/v1/admin-plus/rates/snapshots
 GET   /api/v1/admin-plus/rates/snapshots
 GET   /api/v1/admin-plus/rates/events
 PATCH /api/v1/admin-plus/rates/events/:id/ack
+POST  /api/v1/admin-plus/suppliers/:id/rates/sync
 ```
 
 当前运行时使用 `SQLRepository` 持久化到 Admin Plus 自有表：
@@ -157,7 +158,7 @@ admin_plus_rate_snapshots
 admin_plus_rate_change_events
 ```
 
-费率监控当前只提供统一录入和查询入口，不直接实现真实抓取器。Sub2API/New API 适配器、Chrome 插件、手工导入和后续 10 分钟调度任务都应调用 `rates.Service.RecordSnapshot`，由同一业务规则比较上一条可比快照并生成变更事件。
+费率监控的事实源是 `rates.Service.RecordSnapshot`。当前 Sub2API 同源供应商已支持通过已保存浏览器会话执行 `rates.Service.SyncFromSession`，由后端 Provider Adapter 读取供应商用户侧 API 并归一化后写入快照。Chrome 插件不解析费率，旧 `fetch_rates` 任务仅作为兼容路径；手工导入和后续 10 分钟调度任务也应调用同一服务，由同一业务规则比较上一条可比快照并生成变更事件。
 
 费率可比维度：
 

@@ -367,6 +367,14 @@ flowchart TD
 
 ### 9.4 获取费率流程
 
+当前主路径已经落地为后端 Provider Adapter 读取：
+
+```text
+POST /api/v1/admin-plus/suppliers/:id/rates/sync
+```
+
+该接口只使用 Admin Plus 已保存并解密后的供应商浏览器会话，由 `Sub2APIProviderAdapter.ReadRates(session)` 调用供应商用户侧受限 API，归一化为 `model / billing_mode / price_item / unit / currency / price_micros`，再交给 `rates.Service.RecordSnapshot` 写入 `admin_plus_rate_snapshots` 和 `admin_plus_rate_change_events`。旧插件任务 `fetch_rates` 仅作为兼容路径，不作为费率同步主链路继续增强。
+
 ```mermaid
 flowchart TD
   A[触发费率采集] --> B{供应商会话是否有效}
