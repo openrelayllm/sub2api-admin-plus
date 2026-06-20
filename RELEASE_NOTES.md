@@ -13,6 +13,7 @@
 - 新增本地 Sub2API Redis 只读适配，支持读取 `concurrency:account:*`、`wait:account:*` 和 `temp_unsched:account:*`。
 - 新增 OpenAI-compatible Responses 健康探测接口 `/api/v1/admin-plus/health/probe`，通过绑定供应商账号/本地 API Key 发起真实探测并记录样本和事件。
 - 前端健康页面支持选择供应商账号/Key 一键探测，不在页面录入或展示 API Key。
+- 新增供应商余额事件飞书/Lark 自定义机器人通知，支持可选签名密钥，通知失败不回滚余额快照或事件。
 
 ### 更新
 
