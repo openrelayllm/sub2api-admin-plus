@@ -35,6 +35,34 @@ func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, b
 	return NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType)
 }
 
+// ProvideAdminPlusAuthService wires only the authentication dependencies used by Admin Plus.
+func ProvideAdminPlusAuthService(
+	entClient *dbent.Client,
+	userRepo UserRepository,
+	refreshTokenCache RefreshTokenCache,
+	cfg *config.Config,
+	settingService *SettingService,
+	emailService *EmailService,
+	turnstileService *TurnstileService,
+	emailQueueService *EmailQueueService,
+) *AuthService {
+	return NewAuthService(
+		entClient,
+		userRepo,
+		nil,
+		refreshTokenCache,
+		cfg,
+		settingService,
+		emailService,
+		turnstileService,
+		emailQueueService,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+}
+
 // ProvideEmailQueueService creates EmailQueueService with default worker count
 func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
@@ -210,15 +238,11 @@ func ProvideDeferredService(accountRepo AccountRepository, timingWheel *TimingWh
 	return svc
 }
 
-// ProvideConcurrencyService creates ConcurrencyService and starts slot cleanup worker.
-func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountRepository, cfg *config.Config) *ConcurrencyService {
+// ProvideConcurrencyService creates ConcurrencyService for Admin Plus read-only ops views.
+func ProvideConcurrencyService(cache ConcurrencyCache, cfg *config.Config) *ConcurrencyService {
 	svc := NewConcurrencyService(cache)
-	if err := svc.CleanupStaleProcessSlots(context.Background()); err != nil {
-		logger.LegacyPrintf("service.concurrency", "Warning: startup cleanup stale process slots failed: %v", err)
-	}
 	if cfg != nil {
 		svc.SetAccountLoadBatchCacheTTL(time.Duration(cfg.Gateway.Scheduling.LoadBatchCacheTTLMS) * time.Millisecond)
-		svc.StartSlotCleanupWorker(accountRepo, cfg.Gateway.Scheduling.SlotCleanupInterval)
 	}
 	return svc
 }
@@ -440,10 +464,6 @@ func ProvideOpsService(
 	accountRepo AccountRepository,
 	userRepo UserRepository,
 	concurrencyService *ConcurrencyService,
-	gatewayService *GatewayService,
-	openAIGatewayService *OpenAIGatewayService,
-	geminiCompatService *GeminiMessagesCompatService,
-	antigravityGatewayService *AntigravityGatewayService,
 	systemLogSink *OpsSystemLogSink,
 	settingService *SettingService,
 ) *OpsService {
@@ -454,10 +474,6 @@ func ProvideOpsService(
 		accountRepo,
 		userRepo,
 		concurrencyService,
-		gatewayService,
-		openAIGatewayService,
-		geminiCompatService,
-		antigravityGatewayService,
 		systemLogSink,
 	)
 	if settingService != nil {
@@ -514,7 +530,7 @@ func ProvideAPIKeyService(
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
-	NewAuthService,
+	ProvideAdminPlusAuthService,
 	NewUserService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,

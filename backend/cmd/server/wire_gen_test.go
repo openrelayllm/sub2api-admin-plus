@@ -21,16 +21,8 @@ func TestProvideServiceBuildInfo(t *testing.T) {
 
 func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	cfg := &config.Config{}
-
-	oauthSvc := service.NewOAuthService(nil, nil)
-	openAIOAuthSvc := service.NewOpenAIOAuthService(nil, nil)
-	geminiOAuthSvc := service.NewGeminiOAuthService(nil, nil, nil, nil, cfg)
-	antigravityOAuthSvc := service.NewAntigravityOAuthService(nil)
-
-	pricingSvc := service.NewPricingService(cfg, nil)
 	emailQueueSvc := service.NewEmailQueueService(nil, 1)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
-	schedulerSnapshotSvc := service.NewSchedulerSnapshotService(nil, nil, nil, nil, cfg)
 	opsSystemLogSinkSvc := service.NewOpsSystemLogSink(nil)
 
 	cleanup := provideCleanup(
@@ -42,16 +34,8 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		&service.OpsCleanupService{},
 		&service.OpsScheduledReportService{},
 		opsSystemLogSinkSvc,
-		schedulerSnapshotSvc,
-		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,
-		&service.SubscriptionService{},
-		oauthSvc,
-		openAIOAuthSvc,
-		geminiOAuthSvc,
-		antigravityOAuthSvc,
-		nil, // openAIGateway
 	)
 
 	require.NotPanics(t, func() {

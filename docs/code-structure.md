@@ -278,6 +278,9 @@ current:
   backend/internal/handler/admin/system_handler.go
   backend/internal/server/routes/admin.go             # 仅 Dashboard / Groups(all) / Settings / Ops / System
   cmd/server runtime cleanup/startup                 # 只启动 Admin Plus 运营任务和必要只读/认证兼容任务
+  backend/internal/service/ops_service.go             # 只依赖 Ops 仓储、设置、账号/用户只读仓储、并发服务和系统日志 sink
+  ConcurrencyService                                  # 仅用于 Ops 并发监控读取，不启动 Sub2API 并发 key 清理 worker
+  ProvideAdminPlusAuthService                         # 只注入登录、JWT、refresh token、Turnstile、邮件/TOTP 所需依赖
 
 compat:
   backend/internal/handler/auth_handler.go            # 运行时只挂 login / login2fa / refresh / logout / me
@@ -293,6 +296,9 @@ dead:
   已删除未注册的 OAuth 注册、邮箱注册、密码找回、用户 TOTP 设置和 revoke-all-sessions 认证分支。
   注册、找回密码、OAuth 绑定/登录、用户端 TOTP 设置、撤销所有会话等入口不得重新挂载为 Admin Plus 业务入口。
   原 Sub2API 写运行态后台任务不得进入 Admin Plus cmd/server startup/cleanup 对象图：TokenRefreshService、AccountExpiryService、ProxyExpiryService、SubscriptionExpiryService。
+  原 Sub2API 网关转发运行态不得通过 OpsService 回流进 Admin Plus 启动对象图：GatewayService、OpenAIGatewayService、GeminiMessagesCompatService、AntigravityGatewayService 及其 token provider / upstream forwarder 依赖。
+  Admin Plus 启动期不得清理或写入 Sub2API 原生并发 Redis key：CleanupStaleProcessSlots、StartSlotCleanupWorker 只能留在 compat 源码中，不进入 runtime provider。
+  原 Sub2API 用户端注册/促销/兑换/返利/默认订阅依赖不得通过 AuthService 回流进 Admin Plus 启动对象图：NewAuthService 在 runtime 由 ProvideAdminPlusAuthService 替代，NewSubscriptionService 不进入 cleanup。
 ```
 
 ## 4. 前端目标结构
