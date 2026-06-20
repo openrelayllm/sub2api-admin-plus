@@ -7,7 +7,6 @@ import (
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
-	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 )
 
 type ProviderKind string
@@ -100,6 +99,53 @@ type SessionGroupAdapter interface {
 	ReadGroups(ctx context.Context, in SessionProbeInput) (*ReadGroupsResult, error)
 }
 
+type CreateProviderKeyInput struct {
+	SupplierID       int64
+	ExternalGroupID string
+	Name             string
+	QuotaUSD         float64
+	ExpiresInDays    *int
+	Metadata         map[string]any
+}
+
+type ProviderKeyResult struct {
+	SupplierID       int64
+	ExternalGroupID string
+	ExternalKeyID   string
+	Name            string
+	Secret          string
+	Status          string
+	RawPayload      map[string]any
+	CreatedAt       time.Time
+}
+
+type SessionKeyAdapter interface {
+	CreateKey(ctx context.Context, in SessionProbeInput, request CreateProviderKeyInput) (*ProviderKeyResult, error)
+}
+
+type ProviderRateEntry struct {
+	Model       string
+	BillingMode string
+	PriceItem   string
+	Unit        string
+	Currency    string
+	PriceMicros int64
+	RawPayload  map[string]any
+}
+
+type ReadRatesResult struct {
+	SupplierID int64
+	SystemType string
+	Origin     string
+	APIBaseURL string
+	Entries    []ProviderRateEntry
+	CapturedAt time.Time
+}
+
+type SessionRateAdapter interface {
+	ReadRates(ctx context.Context, in SessionProbeInput) (*ReadRatesResult, error)
+}
+
 type BillExportRequest struct {
 	SupplierID int64
 	StartedAt  time.Time
@@ -117,7 +163,7 @@ type BillExportResult struct {
 
 type ProviderAdapter interface {
 	Identity() ProviderIdentity
-	FetchRateCatalog(ctx context.Context, fetch FetchContext) ([]ratesapp.RateEntryInput, error)
+	FetchRateCatalog(ctx context.Context, fetch FetchContext) ([]ProviderRateEntry, error)
 	FetchBalance(ctx context.Context, fetch FetchContext) (*balancesapp.RecordSnapshotInput, error)
 	FetchPromotions(ctx context.Context, fetch FetchContext) ([]promotionsapp.RecordPromotionInput, error)
 	FetchHealthSample(ctx context.Context, fetch FetchContext) (*healthapp.RecordSampleInput, error)

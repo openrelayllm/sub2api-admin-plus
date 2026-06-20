@@ -7,7 +7,6 @@ import (
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
-	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 )
 
 var _ ProviderAdapter = (*stubProviderAdapter)(nil)
@@ -18,7 +17,7 @@ func (s *stubProviderAdapter) Identity() ProviderIdentity {
 	return ProviderIdentity{SupplierID: 1, Kind: ProviderKindSub2API}
 }
 
-func (s *stubProviderAdapter) FetchRateCatalog(_ context.Context, _ FetchContext) ([]ratesapp.RateEntryInput, error) {
+func (s *stubProviderAdapter) FetchRateCatalog(_ context.Context, _ FetchContext) ([]ProviderRateEntry, error) {
 	return nil, nil
 }
 

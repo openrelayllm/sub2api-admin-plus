@@ -268,16 +268,6 @@ func stringValue(in map[string]any, key string) string {
 	return stringFromAny(in[key])
 }
 
-func mapValue(in map[string]any, key string) map[string]any {
-	if in == nil {
-		return nil
-	}
-	if value, ok := in[key].(map[string]any); ok {
-		return value
-	}
-	return nil
-}
-
 func stringValueAt(in map[string]any, path ...string) string {
 	var current any = in
 	for _, key := range path {

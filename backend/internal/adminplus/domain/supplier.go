@@ -91,6 +91,7 @@ type SupplierBrowserCredential struct {
 type SupplierAccount struct {
 	ID                        int64                 `json:"id"`
 	SupplierID                int64                 `json:"supplier_id"`
+	SupplierKeyID             int64                 `json:"supplier_key_id,omitempty"`
 	LocalSub2APIAccountID     int64                 `json:"local_sub2api_account_id"`
 	LocalAccountName          string                `json:"local_account_name"`
 	LocalAccountPlatform      string                `json:"local_account_platform"`
