@@ -231,6 +231,7 @@ PATCH  /api/v1/admin-plus/balances/events/:id/ack
 POST   /api/v1/admin-plus/promotions
 GET    /api/v1/admin-plus/promotions
 PATCH  /api/v1/admin-plus/promotions/:id/ack
+POST   /api/v1/admin-plus/health/probe
 POST   /api/v1/admin-plus/health/samples
 GET    /api/v1/admin-plus/health/samples
 GET    /api/v1/admin-plus/health/events
@@ -291,6 +292,9 @@ PATCH  /api/v1/admin-plus/actions/recommendations/:id/status
 
 健康监控规则：
 
+- `POST /api/v1/admin-plus/health/probe` 对供应商账号/Key 子级绑定的本地 OpenAI-compatible 账号发起真实 Responses 流式请求。
+- 探测默认模型为 `gpt-5.5`，API Key 和 base URL 只从本地 Sub2API `accounts.credentials` 读取，前端不输入、不展示 API Key。
+- 探测目标优先使用子账号凭据中的 `base_url`，其次使用供应商父级 `api_base_url`，最后回退 OpenAI 官方地址。
 - 记录供应商首 token 耗时、总耗时、HTTP 状态码、错误类别、观察到的并发数。
 - 首 token 超过阈值生成 `slow_first_token` 事件。
 - 总耗时超过阈值生成 `slow_total` 事件。
@@ -637,6 +641,7 @@ MVP 1 优先实现：
 
 - 采集首 token 时间、总耗时、错误率、可用率。
 - 采集余额、额度、可并发数。
+- 对绑定到供应商账号/Key 子级的本地 OpenAI-compatible 账号执行 `/v1/responses` 探测。
 - 计算供应商父级和账号/Key 子级健康分。
 
 ### `actions`
@@ -660,19 +665,19 @@ MVP 1 优先实现：
 ## 10. 路由规划
 
 ```text
-/api/admin-plus/auth/*
-/api/admin-plus/suppliers
-/api/admin-plus/suppliers/:id/accounts
-/api/admin-plus/sub2api/accounts
-/api/admin-plus/sub2api/account-runtime
-/api/admin-plus/rates
-/api/admin-plus/promotions
-/api/admin-plus/bills
-/api/admin-plus/reconciliation
-/api/admin-plus/health
-/api/admin-plus/actions
-/api/admin-plus/extension
-/api/admin-plus/audit
+/api/v1/admin-plus/auth/*
+/api/v1/admin-plus/suppliers
+/api/v1/admin-plus/suppliers/:id/accounts
+/api/v1/admin-plus/sub2api/accounts
+/api/v1/admin-plus/sub2api/account-runtime
+/api/v1/admin-plus/rates
+/api/v1/admin-plus/promotions
+/api/v1/admin-plus/bills
+/api/v1/admin-plus/reconciliation
+/api/v1/admin-plus/health
+/api/v1/admin-plus/actions
+/api/v1/admin-plus/extension
+/api/v1/admin-plus/audit
 ```
 
 路由规则：

@@ -548,6 +548,20 @@ MVP 不做：
 - 新增供应商不要求填写供应商 Admin API Key。
 - Chrome 插件只能领取当前供应商相关任务，并在任务执行窗口短期解密登录凭据。
 
+### 8.11 OpenAI-compatible 源站健康探测
+
+作为运营者，我希望对供应商账号/Key 子级绑定的本地 Sub2API OpenAI 账号发起真实 Responses 探测，这样可以用最新模型链路判断首字速度、总耗时和可用性，而不是只靠手工录入健康样本。
+
+验收标准：
+
+- 探测入口选择供应商父级和账号/Key 子级，不在前端输入 API Key。
+- 后端从绑定的本地 Sub2API `accounts.credentials` 读取 `api_key` 和可选 `base_url`。
+- 默认模型为 `gpt-5.5`，请求 OpenAI-compatible `/v1/responses`，并启用 streaming。
+- 系统记录首字耗时、总耗时、HTTP 状态码、错误类别和并发配置。
+- 探测结果写入健康样本表，并按阈值生成健康事件。
+- API 响应和前端页面不得暴露 API Key。
+- 没有有效 Key 或可用 base URL 时，系统只能给出明确错误，不能假装探测成功。
+
 ## 9. 用户用例
 
 ### 9.1 低成本稳定路由建议
@@ -1496,10 +1510,19 @@ Chrome 插件任务。
 
 ### 16.7 健康监控
 
-- `GET /api/admin-plus/health/overview`
-- `GET /api/admin-plus/health/suppliers/:id`
-- `GET /api/admin-plus/health/accounts/:id`
-- `POST /api/admin-plus/health/collect`
+- `POST /api/v1/admin-plus/health/probe`
+- `POST /api/v1/admin-plus/health/samples`
+- `GET /api/v1/admin-plus/health/samples`
+- `GET /api/v1/admin-plus/health/events`
+- `PATCH /api/v1/admin-plus/health/events/:id/ack`
+
+当前已落地 `POST /api/v1/admin-plus/health/probe`：
+
+- 输入供应商父级 ID、供应商账号/Key 子级 ID、模型和阈值。
+- 默认模型为 `gpt-5.5`。
+- 仅支持绑定到本地 Sub2API `accounts` 的 OpenAI-compatible API Key 账号。
+- 后端读取本地账号凭据并请求 `/v1/responses`，前端不接收 API Key。
+- 探测成功或失败都会落健康样本；请求错误、慢首字、慢总耗时和并发饱和按规则生成事件。
 
 ### 16.8 策略建议
 
@@ -1905,6 +1928,11 @@ MVP 必须满足：
 - 完成余额快照、余额事件、低余额/耗尽/恢复规则。
 - 完成优惠事件、无余额供应商充值建议规则。
 - 完成健康样本、首 token/总耗时/错误/并发饱和事件。
+- 完成 OpenAI-compatible Responses 健康探测接口和前端入口：
+  - `POST /api/v1/admin-plus/health/probe`。
+  - 默认模型 `gpt-5.5`。
+  - 从供应商账号/Key 子级绑定的本地 Sub2API `accounts.credentials` 读取 API Key 和 base URL。
+  - 前端不输入、不展示 API Key。
 - 完成插件任务创建、领取、心跳、完成、失败的任务协议后端。
 - 完成调度中心后端与前端：
   - 手动或周期触发生成插件任务。
@@ -1939,7 +1967,7 @@ MVP 必须满足：
   - 账单对账
   - 本地用量
   - 动作建议
-- API E2E 脚本覆盖真实 HTTP、真实 PostgreSQL、真实 Redis 运行态、供应商父子绑定、本地用量读取、调度生成、插件任务结果摄取、账单对账和动作建议。
+- API E2E 脚本覆盖真实 HTTP、真实 PostgreSQL、真实 Redis 运行态、供应商父子绑定、本地用量读取、OpenAI-compatible Responses 健康探测、调度生成、插件任务结果摄取、账单对账和动作建议。
 - 完成供应商浏览器登录凭据加密存储。
 - 完成插件任务租约读取供应商浏览器凭据接口：`POST /api/v1/admin-plus/extension/tasks/:id/browser-credential`。
 - 完成 `extension/` Chrome MV3 最小执行器：
@@ -1963,7 +1991,8 @@ MVP 必须满足：
 - Sub2API Redis 窗口成本 adapter。
 - 每日自动账单导出和定时对账。
 - 通知通道、审计日志和动作执行闭环。
-- 源站 OpenAI/Anthropic/Gemini 账号的额度/限速/模型探测运营适配。
+- 源站 Anthropic/Gemini 账号的额度/限速/模型探测运营适配。
+- 真实外部 OpenAI 账号的生产可用性探测验证；当前只完成 OpenAI-compatible 请求链路和本地 fake upstream E2E，不代表已有生产 Key 可用。
 
 ## 28. 非 mock 验收标准
 
@@ -1979,7 +2008,7 @@ MVP 必须满足：
 - 定时任务只有在 scheduler 真实触发、记录任务状态、支持失败重试和幂等后，才能标记为完成。
 - 自动执行只有在管理员确认后真实调用 Sub2API Admin API，并记录审计后，才能标记为完成。
 
-当前 E2E 中的 `e2e-test-only-*` 凭据和 usage 记录是测试夹具，用于验证本地 API/DB 链路；它们不是生产采集器，也不表示 Chrome 插件真实采集已完成。
+当前 E2E 中的 `e2e-test-only-*` 凭据、usage 记录和本地 OpenAI-compatible `/v1/responses` 服务是测试夹具，用于验证本地 API/DB/Redis/HTTP 探测链路；它们不是生产采集器，也不表示 Chrome 插件真实采集或真实外部供应商探测已完成。
 
 ## 29. 下一阶段计划
 

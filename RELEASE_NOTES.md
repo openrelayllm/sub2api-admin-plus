@@ -11,6 +11,8 @@
 - 新增 `/api/v1/admin-plus/extension/tasks/:id/browser-credential`，插件仅能在持有有效任务租约时读取供应商浏览器登录凭据。
 - 新增账号运行态页面和 `/api/v1/admin-plus/sub2api/account-runtime`，只读展示本地 Sub2API 账号状态、Redis 当前并发、等待队列和切换资格。
 - 新增本地 Sub2API Redis 只读适配，支持读取 `concurrency:account:*`、`wait:account:*` 和 `temp_unsched:account:*`。
+- 新增 OpenAI-compatible Responses 健康探测接口 `/api/v1/admin-plus/health/probe`，通过绑定供应商账号/本地 API Key 发起真实探测并记录样本和事件。
+- 前端健康页面支持选择供应商账号/Key 一键探测，不在页面录入或展示 API Key。
 
 ### 更新
 

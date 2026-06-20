@@ -512,9 +512,7 @@ func probeBaseURL(target *ProbeTarget) (string, error) {
 		return "", badRequest("HEALTH_PROBE_BASE_URL_INVALID", "probe base url must use http or https")
 	}
 	normalized := strings.TrimRight(u.Scheme+"://"+u.Host+strings.TrimRight(u.EscapedPath(), "/"), "/")
-	if strings.HasSuffix(normalized, "/v1") {
-		normalized = strings.TrimSuffix(normalized, "/v1")
-	}
+	normalized = strings.TrimSuffix(normalized, "/v1")
 	return normalized, nil
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import process from 'node:process'
 
 const baseURL = trimTrailingSlash(process.env.ADMIN_PLUS_BASE_URL || 'http://localhost:3000')
@@ -8,9 +9,12 @@ const email = process.env.ADMIN_PLUS_E2E_EMAIL || 'admin@sub2api-admin-plus.loca
 const password = process.env.ADMIN_PLUS_E2E_PASSWORD || 'AdminPlus@123456'
 const dbURL = process.env.ADMIN_PLUS_E2E_DB_URL || 'postgresql://root:root@127.0.0.1:5432/sub2api_admin_plus?sslmode=disable'
 const redisURL = process.env.ADMIN_PLUS_E2E_REDIS_URL || 'redis://127.0.0.1:6379/0'
+const probeModel = 'gpt-5.5'
 const runID = `e2e-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`
 
 let token = ''
+let fakeOpenAIBaseURL = ''
+let fakeOpenAIRequests = []
 
 main().catch((error) => {
   console.error(`[FAIL] ${error.message}`)
@@ -21,34 +25,41 @@ main().catch((error) => {
 })
 
 async function main() {
-  log(`Admin Plus API E2E starting: ${runID}`)
-  await waitForService()
-  await login()
+  const fakeOpenAI = await startFakeOpenAIResponsesServer()
+  fakeOpenAIBaseURL = fakeOpenAI.url
+  fakeOpenAIRequests = fakeOpenAI.requests
+  try {
+    log(`Admin Plus API E2E starting: ${runID}`)
+    await waitForService()
+    await login()
 
-  const localAccountID = createLocalAccountFixture()
-  await exerciseLocalAccountRuntime(localAccountID)
-  const supplier = await createSupplier()
-  await listAndGetSupplier(supplier.id)
-  const activeSupplier = await updateSupplierStatus(supplier.id)
+    const localAccountID = createLocalAccountFixture()
+    await exerciseLocalAccountRuntime(localAccountID)
+    const supplier = await createSupplier()
+    await listAndGetSupplier(supplier.id)
+    const activeSupplier = await updateSupplierStatus(supplier.id)
 
-  const supplierAccount = await createSupplierAccount(activeSupplier.id, localAccountID)
-  await listSupplierAccounts(activeSupplier.id, supplierAccount.id)
-  await deleteSupplierAccount(activeSupplier.id, supplierAccount.id)
+    const supplierAccount = await createSupplierAccount(activeSupplier.id, localAccountID)
+    await listSupplierAccounts(activeSupplier.id, supplierAccount.id)
 
-  const rateEvent = await exerciseRateMonitoring(activeSupplier.id)
-  const balanceEvent = await exerciseBalanceMonitoring(activeSupplier.id)
-  const healthEvent = await exerciseHealthMonitoring(activeSupplier.id)
-  const promotionEvent = await exercisePromotionMonitoring(activeSupplier.id)
-  const reconciliation = await exerciseBillingAndReconciliation(activeSupplier.id, localAccountID)
-  await exerciseScheduler(activeSupplier.id)
-  await exerciseExtensionTasks(activeSupplier.id)
-  const candidateSupplier = await createCandidateSupplier()
-  await exerciseActionRecommendations(activeSupplier, candidateSupplier, balanceEvent, promotionEvent, healthEvent, reconciliation.summary)
-  await verifyAllListEndpoints(activeSupplier.id)
+    const rateEvent = await exerciseRateMonitoring(activeSupplier.id)
+    const balanceEvent = await exerciseBalanceMonitoring(activeSupplier.id)
+    const healthEvent = await exerciseHealthMonitoring(activeSupplier.id, supplierAccount.id)
+    const promotionEvent = await exercisePromotionMonitoring(activeSupplier.id)
+    const reconciliation = await exerciseBillingAndReconciliation(activeSupplier.id, localAccountID)
+    await exerciseScheduler(activeSupplier.id)
+    await exerciseExtensionTasks(activeSupplier.id)
+    const candidateSupplier = await createCandidateSupplier()
+    await exerciseActionRecommendations(activeSupplier, candidateSupplier, balanceEvent, promotionEvent, healthEvent, reconciliation.summary)
+    await verifyAllListEndpoints(activeSupplier.id)
+    await deleteSupplierAccount(activeSupplier.id, supplierAccount.id)
 
-  log('Admin Plus API E2E completed')
-  log(`Created test prefix: ${runID}`)
-  log(`Verified rate event id: ${rateEvent.id}`)
+    log('Admin Plus API E2E completed')
+    log(`Created test prefix: ${runID}`)
+    log(`Verified rate event id: ${rateEvent.id}`)
+  } finally {
+    await fakeOpenAI.close()
+  }
 }
 
 async function waitForService() {
@@ -73,6 +84,10 @@ async function login() {
 
 function createLocalAccountFixture() {
   const name = `${runID}-local-openai`
+  const credentials = JSON.stringify({
+    api_key: 'sk-e2e-test-only',
+    base_url: fakeOpenAIBaseURL
+  })
   const sql = `
     INSERT INTO accounts (
       name, platform, type, credentials, extra,
@@ -80,8 +95,8 @@ function createLocalAccountFixture() {
       created_at, updated_at
     )
     VALUES (
-      '${sqlString(name)}', 'openai', 'api_key',
-      '{"api_key":"sk-e2e-test-only"}'::jsonb,
+      '${sqlString(name)}', 'openai', 'apikey',
+      '${sqlString(credentials)}'::jsonb,
       '{"source":"admin-plus-e2e"}'::jsonb,
       8, 10, 'active', true, 1.0,
       NOW(), NOW()
@@ -363,7 +378,30 @@ async function exerciseBalanceMonitoring(supplierID) {
   return low.event
 }
 
-async function exerciseHealthMonitoring(supplierID) {
+async function exerciseHealthMonitoring(supplierID, supplierAccountID) {
+  const requestCountBefore = fakeOpenAIRequests.length
+  const probe = await api('POST', '/api/v1/admin-plus/health/probe', {
+    supplier_id: supplierID,
+    supplier_account_id: supplierAccountID,
+    model: probeModel,
+    prompt: 'Return exactly: ok',
+    first_token_threshold_ms: 3000,
+    total_latency_threshold_ms: 30000,
+    concurrency_saturation_percent: 100
+  }, { expected: 201 })
+  assert(probe.sample.source === 'responses_probe', 'health probe should persist responses_probe source')
+  assert(probe.sample.model === probeModel, 'health probe should use latest configured probe model')
+  assert(probe.sample.status_code === 200, 'health probe should record upstream HTTP 200')
+  assert(probe.sample.raw_payload?.local_sub2api_account_id > 0, 'health probe should bind to local Sub2API account')
+  assert(probe.sample.raw_payload?.supplier_account_id === supplierAccountID, 'health probe should bind to supplier account child')
+  assert(!JSON.stringify(probe.sample).includes('sk-e2e-test-only'), 'health probe response should not expose api key')
+  assert(fakeOpenAIRequests.length === requestCountBefore + 1, 'health probe should call fake OpenAI-compatible upstream once')
+  const request = fakeOpenAIRequests[fakeOpenAIRequests.length - 1]
+  assert(request.path === '/v1/responses', 'health probe should call /v1/responses')
+  assert(request.authorization === 'Bearer sk-e2e-test-only', 'health probe should send local account bearer key upstream')
+  assert(request.body?.model === probeModel, 'health probe upstream payload should request gpt-5.5')
+  assert(request.body?.stream === true, 'health probe upstream payload should use streaming')
+
   const result = await api('POST', '/api/v1/admin-plus/health/samples', {
     supplier_id: supplierID,
     source: 'probe',
@@ -387,7 +425,7 @@ async function exerciseHealthMonitoring(supplierID) {
 
   const ack = await api('PATCH', `/api/v1/admin-plus/health/events/${result.events[0].id}/ack`)
   assert(ack.status === 'acknowledged', 'health event should be acknowledged')
-  log('health monitoring verified')
+  log('health monitoring and OpenAI-compatible responses probe verified')
   return result.events.find((item) => item.type === 'request_error') || result.events[0]
 }
 
@@ -690,6 +728,65 @@ function fail(message, details) {
 
 function log(message) {
   console.log(`[OK] ${message}`)
+}
+
+function startFakeOpenAIResponsesServer() {
+  const requests = []
+  const server = createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/v1/responses') {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'not found' }))
+      return
+    }
+
+    const rawBody = await readRequestBody(req)
+    let body = null
+    try {
+      body = JSON.parse(rawBody || '{}')
+    } catch {
+      body = null
+    }
+    requests.push({
+      path: req.url,
+      authorization: req.headers.authorization || '',
+      contentType: req.headers['content-type'] || '',
+      body
+    })
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive'
+    })
+    res.write('data: {"type":"response.output_text.delta","delta":"ok"}\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      resolve({
+        url: `http://127.0.0.1:${address.port}`,
+        requests,
+        close: () => new Promise((done) => server.close(() => done()))
+      })
+    })
+  })
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk) => {
+      body += chunk
+    })
+    req.on('end', () => resolve(body))
+    req.on('error', reject)
+  })
 }
 
 function trimTrailingSlash(value) {

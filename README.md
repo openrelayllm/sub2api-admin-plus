@@ -19,6 +19,7 @@ Implemented:
 - Supplier parent records.
 - Supplier account/key child bindings to local Sub2API `accounts.id`.
 - Rate, balance, health, promotion, billing, reconciliation, extension task, and action recommendation APIs.
+- OpenAI-compatible Responses health probe for bound local OpenAI accounts, defaulting to `gpt-5.5`.
 - Scheduler API and page for generating idempotent Chrome extension tasks.
 - Chrome extension task result ingestion into rate, balance, promotion, health, and billing tables.
 - Browser login credentials encrypted at rest and exposed only through a valid extension task lease.
@@ -27,7 +28,7 @@ Implemented:
 - Local Sub2API read adapter for real `accounts` and `usage_logs`.
 - Local Sub2API Redis read adapter for account concurrency and waiting queue runtime.
 - Admin Plus operation pages, including supplier bindings, account runtime, billing reconciliation, and local usage.
-- API E2E script using real HTTP, PostgreSQL, and Redis fixtures.
+- API E2E script using real HTTP, PostgreSQL, Redis fixtures, and a local OpenAI-compatible `/v1/responses` probe server.
 
 Not implemented yet:
 
@@ -89,7 +90,13 @@ E2E defaults:
 - `ADMIN_PLUS_E2E_DB_URL=postgresql://root:root@127.0.0.1:5432/sub2api_admin_plus?sslmode=disable`
 - `ADMIN_PLUS_E2E_REDIS_URL=redis://127.0.0.1:6379/0`
 
-The E2E script creates `e2e-*` rows in PostgreSQL and temporary Redis runtime keys to verify real API/DB/Redis paths. These rows and keys are test fixtures, not mock production collection.
+The E2E script creates `e2e-*` rows in PostgreSQL, temporary Redis runtime keys, and a local OpenAI-compatible `/v1/responses` server to verify real API/DB/Redis/HTTP probe paths. These rows, keys, and local HTTP server are test fixtures, not mock production collection or proof that a real external supplier account is usable.
+
+## Health Probe
+
+`POST /api/v1/admin-plus/health/probe` probes a supplier account child binding through the local Sub2API `accounts` row. The frontend never accepts or displays an API key. The backend reads the bound account credentials, calls OpenAI-compatible `/v1/responses` with streaming enabled, records TTFT and total latency, then persists a health sample and derived events.
+
+The default probe model is `gpt-5.5`. Real external probing requires a valid OpenAI-compatible key and base URL in the bound Sub2API account. Without that, only local fixture verification can pass.
 
 ## Chrome Extension
 

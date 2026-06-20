@@ -86,8 +86,13 @@ Generated artifacts are intentionally ignored:
   - 读取 `usage_logs` 明细。
   - 聚合账号/模型维度请求数、token、收入、成本和延迟。
   - 读取 Redis `concurrency:account:*`、`wait:account:*` 和 `temp_unsched:account:*` 运行态。
+- 已完成 OpenAI-compatible Responses 健康探测链路：
+  - 默认模型 `gpt-5.5`。
+  - 从供应商账号/Key 子级绑定的本地 Sub2API `accounts.credentials` 读取 API Key 和 base URL。
+  - 前端不输入、不展示 API Key。
+  - 探测结果写入健康样本和健康事件。
 - 前端已提供 Admin Plus 独立业务导航和页面。
-- `tools/admin-plus-e2e.mjs` 覆盖真实 HTTP、真实 PostgreSQL、真实 Redis 运行态、调度生成、租约凭据读取和插件结果摄取链路。
+- `tools/admin-plus-e2e.mjs` 覆盖真实 HTTP、真实 PostgreSQL、真实 Redis 运行态、OpenAI-compatible `/v1/responses` 探测、调度生成、租约凭据读取和插件结果摄取链路。
 
 尚未完成：面向具体 Sub2API/New API 供应商后台的稳定页面适配、每日账单自动导出、通知、审计和确认后动作执行。
 

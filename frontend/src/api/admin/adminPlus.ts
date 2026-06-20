@@ -245,6 +245,16 @@ export interface HealthEvent {
   acknowledged_at?: string | null
 }
 
+export interface ProbeOpenAIResponsesHealthPayload {
+  supplier_id: number
+  supplier_account_id?: number
+  model?: string
+  prompt?: string
+  first_token_threshold_ms?: number
+  total_latency_threshold_ms?: number
+  concurrency_saturation_percent?: number
+}
+
 export interface SupplierBillLine {
   id: number
   supplier_id: number
@@ -586,6 +596,11 @@ export async function recordHealthSample(payload: {
   return data
 }
 
+export async function probeOpenAIResponsesHealth(payload: ProbeOpenAIResponsesHealthPayload) {
+  const { data } = await apiClient.post<{ sample: HealthSample; events: HealthEvent[] }>('/admin-plus/health/probe', payload)
+  return data
+}
+
 export async function listHealthSamples(params?: { supplier_id?: number; model?: string; limit?: number }) {
   const { data } = await apiClient.get<AdminPlusListResponse<HealthSample>>('/admin-plus/health/samples', { params })
   return data
@@ -737,6 +752,7 @@ export const adminPlusAPI = {
   listPromotionEvents,
   acknowledgePromotionEvent,
   recordHealthSample,
+  probeOpenAIResponsesHealth,
   listHealthSamples,
   listHealthEvents,
   acknowledgeHealthEvent,
