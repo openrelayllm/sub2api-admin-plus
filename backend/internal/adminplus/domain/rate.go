@@ -3,18 +3,18 @@ package domain
 import "time"
 
 type RateSnapshot struct {
-	ID            int64          `json:"id"`
-	SupplierID    int64          `json:"supplier_id"`
-	Source        string         `json:"source"`
-	Model         string         `json:"model"`
-	BillingMode   string         `json:"billing_mode"`
-	PriceItem     string         `json:"price_item"`
-	Unit          string         `json:"unit"`
-	Currency      string         `json:"currency"`
-	PriceMicros   int64          `json:"price_micros"`
-	RawPayload    map[string]any `json:"raw_payload,omitempty"`
-	CapturedAt    time.Time      `json:"captured_at"`
-	CreatedAt     time.Time      `json:"created_at"`
+	ID          int64          `json:"id"`
+	SupplierID  int64          `json:"supplier_id"`
+	Source      string         `json:"source"`
+	Model       string         `json:"model"`
+	BillingMode string         `json:"billing_mode"`
+	PriceItem   string         `json:"price_item"`
+	Unit        string         `json:"unit"`
+	Currency    string         `json:"currency"`
+	PriceMicros int64          `json:"price_micros"`
+	RawPayload  map[string]any `json:"raw_payload,omitempty"`
+	CapturedAt  time.Time      `json:"captured_at"`
+	CreatedAt   time.Time      `json:"created_at"`
 }
 
 type RateChangeDirection string
@@ -59,5 +59,5 @@ type RateChangeEvent struct {
 	ThresholdExceeded bool                `json:"threshold_exceeded"`
 	Status            RateChangeStatus    `json:"status"`
 	CreatedAt         time.Time           `json:"created_at"`
-	AcknowledgedAt     *time.Time          `json:"acknowledged_at,omitempty"`
+	AcknowledgedAt    *time.Time          `json:"acknowledged_at,omitempty"`
 }

@@ -11,6 +11,7 @@ export { authAPI, isTotp2FARequired, type LoginResponse } from './auth'
 
 // Admin APIs
 export { adminAPI } from './admin'
+export { adminPlusAPI } from './admin/adminPlus'
 
 // Default export
 export { default } from './client'
