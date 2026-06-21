@@ -10,6 +10,7 @@ import (
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,13 +100,110 @@ func TestSessionProfileClientProbeSub2APIUserProfile(t *testing.T) {
 	require.Equal(t, []int64{1, 2}, result.Profile.AllowedGroups)
 }
 
-func TestSessionProfileClientCreateKey(t *testing.T) {
+func TestSessionProfileClientDirectLogin(t *testing.T) {
+	var sawSettings bool
+	var sawLogin bool
+	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/api/v1/keys", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/settings/public":
+			require.Equal(t, http.MethodGet, r.Method)
+			sawSettings = true
+			_, _ = w.Write([]byte(`{"data":{"login_agreement_revision":"rev-1"}}`))
+		case "/api/v1/auth/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+			require.Equal(t, serverURL, r.Header.Get("Origin"))
+			require.Equal(t, serverURL+"/", r.Header.Get("Referer"))
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, "ops@example.com", payload["email"])
+			require.Equal(t, "secret", payload["password"])
+			require.Equal(t, "rev-1", payload["login_agreement_revision"])
+			sawLogin = true
+			_, _ = w.Write([]byte(`{"data":{"access_token":"direct-access-token","expires_in":3600}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Username:   "ops@example.com",
+		Password:   "secret",
+	})
+
+	require.NoError(t, err)
+	require.True(t, sawSettings)
+	require.True(t, sawLogin)
+	require.Equal(t, int64(7), result.SupplierID)
+	require.Equal(t, server.URL, result.Origin)
+	require.Equal(t, server.URL, result.APIBaseURL)
+	require.Equal(t, "direct-access-token", result.SessionBundle["access_token"])
+	require.Equal(t, "direct_login", result.SessionBundle["session_source"])
+	tokens, ok := result.SessionBundle["tokens"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "direct-access-token", tokens["access_token"])
+	contextValue, ok := result.SessionBundle["context"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "direct_login", contextValue["login_method"])
+	require.NotNil(t, result.ExpiresAt)
+}
+
+func TestSessionProfileClientDirectLoginClassifiesCaptcha(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/settings/public":
+			_, _ = w.Write([]byte(`{"data":{}}`))
+		case "/api/v1/auth/login":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"turnstile captcha required"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	_, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Username:   "ops@example.com",
+		Password:   "secret",
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "LOGIN_CAPTCHA_REQUIRED", infraerrors.Reason(err))
+}
+
+func TestSessionProfileClientCreateKey(t *testing.T) {
+	var listCalled bool
+	var createCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
 		require.Equal(t, "sid=abc", r.Header.Get("Cookie"))
+		require.Equal(t, "/api/v1/keys", r.URL.Path)
+		if r.Method == http.MethodGet {
+			listCalled = true
+			require.Equal(t, "1", r.URL.Query().Get("page"))
+			require.Equal(t, "100", r.URL.Query().Get("page_size"))
+			require.Equal(t, "ops-key", r.URL.Query().Get("search"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"items":[]}}`))
+			return
+		}
+
+		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		createCalled = true
 
 		var payload map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
@@ -154,6 +252,62 @@ func TestSessionProfileClientCreateKey(t *testing.T) {
 	require.Equal(t, "sk-supplier-secret", result.Secret)
 	require.Equal(t, "active", result.Status)
 	require.NotContains(t, result.RawPayload, "key")
+	require.True(t, listCalled)
+	require.True(t, createCalled)
+}
+
+func TestSessionProfileClientCreateKeyReusesExistingProviderKey(t *testing.T) {
+	var createCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/keys", r.URL.Path)
+		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"items": [
+						{
+							"id": 99,
+							"name": "ops-key",
+							"key": "sk-existing-secret",
+							"group_routes": [
+								{"group_id": 10}
+							],
+							"status": "active"
+						}
+					]
+				}
+			}`))
+		case http.MethodPost:
+			createCalled = true
+			http.Error(w, "must not create duplicate key", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.CreateKey(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"access_token": "browser-access-token",
+		},
+	}, ports.CreateProviderKeyInput{
+		SupplierID:      7,
+		ExternalGroupID: "10",
+		Name:            "ops-key",
+		QuotaUSD:        25,
+	})
+
+	require.NoError(t, err)
+	require.False(t, createCalled)
+	require.Equal(t, "99", result.ExternalKeyID)
+	require.Equal(t, "10", result.ExternalGroupID)
+	require.Equal(t, "ops-key", result.Name)
+	require.Equal(t, "sk-existing-secret", result.Secret)
 }
 
 func TestSessionProfileClientReadGroups(t *testing.T) {
@@ -282,6 +436,75 @@ func TestSessionProfileClientReadRates(t *testing.T) {
 	require.Equal(t, int64(1500000), input.PriceMicros)
 	require.Equal(t, int64(6000000), findRateEntry(t, result.Entries, "output").PriceMicros)
 	require.Equal(t, int64(250000), findRateEntry(t, result.Entries, "cache_read").PriceMicros)
+}
+
+func TestSessionProfileClientReadRatesParsesNestedAvailableChannels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/rates/snapshots":
+			http.NotFound(w, r)
+		case "/api/v1/channels/available":
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"name": "CODEX",
+						"platforms": [
+							{
+								"platform": "openai",
+								"groups": [
+									{"id": 59, "name": "CODEX", "rate_multiplier": 0.12}
+								],
+								"supported_models": [
+									{
+										"name": "codex-auto-review",
+										"platform": "openai",
+										"pricing": {
+											"billing_mode": "token",
+											"input_price": 0.000001,
+											"output_price": 0.000004,
+											"cache_write_price": 0.0000005,
+											"cache_read_price": 0.0000001,
+											"image_input_price": 0.000002,
+											"image_cache_read_price": 0.0000002,
+											"image_output_price": 0.000008,
+											"per_request_price": 0.01
+										}
+									}
+								]
+							}
+						]
+					}
+				]
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.ReadRates(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"access_token": "browser-access-token",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), result.SupplierID)
+	require.Len(t, result.Entries, 8)
+	require.Equal(t, int64(1000000), findRateEntry(t, result.Entries, "input").PriceMicros)
+	require.Equal(t, int64(4000000), findRateEntry(t, result.Entries, "output").PriceMicros)
+	require.Equal(t, int64(500000), findRateEntry(t, result.Entries, "cache_write").PriceMicros)
+	require.Equal(t, int64(100000), findRateEntry(t, result.Entries, "cache_read").PriceMicros)
+	require.Equal(t, int64(2000000), findRateEntry(t, result.Entries, "image_input").PriceMicros)
+	require.Equal(t, int64(200000), findRateEntry(t, result.Entries, "image_cache_read").PriceMicros)
+	require.Equal(t, int64(8000000), findRateEntry(t, result.Entries, "image_output").PriceMicros)
+	require.Equal(t, int64(10000), findRateEntry(t, result.Entries, "per_request").PriceMicros)
 }
 
 func TestSessionProfileClientReadAnnouncements(t *testing.T) {

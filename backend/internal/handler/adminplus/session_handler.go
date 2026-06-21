@@ -26,6 +26,17 @@ type probeSupplierSessionRequest struct {
 	RecordBalanceSnapshot    *bool `json:"record_balance_snapshot"`
 }
 
+type loginSupplierSessionRequest struct {
+	Origin                   string         `json:"origin"`
+	APIBaseURL               string         `json:"api_base_url"`
+	Username                 string         `json:"username"`
+	Password                 string         `json:"password"`
+	Token                    string         `json:"token"`
+	LoginContext             map[string]any `json:"login_context"`
+	LowBalanceThresholdCents int64          `json:"low_balance_threshold_cents"`
+	RecordBalanceSnapshot    *bool          `json:"record_balance_snapshot"`
+}
+
 type upsertSupplierBrowserSessionRequest struct {
 	Origin        string         `json:"origin"`
 	APIBaseURL    string         `json:"api_base_url"`
@@ -62,6 +73,7 @@ func (h *SessionHandler) Upsert(c *gin.Context) {
 	}
 	session, err := h.service.Upsert(c.Request.Context(), sessionsapp.UpsertInput{
 		SupplierID:     supplierID,
+		SessionSource:  adminplusdomain.SupplierSessionSourceBrowserExtension,
 		Origin:         firstNonEmptySessionString(req.Origin, sessionStringValue(req.SessionBundle, "origin")),
 		APIBaseURL:     firstNonEmptySessionString(req.APIBaseURL, sessionStringValueAt(req.SessionBundle, "context", "api_base_url"), sessionStringValue(req.SessionBundle, "api_base_url")),
 		SessionSummary: supplierBrowserSessionSummary(req.SessionBundle),
@@ -115,6 +127,54 @@ func (h *SessionHandler) Probe(c *gin.Context) {
 	response.Success(c, gin.H{"probe": probe})
 }
 
+func (h *SessionHandler) Login(c *gin.Context) {
+	supplierID, ok := parseSupplierID(c)
+	if !ok {
+		return
+	}
+	var req loginSupplierSessionRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, "invalid request: "+err.Error())
+			return
+		}
+	}
+	login, err := h.service.Login(c.Request.Context(), sessionsapp.LoginInput{
+		SupplierID:   supplierID,
+		Origin:       req.Origin,
+		APIBaseURL:   req.APIBaseURL,
+		Username:     req.Username,
+		Password:     req.Password,
+		Token:        req.Token,
+		LoginContext: req.LoginContext,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	out := gin.H{
+		"session": sanitizeSupplierBrowserSession(login.Session),
+	}
+	if len(login.Diagnostics) > 0 {
+		out["diagnostics"] = login.Diagnostics
+	}
+	shouldRecord := req.RecordBalanceSnapshot == nil || *req.RecordBalanceSnapshot
+	if shouldRecord && h.balances != nil {
+		result, err := h.balances.SyncFromSession(c.Request.Context(), balancesapp.SyncFromSessionInput{
+			SupplierID:               supplierID,
+			LowBalanceThresholdCents: req.LowBalanceThresholdCents,
+		})
+		if response.ErrorFrom(c, err) {
+			return
+		}
+		out["probe"] = result.Probe
+		if result.Snapshot != nil {
+			out["balance_snapshot"] = result.Snapshot
+			out["balance_event"] = result.Event
+		}
+	}
+	response.Success(c, out)
+}
+
 func supplierBrowserSessionSummary(bundle map[string]any) map[string]any {
 	tokens := sessionMapValue(bundle, "tokens")
 	context := sessionMapValue(bundle, "context")
@@ -126,6 +186,7 @@ func supplierBrowserSessionSummary(bundle map[string]any) map[string]any {
 	}
 	return map[string]any{
 		"origin":               sessionStringValue(bundle, "origin"),
+		"session_source":       firstNonEmptySessionString(sessionStringValue(bundle, "session_source"), sessionStringValue(context, "session_source")),
 		"captured_at":          sessionStringValue(bundle, "captured_at"),
 		"expires_at":           sessionStringValue(bundle, "expires_at"),
 		"has_access_token":     firstNonEmptySessionString(sessionStringValue(bundle, "access_token"), sessionStringValue(bundle, "accessToken"), sessionStringValue(tokens, "access_token"), sessionStringValue(tokens, "accessToken")) != "",
@@ -137,6 +198,7 @@ func supplierBrowserSessionSummary(bundle map[string]any) map[string]any {
 		"project_id":           sessionStringValue(context, "project_id"),
 		"account_id":           sessionStringValue(context, "account_id"),
 		"api_base_url":         sessionStringValue(context, "api_base_url"),
+		"login_method":         sessionStringValue(context, "login_method"),
 		"has_required_origin":  sessionStringValue(requiredHeaders, "origin") != "",
 		"has_required_referer": sessionStringValue(requiredHeaders, "referer") != "",
 	}
@@ -215,6 +277,7 @@ func sanitizeSupplierBrowserSession(session *adminplusdomain.SupplierBrowserSess
 	}
 	return gin.H{
 		"supplier_id":              session.SupplierID,
+		"session_source":           session.SessionSource,
 		"origin":                   session.Origin,
 		"api_base_url":             session.APIBaseURL,
 		"session_summary":          session.SessionSummary,

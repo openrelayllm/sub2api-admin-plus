@@ -263,27 +263,29 @@ flowchart TD
 |--------|------------|--------------|
 | 站点匹配 API | 定义接口和返回结构 | 调用接口并展示匹配状态 |
 | 设备授权 | 生成设备 token、校验任务租约 | 完成 Web 授权连接 |
-| 会话包 schema | 定义字段、加密存储、探测结果 | 按 schema 提取并上报 |
+| 后端直登 | 定义登录 Adapter、错误码、会话归一化 | 不参与 |
+| 会话包 schema | 定义字段、加密存储、探测结果 | 仅在兜底场景按 schema 提取并上报 |
 | 错误码 | 定义后端错误码和诊断字段 | 展示错误和重试入口 |
 | 安全边界 | host 白名单、路径白名单、服务端加密 | 最小 host permission、不保存管理员 token |
-| 联调验收 | 提供真实 API、测试供应商和日志 | 在真实供应商页面执行一键登录/上报 |
+| 联调验收 | 提供真实 API、测试供应商和日志 | 在真实供应商页面执行已登录会话一键上报 |
 
 冻结要求：
 
 - P0 完成后，插件契约变更必须走文档变更。
 - 插件可以提前开发 UI 和执行器，但不能自定义业务采集结果格式作为主路径。
-- 插件上报会话后，所有业务采集结果以后端 Provider Adapter 结果为准。
+- 后端直登或插件兜底形成会话后，所有业务采集结果以后端 Provider Adapter 结果为准。
 
 ## 7. 推荐执行顺序
 
 1. 本仓库先完成 P0 契约冻结。
-2. 插件隔壁进程按契约继续开发站点识别、授权、一键登录、会话上报。
-3. 本仓库同步完成 P1 领域模型修正。
-4. 本仓库实现 P2 `Sub2APIProviderAdapter` 的 profile/余额读取和能力探测。
-5. 插件和后端联调真实 Sub2API 供应商会话。
-6. 本仓库补 P3 账号开通和绑定。
-7. 前端按 P4 重排导航和页面。
-8. P5 补测试、清理旧路径和 mock。
+2. 本仓库先实现后端直登能力和统一会话包存储。
+3. 插件隔壁进程按契约继续开发站点识别、授权、已登录会话一键上报。
+4. 本仓库同步完成 P1 领域模型修正。
+5. 本仓库实现 P2 `Sub2APIProviderAdapter` 的 profile/余额读取和能力探测。
+6. 插件和后端联调真实 Sub2API 供应商浏览器兜底会话。
+7. 本仓库补 P3 账号开通和绑定。
+8. 前端按 P4 重排导航和页面。
+9. P5 补测试、清理旧路径和 mock。
 
 ## 8. 当前优先级清单
 
@@ -294,9 +296,11 @@ P0 必须先完成：
 - [x] 固定供应商站点匹配和未知站点候选接口。
 - [x] 固定 Provider Adapter capability 名称。
 - [x] 固定安全白名单策略。
+- [ ] 固定后端直登输入、失败原因和统一会话来源字段。
 
 P1/P2 紧随其后：
 
+- [ ] 实现 Sub2API 同源供应商后端直登。
 - [x] 明确供应商余额表和余额事件的口径字段。
 - [x] 实现 Sub2API 供应商用户侧 profile 读取。
 - [x] 实现会话探测和错误码。
@@ -320,14 +324,19 @@ P4/P5 最后收口：
 
 - `POST /api/v1/admin-plus/suppliers/site-match`：按当前 URL/origin/host 匹配已登记供应商。
 - `POST /api/v1/admin-plus/extension/session/capture-task` + `POST /api/v1/admin-plus/extension/tasks/:id/complete`：插件短租约上报供应商浏览器会话。
-- `POST /api/v1/admin-plus/suppliers/:id/browser-sessions`：管理员登录态下直接写入供应商浏览器会话，主要用于调试、手动导入和插件联调，不替代短租约主路径。
+- `POST /api/v1/admin-plus/suppliers/:id/browser-sessions`：管理员登录态下直接写入供应商浏览器会话，主要用于调试、手动导入和插件联调，不替代插件兜底的短租约路径。
 - `GET /api/v1/admin-plus/suppliers/:id/session`：查询供应商会话脱敏状态，只返回摘要和是否已加密保存，不回显 token/cookie。
-- `POST /api/v1/admin-plus/suppliers/:id/session/probe`：基于已保存会话访问同源 Sub2API 供应商用户侧 `/api/v1/user/profile`，读取当前下游用户余额并写入余额快照。
-- `POST /api/v1/admin-plus/suppliers/:id/rates/sync`：基于已保存会话访问同源 Sub2API 供应商用户侧费率/渠道接口，归一化后写入 `admin_plus_rate_snapshots` 和变更事件。
+- `POST /api/v1/admin-plus/suppliers/:id/session/probe`：基于已保存统一会话访问同源 Sub2API 供应商用户侧 `/api/v1/user/profile`，读取当前下游用户余额并写入余额快照。
+- `POST /api/v1/admin-plus/suppliers/:id/rates/sync`：基于已保存统一会话访问同源 Sub2API 供应商用户侧费率/渠道接口，归一化后写入 `admin_plus_rate_snapshots` 和变更事件。
 - `POST /api/v1/admin-plus/suppliers/:id/keys/provision`：管理员确认后基于已保存会话创建第三方 Key，再调用本地 Sub2API Admin API 创建账号，并写入 `admin_plus_supplier_keys` 和 `admin_plus_supplier_accounts` 绑定。
 - `POST /api/v1/admin-plus/suppliers/:id/keys/provision` 已接入通用 `Idempotency-Key`：相同 key 和 payload 会重放首次成功结果，不会重复调用供应商创建 Key API；同一供应商分组还通过数据库唯一索引限制只能存在一个 `provisioning` / `bound` / `manual_secret_required` Key。
 - `POST /api/v1/admin-plus/suppliers/:id/keys/:keyID/repair-binding`：只修复本地账号创建或绑定失败的 Key，选择已有本地 Sub2API account 建立绑定并更新 Key 为 `bound`；该接口不调用 Provider Adapter，不创建新的第三方 Key。
 - 前端供应商页面已显示浏览器会话状态，并支持手动刷新会话与读取供应商余额。
+
+待补直登能力：
+
+- `POST /api/v1/admin-plus/suppliers/:id/session/login`：后端使用加密供应商登录配置执行 direct_login，成功后写入统一会话；遇到验证码、2FA、强风控时返回浏览器兜底原因。
+- 会话表需记录来源：`direct_login` / `browser_extension` / `manual_import`，便于调度、审计和 UI 提示。
 
 安全边界已实现：
 
@@ -352,14 +361,14 @@ P4/P5 最后收口：
 - [ ] 重排导航。
 - [ ] 完善所有列表分页和 CRUD UI。
 - [ ] 补联调 E2E。
-- [ ] 清理 mock 和旧插件主路径。
+- [ ] 清理 mock 和旧插件业务采集主路径。
 
-## 9. 完成定义
+## 10. 完成定义
 
 重新梳理完成不是文档写完，而是满足以下条件：
 
-- 插件和后端对同一份会话包契约联调成功。
-- 至少一个真实 Sub2API 供应商可以完成站点识别、会话上报、余额读取和分组读取。
+- 后端直登和插件兜底对同一份统一会话包契约联调成功。
+- 至少一个真实 Sub2API 供应商可以完成后端直登或插件兜底会话、余额读取和分组读取。
 - 供应商父级、供应商分组、第三方 Key、本地账号和绑定关系在 UI 与 DB 中一致。
 - 任一失败链路都有明确错误码、前端提示、日志和可重试入口。
 - 无余额供应商不会进入切换候选，只会生成充值或观察建议。

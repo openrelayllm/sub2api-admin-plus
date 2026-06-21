@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
@@ -15,6 +16,7 @@ import (
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	reconciliationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
 	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
+	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	supplierkeysapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/supplierkeys"
@@ -37,14 +39,21 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 	v1 := router.Group("/api/v1")
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	sessionService := sessionsapp.NewServiceWithDependencies(
+		sessionsapp.NewMemoryRepository(),
+		routeSurfaceSessionCipher{},
+		supplierService,
+		&routeSurfaceProbeAdapter{},
+		&routeSurfaceLoginAdapter{},
+	)
 	supplierGroupService := suppliergroupsapp.NewService(
 		suppliergroupsapp.NewMemoryRepository(),
-		&routeSurfaceSessionReader{},
+		sessionService,
 		&routeSurfaceGroupReader{},
 	)
 	supplierKeyService := supplierkeysapp.NewService(
 		supplierkeysapp.NewMemoryRepository(),
-		&routeSurfaceSessionReader{},
+		sessionService,
 		&routeSurfaceKeyAdapter{},
 		&routeSurfaceLocalAccountCreator{},
 	)
@@ -62,12 +71,13 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			Supplier:       adminplushandler.NewSupplierHandler(supplierService),
 			SupplierGroup:  adminplushandler.NewSupplierGroupHandler(supplierGroupService),
 			SupplierKey:    adminplushandler.NewSupplierKeyHandler(supplierKeyService),
-			Rate:           adminplushandler.NewRateHandler(ratesapp.NewServiceWithDependencies(newRouteSurfaceRateRepository(), nil, &routeSurfaceSessionReader{}, &routeSurfaceRateReader{})),
+			Rate:           adminplushandler.NewRateHandler(ratesapp.NewServiceWithDependencies(newRouteSurfaceRateRepository(), nil, sessionService, &routeSurfaceRateReader{})),
 			Balance:        adminplushandler.NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository())),
 			Announcement:   adminplushandler.NewAnnouncementHandler(announcementsapp.NewService(announcementsapp.NewMemoryRepository())),
 			Health:         adminplushandler.NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository())),
-			Billing:        adminplushandler.NewBillingHandler(billingapp.NewServiceWithDependencies(billingapp.NewMemoryRepository(), &routeSurfaceSessionReader{}, &routeSurfaceBillingReader{})),
+			Billing:        adminplushandler.NewBillingHandler(billingapp.NewServiceWithDependencies(billingapp.NewMemoryRepository(), sessionService, &routeSurfaceBillingReader{})),
 			Extension:      adminplushandler.NewExtensionHandler(extensionService, nil),
+			Session:        adminplushandler.NewSessionHandler(sessionService, nil),
 			Scheduler:      adminplushandler.NewSchedulerHandler(schedulerapp.NewService(supplierService, extensionService)),
 			Action:         adminplushandler.NewActionHandler(actionsapp.NewRuleService()),
 			Reconciliation: adminplushandler.NewReconciliationHandler(reconciliationapp.NewService()),
@@ -126,8 +136,10 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/suppliers/:id/keys/provision",
 		"POST /api/v1/admin-plus/suppliers/:id/keys/:keyID/repair-binding",
 		"POST /api/v1/admin-plus/suppliers/:id/rates/sync",
+		"GET /api/v1/admin-plus/suppliers/:id/balance/current",
 		"POST /api/v1/admin-plus/suppliers/:id/billing/sync",
 		"GET /api/v1/admin-plus/suppliers/:id/session",
+		"POST /api/v1/admin-plus/suppliers/:id/session/login",
 		"POST /api/v1/admin-plus/suppliers/:id/session/probe",
 		"POST /api/v1/admin-plus/suppliers/:id/browser-sessions",
 		"GET /api/v1/admin-plus/sub2api/accounts",
@@ -250,6 +262,48 @@ type routeSurfaceSessionReader struct{}
 
 func (r *routeSurfaceSessionReader) DecryptedProbeInput(_ context.Context, supplierID int64) (ports.SessionProbeInput, error) {
 	return ports.SessionProbeInput{SupplierID: supplierID}, nil
+}
+
+type routeSurfaceSessionCipher struct{}
+
+func (routeSurfaceSessionCipher) Encrypt(plaintext string) (string, error)  { return plaintext, nil }
+func (routeSurfaceSessionCipher) Decrypt(ciphertext string) (string, error) { return ciphertext, nil }
+
+type routeSurfaceLoginAdapter struct{}
+
+func (r *routeSurfaceLoginAdapter) DirectLogin(_ context.Context, in ports.DirectLoginInput) (*ports.DirectLoginResult, error) {
+	return &ports.DirectLoginResult{
+		SupplierID: in.SupplierID,
+		Origin:     in.Origin,
+		APIBaseURL: in.APIBaseURL,
+		SessionBundle: map[string]any{
+			"origin":         in.Origin,
+			"api_base_url":   in.APIBaseURL,
+			"access_token":   "route-surface-token",
+			"session_source": "direct_login",
+			"context": map[string]any{
+				"api_base_url":   in.APIBaseURL,
+				"login_method":   "direct_login",
+				"session_source": "direct_login",
+			},
+			"tokens": map[string]any{"access_token": "route-surface-token"},
+		},
+		CapturedAt: time.Now().UTC(),
+	}, nil
+}
+
+type routeSurfaceProbeAdapter struct{}
+
+func (r *routeSurfaceProbeAdapter) ProbeSub2APIUserProfile(_ context.Context, in ports.SessionProbeInput) (*ports.SessionProbeResult, error) {
+	return &ports.SessionProbeResult{
+		SupplierID:   in.SupplierID,
+		Status:       "valid",
+		SystemType:   "sub2api",
+		Origin:       in.Origin,
+		APIBaseURL:   in.APIBaseURL,
+		Capabilities: map[string]bool{"can_read_profile": true},
+		ProbedAt:     time.Now().UTC(),
+	}, nil
 }
 
 type routeSurfaceGroupReader struct{}

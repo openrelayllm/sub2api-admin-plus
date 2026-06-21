@@ -45,7 +45,7 @@
             class="sidebar-link"
             :class="{ 'sidebar-link-active': isNavItemActive(item), 'sidebar-link-collapsed': sidebarCollapsed }"
             :title="sidebarCollapsed ? item.label : undefined"
-            @click="handleMenuItemClick"
+            @click="handleTopLevelLinkClick"
           >
             <component :is="item.icon" class="h-5 w-5 flex-shrink-0" />
             <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
@@ -108,8 +108,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, h, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import VersionBadge from '@/components/common/VersionBadge.vue'
@@ -123,12 +123,13 @@ interface NavItem {
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const appStore = useAppStore()
 
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
 const isDark = ref(document.documentElement.classList.contains('dark'))
-const expandedGroups = ref<Set<string>>(new Set())
+const expandedGroupPath = ref<string | null>(null)
 
 const siteName = computed(() => appStore.siteName)
 const siteLogo = computed(() => appStore.siteLogo)
@@ -277,27 +278,76 @@ const ChevronDoubleRightIcon = {
 
 const adminNavItems = computed((): NavItem[] => [
   { path: '/admin/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
-  { path: '/admin/operations/suppliers', label: '供应商管理', icon: OperationsIcon },
-  { path: '/admin/operations/supplier-accounts', label: '账号/Key 绑定', icon: OperationsIcon },
-  { path: '/admin/operations/account-runtime', label: '账号运行态', icon: ChartIcon },
   {
-    path: '/admin/ops',
-    label: '监控',
+    path: '/admin/suppliers',
+    label: '供应商',
+    icon: OperationsIcon,
+    children: [
+      { path: '/admin/suppliers', label: '供应商管理', icon: OperationsIcon },
+      { path: '/admin/supplier-bindings', label: '账号/Key 绑定', icon: OperationsIcon }
+    ]
+  },
+  {
+    path: '/admin/collection/scheduler',
+    label: '采集监控',
+    icon: OperationsIcon,
+    children: [
+      { path: '/admin/collection/scheduler', label: '任务调度', icon: OperationsIcon },
+      { path: '/admin/collection/plugin-tasks', label: '插件任务', icon: OperationsIcon },
+      { path: '/admin/collection/sessions', label: '采集会话', icon: OperationsIcon }
+    ]
+  },
+  {
+    path: '/admin/monitoring/rates',
+    label: '运营监控',
     icon: ChartIcon,
     children: [
       { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon },
-      { path: '/admin/operations/rates', label: '费率监控', icon: ChartIcon },
-      { path: '/admin/operations/balances', label: '余额监控', icon: ChartIcon },
-      { path: '/admin/operations/health', label: '健康监控', icon: ChartIcon },
-      { path: '/admin/operations/announcements', label: '公告监控', icon: ChartIcon }
+      { path: '/admin/monitoring/rates', label: '费率', icon: ChartIcon },
+      { path: '/admin/monitoring/balances', label: '余额', icon: ChartIcon },
+      { path: '/admin/monitoring/health', label: '健康与并发', icon: ChartIcon },
+      { path: '/admin/monitoring/account-runtime', label: '账号运行态', icon: ChartIcon },
+      { path: '/admin/monitoring/announcements', label: '公告', icon: ChartIcon }
     ]
   },
-  { path: '/admin/operations/scheduler', label: '调度与插件', icon: OperationsIcon },
-  { path: '/admin/operations/billing', label: '账单对账', icon: ChartIcon },
-  { path: '/admin/operations/actions', label: '动作建议', icon: OperationsIcon },
-  { path: '/admin/operations/notifications', label: '通知记录', icon: OperationsIcon },
+  {
+    path: '/admin/finance/billing',
+    label: '财务对账',
+    icon: ChartIcon,
+    children: [
+      { path: '/admin/finance/billing', label: '供应商账单', icon: ChartIcon },
+      { path: '/admin/finance/local-usage', label: '本地用量', icon: ChartIcon },
+      { path: '/admin/finance/reconciliation', label: '对账结果', icon: ChartIcon }
+    ]
+  },
+  {
+    path: '/admin/automation/actions',
+    label: '自动化',
+    icon: OperationsIcon,
+    children: [
+      { path: '/admin/automation/actions', label: '动作建议', icon: OperationsIcon },
+      { path: '/admin/automation/notifications', label: '通知记录', icon: OperationsIcon },
+      { path: '/admin/automation/audits', label: '执行审计', icon: OperationsIcon }
+    ]
+  },
   { path: '/admin/settings', label: t('nav.settings'), icon: CogIcon }
 ])
+
+const activeGroupPath = computed(() => {
+  return adminNavItems.value.find((item) =>
+    item.children?.some((child) => isActive(child.path))
+  )?.path || null
+})
+
+watch(
+  activeGroupPath,
+  (nextPath, previousPath) => {
+    if (nextPath && nextPath !== previousPath) {
+      expandedGroupPath.value = nextPath
+    }
+  },
+  { immediate: true }
+)
 
 function toggleSidebar() {
   appStore.toggleSidebar()
@@ -321,19 +371,26 @@ function handleMenuItemClick() {
   }
 }
 
+function handleTopLevelLinkClick() {
+  expandedGroupPath.value = null
+  handleMenuItemClick()
+}
+
 function toggleNavGroup(path: string) {
-  if (sidebarCollapsed.value) return
-  const next = new Set(expandedGroups.value)
-  if (next.has(path)) {
-    next.delete(path)
-  } else {
-    next.add(path)
+  if (sidebarCollapsed.value) {
+    void router.push(path)
+    handleMenuItemClick()
+    return
   }
-  expandedGroups.value = next
+  if (expandedGroupPath.value === path) {
+    expandedGroupPath.value = null
+  } else {
+    expandedGroupPath.value = path
+  }
 }
 
 function isNavGroupExpanded(path: string): boolean {
-  return expandedGroups.value.has(path)
+  return expandedGroupPath.value === path
 }
 
 function isActive(path: string): boolean {

@@ -29,13 +29,14 @@ func (r *SQLRepository) Upsert(ctx context.Context, session *adminplusdomain.Sup
 	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO admin_plus_supplier_browser_sessions (
-			supplier_id, origin, api_base_url, session_summary,
+			supplier_id, session_source, origin, api_base_url, session_summary,
 			session_bundle_ciphertext, captured_at, expires_at,
 			source_extension_task_id, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, 0), $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), $10, $11)
 		ON CONFLICT (supplier_id) DO UPDATE
-		SET origin = EXCLUDED.origin,
+		SET session_source = EXCLUDED.session_source,
+			origin = EXCLUDED.origin,
 			api_base_url = EXCLUDED.api_base_url,
 			session_summary = EXCLUDED.session_summary,
 			session_bundle_ciphertext = EXCLUDED.session_bundle_ciphertext,
@@ -43,11 +44,12 @@ func (r *SQLRepository) Upsert(ctx context.Context, session *adminplusdomain.Sup
 			expires_at = EXCLUDED.expires_at,
 			source_extension_task_id = EXCLUDED.source_extension_task_id,
 			updated_at = EXCLUDED.updated_at
-		RETURNING supplier_id, origin, api_base_url, session_summary,
+		RETURNING supplier_id, session_source, origin, api_base_url, session_summary,
 			session_bundle_ciphertext, captured_at, expires_at,
 			source_extension_task_id, created_at, updated_at
 	`,
 		session.SupplierID,
+		string(session.SessionSource),
 		session.Origin,
 		session.APIBaseURL,
 		summary,
@@ -66,7 +68,7 @@ func (r *SQLRepository) Get(ctx context.Context, supplierID int64) (*adminplusdo
 		return nil, dbNotConfigured()
 	}
 	row := r.db.QueryRowContext(ctx, `
-		SELECT supplier_id, origin, api_base_url, session_summary,
+		SELECT supplier_id, session_source, origin, api_base_url, session_summary,
 			session_bundle_ciphertext, captured_at, expires_at,
 			source_extension_task_id, created_at, updated_at
 		FROM admin_plus_supplier_browser_sessions
@@ -86,10 +88,12 @@ type supplierBrowserSessionScanner interface {
 func scanSupplierBrowserSession(scanner supplierBrowserSessionScanner) (*adminplusdomain.SupplierBrowserSession, error) {
 	var session adminplusdomain.SupplierBrowserSession
 	var summary []byte
+	var sessionSource string
 	var expiresAt sql.NullTime
 	var sourceTaskID sql.NullInt64
 	err := scanner.Scan(
 		&session.SupplierID,
+		&sessionSource,
 		&session.Origin,
 		&session.APIBaseURL,
 		&summary,
@@ -102,6 +106,10 @@ func scanSupplierBrowserSession(scanner supplierBrowserSessionScanner) (*adminpl
 	)
 	if err != nil {
 		return nil, err
+	}
+	session.SessionSource = adminplusdomain.SupplierSessionSource(sessionSource)
+	if !session.SessionSource.Valid() {
+		session.SessionSource = adminplusdomain.SupplierSessionSourceBrowserExtension
 	}
 	if len(summary) > 0 {
 		if err := json.Unmarshal(summary, &session.SessionSummary); err != nil {

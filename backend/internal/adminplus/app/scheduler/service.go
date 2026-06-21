@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	defaultWindowMinutes = 10
+	defaultWindowMinutes = 5
 	dailyBucketLayout    = "20060102"
 	windowBucketLayout   = "200601021504"
 
@@ -311,7 +311,7 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 func normalizeTaskTypes(input []adminplusdomain.ExtensionTaskType) []adminplusdomain.ExtensionTaskType {
 	if len(input) == 0 {
 		return []adminplusdomain.ExtensionTaskType{
-			adminplusdomain.ExtensionTaskTypeCaptureSession,
+			adminplusdomain.ExtensionTaskTypeFetchBalance,
 		}
 	}
 	out := make([]adminplusdomain.ExtensionTaskType, 0, len(input))

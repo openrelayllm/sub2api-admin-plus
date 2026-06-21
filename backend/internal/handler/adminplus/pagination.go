@@ -3,6 +3,7 @@ package adminplus
 import (
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,6 +50,11 @@ func parsePositiveIntQuery(c *gin.Context, name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func parseBoolQuery(c *gin.Context, name string) bool {
+	raw := strings.ToLower(strings.TrimSpace(c.Query(name)))
+	return raw == "1" || raw == "true" || raw == "yes"
 }
 
 func paginatedData(items any, total int, page paginationRequest) gin.H {

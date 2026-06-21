@@ -467,6 +467,57 @@ func TestSupplierBrowserSessionDirectUpsertSanitizesSession(t *testing.T) {
 	require.NotContains(t, created.Body.String(), "direct-secret-cookie")
 }
 
+func TestSupplierSessionDirectLoginSyncsBalance(t *testing.T) {
+	var seenLogin bool
+	var seenProfileAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/api/v1/settings/public":
+			_, _ = w.Write([]byte(`{"data":{"login_agreement_revision":"rev-test"}}`))
+		case "/api/v1/auth/login":
+			seenLogin = true
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
+			require.Equal(t, "ops@example.com", payload["email"])
+			require.Equal(t, "secret", payload["password"])
+			require.Equal(t, "rev-test", payload["login_agreement_revision"])
+			_, _ = w.Write([]byte(`{"data":{"access_token":"direct-provider-token","expires_in":3600}}`))
+		case "/api/v1/user/profile":
+			seenProfileAuth = req.Header.Get("Authorization")
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"id": 42,
+					"email": "ops@example.com",
+					"status": "active",
+					"balance": 8.88,
+					"concurrency": 16,
+					"allowed_groups": [10]
+				}
+			}`))
+		default:
+			writeOperationsSub2APICapabilityFixture(t, w, req)
+		}
+	}))
+	defer server.Close()
+
+	router := newOperationsHandlerTestRouterWithSupplierURLs(server.URL, server.URL)
+	loggedIn := performJSON(t, router, http.MethodPost, "/suppliers/1/session/login", `{}`)
+	require.Equal(t, http.StatusOK, loggedIn.Code, loggedIn.Body.String())
+	require.True(t, seenLogin)
+	require.Equal(t, "Bearer direct-provider-token", seenProfileAuth)
+	require.Contains(t, loggedIn.Body.String(), `"session_source":"direct_login"`)
+	require.Contains(t, loggedIn.Body.String(), `"balance_cents":888`)
+	require.Contains(t, loggedIn.Body.String(), `"balance_snapshot"`)
+	require.NotContains(t, loggedIn.Body.String(), "direct-provider-token")
+
+	session := performJSON(t, router, http.MethodGet, "/suppliers/1/session", ``)
+	require.Equal(t, http.StatusOK, session.Code, session.Body.String())
+	require.Contains(t, session.Body.String(), `"session_source":"direct_login"`)
+	require.Contains(t, session.Body.String(), `"has_access_token":true`)
+	require.NotContains(t, session.Body.String(), "direct-provider-token")
+}
+
 func TestSupplierSessionProbeUsesCookieArray(t *testing.T) {
 	var seenCookie string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -694,21 +745,17 @@ func TestSupplierKeyProvisionCreatesProviderKeyLocalAccountAndBinding(t *testing
 	var seenCookie string
 	var payload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet {
+			writeOperationsSub2APICapabilityFixture(t, w, req)
+			return
+		}
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, "/api/v1/keys", req.URL.Path)
 		seenAuth = req.Header.Get("Authorization")
 		seenCookie = req.Header.Get("Cookie")
 		require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"id": 99,
-				"name": "ops-key",
-				"key": "sk-provider-secret",
-				"group_id": 10,
-				"status": "active"
-			}
-		}`))
+		_, _ = w.Write([]byte(`{"data":{"id":99,"name":"ops-key","key":"sk-provider-secret","group_id":10,"status":"active"}}`))
 	}))
 	defer server.Close()
 
@@ -769,19 +816,15 @@ func TestSupplierKeyProvisionReplaysWithIdempotencyKey(t *testing.T) {
 
 	var providerCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet {
+			writeOperationsSub2APICapabilityFixture(t, w, req)
+			return
+		}
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, "/api/v1/keys", req.URL.Path)
 		providerCalls++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"id": 99,
-				"name": "ops-key",
-				"key": "sk-provider-secret",
-				"group_id": 10,
-				"status": "active"
-			}
-		}`))
+		_, _ = w.Write([]byte(`{"data":{"id":99,"name":"ops-key","key":"sk-provider-secret","group_id":10,"status":"active"}}`))
 	}))
 	defer server.Close()
 
@@ -827,19 +870,15 @@ func TestSupplierKeyProvisionReplaysWithIdempotencyKey(t *testing.T) {
 func TestSupplierKeyRepairBindingBindsFailedKeyWithoutProviderCall(t *testing.T) {
 	var providerCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet {
+			writeOperationsSub2APICapabilityFixture(t, w, req)
+			return
+		}
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, "/api/v1/keys", req.URL.Path)
 		providerCalls++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"id": 99,
-				"name": "ops-key",
-				"key": "sk-provider-secret",
-				"group_id": 10,
-				"status": "active"
-			}
-		}`))
+		_, _ = w.Write([]byte(`{"data":{"id":99,"name":"ops-key","key":"sk-provider-secret","group_id":10,"status":"active"}}`))
 	}))
 	defer server.Close()
 
@@ -1032,7 +1071,7 @@ func writeOperationsSub2APICapabilityFixture(t *testing.T, w http.ResponseWriter
 		_, _ = w.Write([]byte(`{"data":{"items":[]}}`))
 	case "/api/v1/keys":
 		require.Equal(t, "1", req.URL.Query().Get("page"))
-		require.Equal(t, "1", req.URL.Query().Get("page_size"))
+		require.Contains(t, []string{"1", "100"}, req.URL.Query().Get("page_size"))
 		_, _ = w.Write([]byte(`{"data":[]}`))
 	default:
 		http.NotFound(w, req)
@@ -1073,6 +1112,7 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 		plainSessionCipher{},
 		supplierSvc,
 		sub2apiprovider.NewSessionProfileClient(nil),
+		sub2apiprovider.NewSessionProfileClient(http.DefaultClient),
 	)
 	sessionGroupClient := sub2apiprovider.NewSessionProfileClient(http.DefaultClient)
 	billingService := billingapp.NewServiceWithDependencies(
@@ -1149,6 +1189,7 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 	router := gin.New()
 	router.POST("/suppliers/site-match", supplierHandler.MatchSite)
 	router.GET("/suppliers/:id/session", sessionHandler.Get)
+	router.POST("/suppliers/:id/session/login", sessionHandler.Login)
 	router.POST("/suppliers/:id/session/probe", sessionHandler.Probe)
 	router.POST("/suppliers/:id/browser-sessions", sessionHandler.Upsert)
 	router.GET("/suppliers/:id/groups", supplierGroupHandler.List)

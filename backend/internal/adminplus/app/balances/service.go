@@ -2,6 +2,7 @@ package balances
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -50,6 +51,34 @@ type SyncFromSessionResult struct {
 	Event      *adminplusdomain.BalanceEvent    `json:"event,omitempty"`
 }
 
+type CurrentBalanceInput struct {
+	SupplierID               int64
+	Refresh                  bool
+	LowBalanceThresholdCents int64
+}
+
+type CurrentBalance struct {
+	SupplierID          int64                                 `json:"supplier_id"`
+	RuntimeStatus       adminplusdomain.SupplierRuntimeStatus `json:"runtime_status"`
+	BalanceCents        int64                                 `json:"balance_cents"`
+	Currency            string                                `json:"currency"`
+	SwitchEligible      bool                                  `json:"switch_eligible"`
+	Source              string                                `json:"source"`
+	CapturedAt          time.Time                             `json:"captured_at"`
+	RefreshAfter        time.Time                             `json:"refresh_after"`
+	ExpiresAt           time.Time                             `json:"expires_at"`
+	Stale               bool                                  `json:"stale"`
+	Expired             bool                                  `json:"expired"`
+	Fallback            bool                                  `json:"fallback"`
+	RefreshErrorReason  string                                `json:"refresh_error_reason,omitempty"`
+	RefreshErrorMessage string                                `json:"refresh_error_message,omitempty"`
+}
+
+type BalanceCache interface {
+	GetCurrent(ctx context.Context, supplierID int64) (*CurrentBalance, error)
+	SetCurrent(ctx context.Context, current *CurrentBalance, ttl time.Duration) error
+}
+
 type Repository interface {
 	CreateSnapshot(ctx context.Context, snapshot *adminplusdomain.BalanceSnapshot) (*adminplusdomain.BalanceSnapshot, error)
 	FindLatestSnapshot(ctx context.Context, supplierID int64, currency string, capturedAt time.Time) (*adminplusdomain.BalanceSnapshot, error)
@@ -72,8 +101,18 @@ type Service struct {
 	notifier Notifier
 	session  SessionReader
 	reader   ports.SessionProbeAdapter
+	cache    BalanceCache
+	freshFor time.Duration
+	cacheTTL time.Duration
 	now      func() time.Time
 }
+
+var ErrCurrentBalanceCacheMiss = errors.New("admin plus current balance cache miss")
+
+const (
+	defaultCurrentBalanceFreshFor = 6 * time.Minute
+	defaultCurrentBalanceCacheTTL = 15 * time.Minute
+)
 
 func NewService(repo Repository) *Service {
 	return NewServiceWithNotifier(repo, nil)
@@ -83,6 +122,8 @@ func NewServiceWithNotifier(repo Repository, notifier Notifier) *Service {
 	return &Service{
 		repo:     repo,
 		notifier: notifier,
+		freshFor: defaultCurrentBalanceFreshFor,
+		cacheTTL: defaultCurrentBalanceCacheTTL,
 		now:      time.Now,
 	}
 }
@@ -91,6 +132,12 @@ func NewServiceWithDependencies(repo Repository, notifier Notifier, session Sess
 	service := NewServiceWithNotifier(repo, notifier)
 	service.session = session
 	service.reader = reader
+	return service
+}
+
+func NewServiceWithCurrentCache(repo Repository, notifier Notifier, session SessionReader, reader ports.SessionProbeAdapter, cache BalanceCache) *Service {
+	service := NewServiceWithDependencies(repo, notifier, session, reader)
+	service.cache = cache
 	return service
 }
 
@@ -114,6 +161,7 @@ func (s *Service) RecordSnapshot(ctx context.Context, in RecordSnapshotInput) (*
 	if err != nil {
 		return nil, nil, err
 	}
+	s.cacheCurrentBalance(ctx, created)
 	event := buildBalanceEvent(created, previous, in.LowBalanceThresholdCents)
 	if event == nil {
 		return nil, created, nil
@@ -199,6 +247,45 @@ func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) 
 	return result, nil
 }
 
+func (s *Service) GetCurrent(ctx context.Context, in CurrentBalanceInput) (*CurrentBalance, error) {
+	if s == nil {
+		return nil, internalError("balance service is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("BALANCE_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if in.LowBalanceThresholdCents < 0 {
+		return nil, badRequest("BALANCE_THRESHOLD_INVALID", "low balance threshold must be non-negative")
+	}
+
+	var cached *CurrentBalance
+	if s.cache != nil && !in.Refresh {
+		item, err := s.cache.GetCurrent(ctx, in.SupplierID)
+		if err == nil && item != nil {
+			cached = s.withFreshness(item)
+			if !cached.Stale && !cached.Expired {
+				return cached, nil
+			}
+		} else if err != nil && !errors.Is(err, ErrCurrentBalanceCacheMiss) {
+			slog.Warn("admin plus current balance cache read failed", "supplier_id", in.SupplierID, "err", err)
+		}
+	}
+
+	current, err := s.refreshCurrent(ctx, in)
+	if err == nil && current != nil {
+		return current, nil
+	}
+	if err != nil {
+		slog.Warn("admin plus current balance refresh failed", "supplier_id", in.SupplierID, "err", err)
+	}
+	if cached != nil && !cached.Expired {
+		cached.RefreshErrorReason = refreshErrorReason(err)
+		cached.RefreshErrorMessage = refreshErrorMessage(err)
+		return cached, nil
+	}
+	return fallbackCurrentBalance(in.SupplierID, s.now().UTC(), err), nil
+}
+
 func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]*adminplusdomain.BalanceSnapshot, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("balance service is not configured")
@@ -265,6 +352,128 @@ func (s *Service) buildSnapshot(in RecordSnapshotInput) (*adminplusdomain.Balanc
 		RawPayload:     in.RawPayload,
 		CapturedAt:     capturedAt,
 	}, nil
+}
+
+func (s *Service) refreshCurrent(ctx context.Context, in CurrentBalanceInput) (*CurrentBalance, error) {
+	result, err := s.SyncFromSession(ctx, SyncFromSessionInput{
+		SupplierID:               in.SupplierID,
+		LowBalanceThresholdCents: in.LowBalanceThresholdCents,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || result.Snapshot == nil {
+		return nil, infraerrors.New(http.StatusBadGateway, "BALANCE_NOT_AVAILABLE", "supplier did not return balance")
+	}
+	return s.currentFromSnapshot(result.Snapshot), nil
+}
+
+func (s *Service) cacheCurrentBalance(ctx context.Context, snapshot *adminplusdomain.BalanceSnapshot) {
+	if s == nil || s.cache == nil || snapshot == nil {
+		return
+	}
+	current := s.currentFromSnapshot(snapshot)
+	ttl := current.ExpiresAt.Sub(s.now().UTC())
+	if ttl <= 0 {
+		return
+	}
+	if err := s.cache.SetCurrent(ctx, current, ttl); err != nil {
+		slog.Warn("admin plus current balance cache write failed", "supplier_id", snapshot.SupplierID, "err", err)
+	}
+}
+
+func (s *Service) currentFromSnapshot(snapshot *adminplusdomain.BalanceSnapshot) *CurrentBalance {
+	if snapshot == nil {
+		return nil
+	}
+	capturedAt := snapshot.CapturedAt.UTC()
+	current := &CurrentBalance{
+		SupplierID:     snapshot.SupplierID,
+		RuntimeStatus:  snapshot.RuntimeStatus,
+		BalanceCents:   snapshot.BalanceCents,
+		Currency:       normalizeCurrency(snapshot.Currency),
+		SwitchEligible: snapshot.SwitchEligible,
+		Source:         normalizeSource(snapshot.Source),
+		CapturedAt:     capturedAt,
+		RefreshAfter:   capturedAt.Add(s.currentBalanceFreshFor()),
+		ExpiresAt:      capturedAt.Add(s.currentBalanceTTL()),
+	}
+	return s.withFreshness(current)
+}
+
+func (s *Service) withFreshness(current *CurrentBalance) *CurrentBalance {
+	if current == nil {
+		return nil
+	}
+	out := *current
+	if out.Currency == "" {
+		out.Currency = "USD"
+	}
+	now := s.now().UTC()
+	if out.RefreshAfter.IsZero() {
+		out.RefreshAfter = out.CapturedAt.UTC().Add(s.currentBalanceFreshFor())
+	}
+	if out.ExpiresAt.IsZero() {
+		out.ExpiresAt = out.CapturedAt.UTC().Add(s.currentBalanceTTL())
+	}
+	out.Stale = !now.Before(out.RefreshAfter.UTC())
+	out.Expired = !now.Before(out.ExpiresAt.UTC())
+	return &out
+}
+
+func (s *Service) currentBalanceFreshFor() time.Duration {
+	if s != nil && s.freshFor > 0 {
+		return s.freshFor
+	}
+	return defaultCurrentBalanceFreshFor
+}
+
+func (s *Service) currentBalanceTTL() time.Duration {
+	if s != nil && s.cacheTTL > 0 {
+		return s.cacheTTL
+	}
+	return defaultCurrentBalanceCacheTTL
+}
+
+func fallbackCurrentBalance(supplierID int64, now time.Time, err error) *CurrentBalance {
+	return &CurrentBalance{
+		SupplierID:          supplierID,
+		RuntimeStatus:       adminplusdomain.SupplierRuntimeStatusMonitorOnly,
+		BalanceCents:        0,
+		Currency:            "USD",
+		SwitchEligible:      false,
+		Source:              "fallback",
+		CapturedAt:          now,
+		RefreshAfter:        now,
+		ExpiresAt:           now,
+		Stale:               true,
+		Expired:             true,
+		Fallback:            true,
+		RefreshErrorReason:  refreshErrorReason(err),
+		RefreshErrorMessage: refreshErrorMessage(err),
+	}
+}
+
+func refreshErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	reason := infraerrors.Reason(err)
+	if reason == "" {
+		return "BALANCE_REFRESH_FAILED"
+	}
+	return reason
+}
+
+func refreshErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := infraerrors.Message(err)
+	if message == "" {
+		return "balance refresh failed"
+	}
+	return message
 }
 
 func buildBalanceEvent(current, previous *adminplusdomain.BalanceSnapshot, thresholdCents int64) *adminplusdomain.BalanceEvent {

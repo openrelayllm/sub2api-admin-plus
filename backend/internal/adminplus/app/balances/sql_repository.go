@@ -47,7 +47,21 @@ func (r *SQLRepository) CreateSnapshot(ctx context.Context, snapshot *adminplusd
 		rawPayload,
 		snapshot.CapturedAt,
 	)
-	return scanBalanceSnapshot(row)
+	created, err := scanBalanceSnapshot(row)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.db.ExecContext(ctx, `
+		UPDATE admin_plus_suppliers
+		SET balance_cents = $2,
+			balance_currency = $3,
+			balance_updated_at = $4,
+			updated_at = NOW()
+		WHERE id = $1
+	`, created.SupplierID, created.BalanceCents, created.Currency, created.CapturedAt); err != nil {
+		return nil, err
+	}
+	return created, nil
 }
 
 func (r *SQLRepository) FindLatestSnapshot(ctx context.Context, supplierID int64, currency string, capturedAt time.Time) (*adminplusdomain.BalanceSnapshot, error) {

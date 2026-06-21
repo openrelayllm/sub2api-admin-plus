@@ -37,6 +37,26 @@ type SessionProbeInput struct {
 	Bundle     map[string]any
 }
 
+type DirectLoginInput struct {
+	SupplierID   int64
+	Origin       string
+	APIBaseURL   string
+	Username     string
+	Password     string
+	Token        string
+	LoginContext map[string]any
+}
+
+type DirectLoginResult struct {
+	SupplierID    int64
+	Origin        string
+	APIBaseURL    string
+	SessionBundle map[string]any
+	CapturedAt    time.Time
+	ExpiresAt     *time.Time
+	Diagnostics   map[string]any
+}
+
 type SessionProbeResult struct {
 	SupplierID      int64                `json:"supplier_id"`
 	Status          string               `json:"status"`
@@ -64,6 +84,10 @@ type UserProfileSnapshot struct {
 
 type SessionProbeAdapter interface {
 	ProbeSub2APIUserProfile(ctx context.Context, in SessionProbeInput) (*SessionProbeResult, error)
+}
+
+type SessionLoginAdapter interface {
+	DirectLogin(ctx context.Context, in DirectLoginInput) (*DirectLoginResult, error)
 }
 
 type ProviderBalanceSnapshotInput struct {

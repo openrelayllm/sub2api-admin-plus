@@ -10,8 +10,8 @@ func UseCipher(encryptor service.SecretEncryptor) Cipher {
 	return encryptor
 }
 
-func ProvideService(repo Repository, cipher Cipher, suppliers SupplierLookup, prober ports.SessionProbeAdapter) *Service {
-	return NewServiceWithDependencies(repo, cipher, suppliers, prober)
+func ProvideService(repo Repository, cipher Cipher, suppliers SupplierLookup, prober ports.SessionProbeAdapter, login ports.SessionLoginAdapter) *Service {
+	return NewServiceWithDependencies(repo, cipher, suppliers, prober, login)
 }
 
 var ProviderSet = wire.NewSet(

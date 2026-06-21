@@ -172,10 +172,11 @@ func TestServiceRunDryRunExplainsEligibleTasksWithoutWritingQueue(t *testing.T) 
 	require.Empty(t, tasks)
 }
 
-func TestServiceRunDefaultsToCaptureSessionTask(t *testing.T) {
+func TestServiceRunDefaultsToBalanceRefreshTask(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
-	service := NewService(supplierService, extensionService)
+	balanceSyncer := &stubBalanceSyncer{total: 1}
+	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -196,15 +197,18 @@ func TestServiceRunDefaultsToCaptureSessionTask(t *testing.T) {
 	run, err := service.Run(context.Background(), RunInput{Mode: "manual"})
 
 	require.NoError(t, err)
-	require.Equal(t, []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCaptureSession}, run.TaskTypes)
-	require.Equal(t, 1, run.CreatedCount)
+	require.Equal(t, []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance}, run.TaskTypes)
+	require.Equal(t, 0, run.CreatedCount)
+	require.Equal(t, 1, run.EligibleCount)
 	require.Len(t, run.Items, 1)
-	require.Equal(t, adminplusdomain.ExtensionTaskTypeCaptureSession, run.Items[0].TaskType)
+	require.Equal(t, adminplusdomain.ExtensionTaskTypeFetchBalance, run.Items[0].TaskType)
+	require.Equal(t, actionDirectSync, run.Items[0].Action)
+	require.True(t, run.Items[0].Synced)
+	require.Equal(t, 1, balanceSyncer.calls)
 
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
 	require.NoError(t, err)
-	require.Len(t, tasks, 1)
-	require.Equal(t, adminplusdomain.ExtensionTaskTypeCaptureSession, tasks[0].Type)
+	require.Empty(t, tasks)
 }
 
 func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {

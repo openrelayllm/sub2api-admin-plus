@@ -34,9 +34,11 @@ func RegisterAdminPlusRoutes(
 			suppliers.POST("/:id/keys/provision", h.AdminPlus.SupplierKey.Provision)
 			suppliers.POST("/:id/keys/:keyID/repair-binding", h.AdminPlus.SupplierKey.RepairBinding)
 			suppliers.POST("/:id/rates/sync", h.AdminPlus.Rate.SyncSupplierRates)
+			suppliers.GET("/:id/balance/current", h.AdminPlus.Balance.GetSupplierCurrent)
 			suppliers.POST("/:id/announcements/sync", h.AdminPlus.Announcement.SyncSupplierAnnouncements)
 			suppliers.POST("/:id/billing/sync", h.AdminPlus.Billing.SyncSupplierBilling)
 			suppliers.GET("/:id/session", h.AdminPlus.Session.Get)
+			suppliers.POST("/:id/session/login", h.AdminPlus.Session.Login)
 			suppliers.POST("/:id/session/probe", h.AdminPlus.Session.Probe)
 			suppliers.POST("/:id/browser-sessions", h.AdminPlus.Session.Upsert)
 		}

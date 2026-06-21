@@ -15,6 +15,7 @@ import (
 
 type UpsertInput struct {
 	SupplierID              int64
+	SessionSource           adminplusdomain.SupplierSessionSource
 	Origin                  string
 	APIBaseURL              string
 	SessionSummary          map[string]any
@@ -23,6 +24,21 @@ type UpsertInput struct {
 	CapturedAt              time.Time
 	ExpiresAt               *time.Time
 	SourceExtensionTaskID   int64
+}
+
+type LoginInput struct {
+	SupplierID   int64
+	Origin       string
+	APIBaseURL   string
+	Username     string
+	Password     string
+	Token        string
+	LoginContext map[string]any
+}
+
+type LoginResult struct {
+	Session     *adminplusdomain.SupplierBrowserSession `json:"session"`
+	Diagnostics map[string]any                          `json:"diagnostics,omitempty"`
 }
 
 type Repository interface {
@@ -34,17 +50,23 @@ type SupplierLookup interface {
 	Get(ctx context.Context, id int64) (*adminplusdomain.Supplier, error)
 }
 
+type SupplierCredentialLookup interface {
+	GetBrowserCredential(ctx context.Context, id int64) (*adminplusdomain.SupplierBrowserCredential, error)
+}
+
 type Cipher interface {
 	Encrypt(plaintext string) (string, error)
 	Decrypt(ciphertext string) (string, error)
 }
 
 type Service struct {
-	repo      Repository
-	cipher    Cipher
-	suppliers SupplierLookup
-	prober    ports.SessionProbeAdapter
-	now       func() time.Time
+	repo        Repository
+	cipher      Cipher
+	suppliers   SupplierLookup
+	credentials SupplierCredentialLookup
+	prober      ports.SessionProbeAdapter
+	login       ports.SessionLoginAdapter
+	now         func() time.Time
 }
 
 func NewService(repo Repository, cipher Cipher) *Service {
@@ -59,10 +81,16 @@ func NewServiceWithSupplier(repo Repository, cipher Cipher, suppliers SupplierLo
 	return NewServiceWithDependencies(repo, cipher, suppliers, nil)
 }
 
-func NewServiceWithDependencies(repo Repository, cipher Cipher, suppliers SupplierLookup, prober ports.SessionProbeAdapter) *Service {
+func NewServiceWithDependencies(repo Repository, cipher Cipher, suppliers SupplierLookup, prober ports.SessionProbeAdapter, login ...ports.SessionLoginAdapter) *Service {
 	service := NewService(repo, cipher)
 	service.suppliers = suppliers
+	if credentials, ok := any(suppliers).(SupplierCredentialLookup); ok {
+		service.credentials = credentials
+	}
 	service.prober = prober
+	if len(login) > 0 {
+		service.login = login[0]
+	}
 	return service
 }
 
@@ -75,6 +103,13 @@ func (s *Service) Upsert(ctx context.Context, in UpsertInput) (*adminplusdomain.
 	}
 	if err := s.validateSessionScope(ctx, in.SupplierID, in.Origin, in.APIBaseURL, in.SessionBundle); err != nil {
 		return nil, err
+	}
+	source := in.SessionSource
+	if source == "" {
+		source = adminplusdomain.SupplierSessionSourceBrowserExtension
+	}
+	if !source.Valid() {
+		return nil, badRequest("SUPPLIER_SESSION_SOURCE_INVALID", "invalid supplier session source")
 	}
 	ciphertext := strings.TrimSpace(in.SessionBundleCiphertext)
 	if ciphertext == "" {
@@ -98,6 +133,7 @@ func (s *Service) Upsert(ctx context.Context, in UpsertInput) (*adminplusdomain.
 	now := s.now().UTC()
 	return s.repo.Upsert(ctx, &adminplusdomain.SupplierBrowserSession{
 		SupplierID:              in.SupplierID,
+		SessionSource:           source,
 		Origin:                  trimLimit(in.Origin, 240),
 		APIBaseURL:              trimLimit(in.APIBaseURL, 240),
 		SessionSummary:          cloneMap(in.SessionSummary),
@@ -110,6 +146,82 @@ func (s *Service) Upsert(ctx context.Context, in UpsertInput) (*adminplusdomain.
 	})
 }
 
+func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("supplier browser session service is not configured")
+	}
+	if s.login == nil {
+		return nil, internalError("supplier direct login adapter is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if s.suppliers == nil {
+		return nil, internalError("supplier lookup is not configured")
+	}
+	supplier, err := s.suppliers.Get(ctx, in.SupplierID)
+	if err != nil {
+		return nil, err
+	}
+	if supplier.Type != adminplusdomain.SupplierTypeSub2API {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_UNSUPPORTED", "supplier direct login is only implemented for Sub2API suppliers")
+	}
+	username := strings.TrimSpace(in.Username)
+	password := strings.TrimSpace(in.Password)
+	token := strings.TrimSpace(in.Token)
+	apiBaseURL := firstNonEmpty(in.APIBaseURL, supplier.APIBaseURL, supplier.DashboardURL)
+	origin := firstNonEmpty(in.Origin, supplier.DashboardURL, originFromRawURL(apiBaseURL))
+	if username == "" && password == "" && token == "" {
+		if s.credentials == nil {
+			return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "supplier login credential is required")
+		}
+		credential, err := s.credentials.GetBrowserCredential(ctx, in.SupplierID)
+		if err != nil {
+			return nil, err
+		}
+		username = strings.TrimSpace(credential.Username)
+		password = strings.TrimSpace(credential.Password)
+		token = strings.TrimSpace(credential.Token)
+		apiBaseURL = firstNonEmpty(in.APIBaseURL, credential.APIBaseURL, supplier.APIBaseURL, credential.DashboardURL, supplier.DashboardURL)
+		origin = firstNonEmpty(in.Origin, credential.DashboardURL, supplier.DashboardURL, originFromRawURL(apiBaseURL))
+	}
+	if token == "" && (username == "" || password == "") {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "supplier username and password or access token is required")
+	}
+	loginResult, err := s.login.DirectLogin(ctx, ports.DirectLoginInput{
+		SupplierID:   in.SupplierID,
+		Origin:       origin,
+		APIBaseURL:   apiBaseURL,
+		Username:     username,
+		Password:     password,
+		Token:        token,
+		LoginContext: cloneMap(in.LoginContext),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if loginResult == nil || len(loginResult.SessionBundle) == 0 {
+		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_EMPTY_SESSION", "supplier direct login returned empty session")
+	}
+	session, err := s.Upsert(ctx, UpsertInput{
+		SupplierID:     in.SupplierID,
+		SessionSource:  adminplusdomain.SupplierSessionSourceDirectLogin,
+		Origin:         firstNonEmpty(loginResult.Origin, origin),
+		APIBaseURL:     firstNonEmpty(loginResult.APIBaseURL, apiBaseURL),
+		SessionSummary: sessionSummaryFromBundle(loginResult.SessionBundle),
+		SessionBundle:  loginResult.SessionBundle,
+		CapturedAt:     loginResult.CapturedAt,
+		ExpiresAt:      loginResult.ExpiresAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &LoginResult{
+		Session:     session,
+		Diagnostics: cloneMap(loginResult.Diagnostics),
+	}, nil
+}
+
 func (s *Service) Get(ctx context.Context, supplierID int64) (*adminplusdomain.SupplierBrowserSession, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("supplier browser session service is not configured")
@@ -118,6 +230,35 @@ func (s *Service) Get(ctx context.Context, supplierID int64) (*adminplusdomain.S
 		return nil, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
 	}
 	return s.repo.Get(ctx, supplierID)
+}
+
+func sessionSummaryFromBundle(bundle map[string]any) map[string]any {
+	tokens := mapValue(bundle, "tokens")
+	context := mapValue(bundle, "context")
+	requiredHeaders := mapValue(bundle, "required_headers")
+	cookiesRaw, _ := bundle["cookies"].([]any)
+	cookieCount := len(cookiesRaw)
+	if cookieCount == 0 && firstNonEmpty(stringValue(requiredHeaders, "cookie"), stringValue(bundle, "cookie"), stringValue(bundle, "cookies")) != "" {
+		cookieCount = 1
+	}
+	return map[string]any{
+		"origin":               stringValue(bundle, "origin"),
+		"session_source":       stringValue(bundle, "session_source"),
+		"captured_at":          stringValue(bundle, "captured_at"),
+		"expires_at":           stringValue(bundle, "expires_at"),
+		"has_access_token":     firstNonEmpty(stringValue(bundle, "access_token"), stringValue(bundle, "accessToken"), stringValue(tokens, "access_token"), stringValue(tokens, "accessToken")) != "",
+		"has_refresh_token":    firstNonEmpty(stringValue(bundle, "refresh_token"), stringValue(bundle, "refreshToken"), stringValue(tokens, "refresh_token"), stringValue(tokens, "refreshToken")) != "",
+		"has_csrf_token":       firstNonEmpty(stringValue(bundle, "csrf_token"), stringValue(bundle, "csrfToken"), stringValue(tokens, "csrf_token"), stringValue(tokens, "csrfToken")) != "",
+		"cookie_count":         cookieCount,
+		"user_id":              stringValue(context, "user_id"),
+		"organization_id":      stringValue(context, "organization_id"),
+		"project_id":           stringValue(context, "project_id"),
+		"account_id":           stringValue(context, "account_id"),
+		"api_base_url":         stringValue(context, "api_base_url"),
+		"login_method":         stringValue(context, "login_method"),
+		"has_required_origin":  stringValue(requiredHeaders, "origin") != "",
+		"has_required_referer": stringValue(requiredHeaders, "referer") != "",
+	}
 }
 
 func (s *Service) DecryptedBundle(ctx context.Context, supplierID int64) (map[string]any, *adminplusdomain.SupplierBrowserSession, error) {
@@ -259,6 +400,24 @@ func canonicalHost(u *url.URL) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(u.Host))
+}
+
+func originFromRawURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func mapValue(in map[string]any, key string) map[string]any {
+	if in == nil {
+		return nil
+	}
+	if value, ok := in[key].(map[string]any); ok {
+		return value
+	}
+	return nil
 }
 
 func stringValue(in map[string]any, key string) string {

@@ -20,6 +20,7 @@ export type SupplierRuntimeStatus = 'monitor_only' | 'candidate' | 'active' | 'd
 export type SupplierHealthStatus = 'normal' | 'unavailable' | 'credential_invalid' | 'paused'
 export type SupplierGroupStatus = 'active' | 'missing' | 'disabled'
 export type SupplierKeyStatus = 'provisioning' | 'bound' | 'manual_secret_required' | 'failed' | 'disabled'
+export type SupplierSessionSource = 'direct_login' | 'browser_extension' | 'manual_import'
 
 export interface SupplierCredentialStatus {
   postgres_configured: boolean
@@ -79,6 +80,7 @@ export interface SupplierSiteMatchResult {
 
 export interface SupplierBrowserSession {
   supplier_id: number
+  session_source: SupplierSessionSource
   origin: string
   api_base_url?: string
   session_summary?: Record<string, unknown>
@@ -114,10 +116,46 @@ export interface SupplierSessionProbeResult {
   probed_at: string
 }
 
+export interface SupplierCurrentBalance {
+  supplier_id: number
+  runtime_status: SupplierRuntimeStatus
+  balance_cents: number
+  currency: string
+  switch_eligible: boolean
+  source: string
+  captured_at: string
+  refresh_after: string
+  expires_at: string
+  stale: boolean
+  expired: boolean
+  fallback: boolean
+  refresh_error_reason?: string
+  refresh_error_message?: string
+}
+
 export interface ProbeSupplierSessionResponse {
   probe: SupplierSessionProbeResult
   balance_snapshot?: BalanceSnapshot
   balance_event?: BalanceEvent | null
+}
+
+export interface LoginSupplierSessionPayload {
+  origin?: string
+  api_base_url?: string
+  username?: string
+  password?: string
+  token?: string
+  login_context?: Record<string, unknown>
+  low_balance_threshold_cents?: number
+  record_balance_snapshot?: boolean
+}
+
+export interface LoginSupplierSessionResponse {
+  session: SupplierBrowserSession
+  probe?: SupplierSessionProbeResult
+  balance_snapshot?: BalanceSnapshot
+  balance_event?: BalanceEvent | null
+  diagnostics?: Record<string, unknown>
 }
 
 export interface UpsertSupplierBrowserSessionPayload {
@@ -757,6 +795,16 @@ export async function probeSupplierSession(id: number, payload?: {
   return data
 }
 
+export async function getSupplierCurrentBalance(id: number, params?: { refresh?: boolean; low_balance_threshold_cents?: number }): Promise<SupplierCurrentBalance> {
+  const { data } = await apiClient.get<SupplierCurrentBalance>(`/admin-plus/suppliers/${id}/balance/current`, { params })
+  return data
+}
+
+export async function loginSupplierSession(id: number, payload?: LoginSupplierSessionPayload): Promise<LoginSupplierSessionResponse> {
+  const { data } = await apiClient.post<LoginSupplierSessionResponse>(`/admin-plus/suppliers/${id}/session/login`, payload || {})
+  return data
+}
+
 export async function upsertSupplierBrowserSession(id: number, payload: UpsertSupplierBrowserSessionPayload): Promise<SupplierBrowserSession> {
   const { data } = await apiClient.post<SupplierBrowserSession>(`/admin-plus/suppliers/${id}/browser-sessions`, payload)
   return data
@@ -1130,6 +1178,7 @@ export const adminPlusAPI = {
   updateSupplierStatus,
   matchSupplierSite,
   getSupplierSession,
+  loginSupplierSession,
   probeSupplierSession,
   upsertSupplierBrowserSession,
   listSupplierGroups,

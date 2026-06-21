@@ -1,6 +1,18 @@
-import type { RouteRecordRaw } from 'vue-router'
+import type { RouteLocationGeneric, RouteRecordRaw } from 'vue-router'
 
 export const ADMIN_HOME = '/admin/dashboard'
+
+const adminMeta = (title: string, extra: Record<string, unknown> = {}) => ({
+  requiresAuth: true,
+  requiresAdmin: true,
+  title,
+  ...extra
+})
+
+const redirectWithQuery = (path: string) => (to: RouteLocationGeneric) => ({
+  path,
+  query: to.query
+})
 
 export const adminPlusRoutes: RouteRecordRaw[] = [
   {
@@ -34,155 +46,176 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     path: ADMIN_HOME,
     name: 'AdminDashboard',
     component: () => import('@/views/admin/DashboardView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Admin Dashboard',
+    meta: adminMeta('Admin Dashboard', {
       titleKey: 'admin.dashboard.title',
       descriptionKey: 'admin.dashboard.description'
-    }
+    })
   },
   {
     path: '/admin/ops',
     name: 'AdminOps',
     component: () => import('@/views/admin/ops/OpsDashboard.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Ops Monitoring',
+    meta: adminMeta('Ops Monitoring', {
       titleKey: 'admin.ops.title',
       descriptionKey: 'admin.ops.description'
-    }
+    })
+  },
+  {
+    path: '/admin/suppliers',
+    name: 'AdminPlusSuppliers',
+    component: () => import('@/views/admin/operations/SuppliersView.vue'),
+    meta: adminMeta('供应商管理')
+  },
+  {
+    path: '/admin/supplier-bindings',
+    name: 'AdminPlusSupplierBindings',
+    component: () => import('@/views/admin/operations/SupplierAccountsView.vue'),
+    meta: adminMeta('账号/Key 绑定')
+  },
+  {
+    path: '/admin/collection/scheduler',
+    name: 'AdminPlusCollectionScheduler',
+    component: () => import('@/views/admin/operations/SchedulerView.vue'),
+    meta: adminMeta('任务调度')
+  },
+  {
+    path: '/admin/collection/plugin-tasks',
+    name: 'AdminPlusPluginTasks',
+    component: () => import('@/views/admin/operations/SchedulerView.vue'),
+    meta: adminMeta('插件任务')
+  },
+  {
+    path: '/admin/collection/sessions',
+    name: 'AdminPlusCollectionSessions',
+    component: () => import('@/views/admin/operations/SuppliersView.vue'),
+    meta: adminMeta('采集会话')
+  },
+  {
+    path: '/admin/monitoring/rates',
+    name: 'AdminPlusRates',
+    component: () => import('@/views/admin/operations/RatesView.vue'),
+    meta: adminMeta('费率')
+  },
+  {
+    path: '/admin/monitoring/balances',
+    name: 'AdminPlusBalances',
+    component: () => import('@/views/admin/operations/BalancesView.vue'),
+    meta: adminMeta('余额')
+  },
+  {
+    path: '/admin/monitoring/health',
+    name: 'AdminPlusHealth',
+    component: () => import('@/views/admin/operations/HealthView.vue'),
+    meta: adminMeta('健康探测')
+  },
+  {
+    path: '/admin/monitoring/account-runtime',
+    name: 'AdminPlusAccountRuntime',
+    component: () => import('@/views/admin/operations/AccountRuntimeView.vue'),
+    meta: adminMeta('并发运行态')
+  },
+  {
+    path: '/admin/monitoring/announcements',
+    name: 'AdminPlusAnnouncements',
+    component: () => import('@/views/admin/operations/AnnouncementsView.vue'),
+    meta: adminMeta('公告')
+  },
+  {
+    path: '/admin/finance/billing',
+    name: 'AdminPlusSupplierBilling',
+    component: () => import('@/views/admin/operations/BillingReconciliationView.vue'),
+    meta: adminMeta('供应商账单')
+  },
+  {
+    path: '/admin/finance/local-usage',
+    name: 'AdminPlusLocalUsage',
+    component: () => import('@/views/admin/operations/LocalUsageView.vue'),
+    meta: adminMeta('本地用量')
+  },
+  {
+    path: '/admin/finance/reconciliation',
+    name: 'AdminPlusReconciliation',
+    component: () => import('@/views/admin/operations/BillingReconciliationView.vue'),
+    meta: adminMeta('对账结果')
+  },
+  {
+    path: '/admin/automation/actions',
+    name: 'AdminPlusActions',
+    component: () => import('@/views/admin/operations/ActionRecommendationsView.vue'),
+    meta: adminMeta('动作建议')
+  },
+  {
+    path: '/admin/automation/notifications',
+    name: 'AdminPlusNotifications',
+    component: () => import('@/views/admin/operations/NotificationsView.vue'),
+    meta: adminMeta('通知记录')
+  },
+  {
+    path: '/admin/automation/audits',
+    name: 'AdminPlusExecutionAudits',
+    component: () => import('@/views/admin/operations/ActionRecommendationsView.vue'),
+    meta: adminMeta('执行审计')
   },
   {
     path: '/admin/operations',
-    redirect: '/admin/operations/suppliers'
+    redirect: '/admin/suppliers'
   },
   {
     path: '/admin/operations/suppliers',
-    name: 'AdminPlusSuppliers',
-    component: () => import('@/views/admin/operations/SuppliersView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '供应商管理'
-    }
+    redirect: redirectWithQuery('/admin/suppliers')
   },
   {
     path: '/admin/operations/supplier-accounts',
-    name: 'AdminPlusSupplierAccounts',
-    component: () => import('@/views/admin/operations/SupplierAccountsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '账号/Key 绑定'
-    }
+    redirect: redirectWithQuery('/admin/supplier-bindings')
   },
   {
     path: '/admin/operations/account-runtime',
-    name: 'AdminPlusAccountRuntime',
-    component: () => import('@/views/admin/operations/AccountRuntimeView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '账号运行态'
-    }
+    redirect: redirectWithQuery('/admin/monitoring/account-runtime')
   },
   {
     path: '/admin/operations/rates',
-    name: 'AdminPlusRates',
-    component: () => import('@/views/admin/operations/RatesView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '费率监控'
-    }
+    redirect: redirectWithQuery('/admin/monitoring/rates')
   },
   {
     path: '/admin/operations/balances',
-    name: 'AdminPlusBalances',
-    component: () => import('@/views/admin/operations/BalancesView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '余额监控'
-    }
+    redirect: redirectWithQuery('/admin/monitoring/balances')
   },
   {
     path: '/admin/operations/health',
-    name: 'AdminPlusHealth',
-    component: () => import('@/views/admin/operations/HealthView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '健康监控'
-    }
+    redirect: redirectWithQuery('/admin/monitoring/health')
   },
   {
     path: '/admin/operations/announcements',
-    name: 'AdminPlusAnnouncements',
-    component: () => import('@/views/admin/operations/AnnouncementsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '公告监控'
-    }
+    redirect: redirectWithQuery('/admin/monitoring/announcements')
   },
   {
     path: '/admin/operations/scheduler',
-    name: 'AdminPlusScheduler',
-    component: () => import('@/views/admin/operations/SchedulerView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '调度与插件采集'
-    }
+    redirect: redirectWithQuery('/admin/collection/scheduler')
   },
   {
     path: '/admin/operations/extension-tasks',
-    redirect: '/admin/operations/scheduler'
+    redirect: redirectWithQuery('/admin/collection/plugin-tasks')
   },
   {
     path: '/admin/operations/billing',
-    name: 'AdminPlusBilling',
-    component: () => import('@/views/admin/operations/BillingReconciliationView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '账单对账'
-    }
+    redirect: redirectWithQuery('/admin/finance/reconciliation')
   },
   {
     path: '/admin/operations/actions',
-    name: 'AdminPlusActions',
-    component: () => import('@/views/admin/operations/ActionRecommendationsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '动作建议'
-    }
+    redirect: redirectWithQuery('/admin/automation/actions')
   },
   {
     path: '/admin/operations/notifications',
-    name: 'AdminPlusNotifications',
-    component: () => import('@/views/admin/operations/NotificationsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: '通知记录'
-    }
+    redirect: redirectWithQuery('/admin/automation/notifications')
   },
   {
     path: '/admin/settings',
     name: 'AdminSettings',
     component: () => import('@/views/admin/SettingsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'System Settings',
+    meta: adminMeta('System Settings', {
       titleKey: 'admin.settings.title',
       descriptionKey: 'admin.settings.description'
-    }
+    })
   },
   {
     path: '/:pathMatch(.*)*',

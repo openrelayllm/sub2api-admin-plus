@@ -48,6 +48,132 @@ func NewSessionProfileClient(client *http.Client) *SessionProfileClient {
 	return &SessionProfileClient{httpClient: client, now: time.Now}
 }
 
+func (c *SessionProfileClient) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*ports.DirectLoginResult, error) {
+	if c == nil || c.httpClient == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "provider adapter is not configured")
+	}
+	apiBaseURL := firstNonEmpty(in.APIBaseURL, in.Origin)
+	if apiBaseURL == "" {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_API_BASE_URL_REQUIRED", "supplier api base url is required for direct login")
+	}
+	if in.Token != "" {
+		return c.directLoginFromToken(ctx, in, apiBaseURL)
+	}
+	if strings.TrimSpace(in.Username) == "" || strings.TrimSpace(in.Password) == "" {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "supplier username and password are required")
+	}
+	revision, settingsDiagnostics, err := c.fetchLoginAgreementRevision(ctx, apiBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	loginEndpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, "/auth/login")
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"email":    strings.TrimSpace(in.Username),
+		"password": strings.TrimSpace(in.Password),
+	}
+	if revision != "" {
+		payload["login_agreement_revision"] = revision
+	}
+	for key, value := range in.LoginContext {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		payload[key] = value
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", defaultUserAgent)
+	origin := firstNonEmpty(in.Origin, originFromRawURL(apiBaseURL))
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Referer", strings.TrimRight(origin, "/")+"/")
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_FAILED", "failed to request supplier login endpoint").WithCause(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, infraerrors.New(resp.StatusCode, "LOGIN_CREDENTIAL_INVALID", "supplier direct login credential is invalid")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, classifyDirectLoginFailure(resp.StatusCode, data)
+	}
+	token, expiresAt, raw, err := parseSub2APILoginResponse(data)
+	if err != nil {
+		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_RESPONSE_INVALID", "supplier login response is invalid").WithCause(err)
+	}
+	if token == "" {
+		return nil, classifyDirectLoginFailure(resp.StatusCode, data)
+	}
+	capturedAt := c.now().UTC()
+	bundle := buildDirectLoginSessionBundle(ports.DirectLoginInput{
+		SupplierID: in.SupplierID,
+		Origin:     origin,
+		APIBaseURL: apiBaseURL,
+	}, token, capturedAt, expiresAt)
+	return &ports.DirectLoginResult{
+		SupplierID:    in.SupplierID,
+		Origin:        origin,
+		APIBaseURL:    apiBaseURL,
+		SessionBundle: bundle,
+		CapturedAt:    capturedAt,
+		ExpiresAt:     expiresAt,
+		Diagnostics: map[string]any{
+			"login_endpoint":           loginEndpoint,
+			"settings_endpoint":        settingsDiagnostics["settings_endpoint"],
+			"login_agreement_revision": revision != "",
+			"login_response_keys":      rawKeys(raw),
+		},
+	}, nil
+}
+
+func (c *SessionProfileClient) directLoginFromToken(ctx context.Context, in ports.DirectLoginInput, apiBaseURL string) (*ports.DirectLoginResult, error) {
+	origin := firstNonEmpty(in.Origin, originFromRawURL(apiBaseURL))
+	capturedAt := c.now().UTC()
+	bundle := buildDirectLoginSessionBundle(ports.DirectLoginInput{
+		SupplierID: in.SupplierID,
+		Origin:     origin,
+		APIBaseURL: apiBaseURL,
+	}, strings.TrimSpace(in.Token), capturedAt, nil)
+	probe, err := c.ProbeSub2APIUserProfile(ctx, ports.SessionProbeInput{
+		SupplierID: in.SupplierID,
+		Origin:     origin,
+		APIBaseURL: apiBaseURL,
+		Bundle:     bundle,
+	})
+	if err != nil {
+		return nil, err
+	}
+	diagnostics := map[string]any{"token_probe": "ok"}
+	if probe != nil {
+		diagnostics["profile_status"] = probe.Status
+	}
+	return &ports.DirectLoginResult{
+		SupplierID:    in.SupplierID,
+		Origin:        origin,
+		APIBaseURL:    apiBaseURL,
+		SessionBundle: bundle,
+		CapturedAt:    capturedAt,
+		Diagnostics:   diagnostics,
+	}, nil
+}
+
 func (c *SessionProfileClient) ProbeSub2APIUserProfile(ctx context.Context, in ports.SessionProbeInput) (*ports.SessionProbeResult, error) {
 	if c == nil || c.httpClient == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "provider adapter is not configured")
@@ -109,6 +235,112 @@ func (c *SessionProfileClient) ProbeSub2APIUserProfile(ctx context.Context, in p
 
 func buildSub2APIUserProfileURL(apiBaseURL string) (string, error) {
 	return buildSub2APIUserEndpointURL(apiBaseURL, "/user/profile")
+}
+
+func (c *SessionProfileClient) fetchLoginAgreementRevision(ctx context.Context, apiBaseURL string) (string, map[string]any, error) {
+	endpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, "/settings/public")
+	if err != nil {
+		return "", nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", defaultUserAgent)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_SETTINGS_FAILED", "failed to request supplier public settings").WithCause(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_SETTINGS_BAD_STATUS", "supplier public settings endpoint returned non-success status")
+	}
+	body, ok := unwrapDataObject(data)
+	if !ok {
+		return "", nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_SETTINGS_INVALID", "supplier public settings response is invalid")
+	}
+	return firstNonEmpty(stringFromAny(body["login_agreement_revision"]), stringFromAny(body["loginAgreementRevision"])), map[string]any{
+		"settings_endpoint": endpoint,
+		"settings_keys":     rawKeys(body),
+	}, nil
+}
+
+func buildDirectLoginSessionBundle(in ports.DirectLoginInput, accessToken string, capturedAt time.Time, expiresAt *time.Time) map[string]any {
+	origin := firstNonEmpty(in.Origin, originFromRawURL(in.APIBaseURL))
+	apiBaseURL := firstNonEmpty(in.APIBaseURL, origin)
+	requiredHeaders := map[string]any{}
+	if origin != "" {
+		requiredHeaders["origin"] = origin
+		requiredHeaders["referer"] = strings.TrimRight(origin, "/") + "/"
+	}
+	bundle := map[string]any{
+		"origin":           origin,
+		"api_base_url":     apiBaseURL,
+		"access_token":     accessToken,
+		"tokens":           map[string]any{"access_token": accessToken},
+		"required_headers": requiredHeaders,
+		"context": map[string]any{
+			"api_base_url":   apiBaseURL,
+			"login_method":   "direct_login",
+			"session_source": "direct_login",
+		},
+		"captured_at":    capturedAt.UTC().Format(time.RFC3339),
+		"session_source": "direct_login",
+	}
+	if expiresAt != nil && !expiresAt.IsZero() {
+		bundle["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+	}
+	return bundle
+}
+
+func parseSub2APILoginResponse(data []byte) (string, *time.Time, map[string]any, error) {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return "", nil, nil, err
+	}
+	body := root
+	if dataValue, ok := root["data"].(map[string]any); ok {
+		body = dataValue
+	}
+	token := firstNonEmpty(
+		stringFromAny(body["access_token"]),
+		stringFromAny(body["accessToken"]),
+		stringFromAny(body["token"]),
+		stringFromAny(root["access_token"]),
+		stringFromAny(root["accessToken"]),
+	)
+	var expiresAt *time.Time
+	if t, ok := firstTimeValue(body, "expires_at", "expiresAt", "access_token_expires_at", "accessTokenExpiresAt"); ok {
+		value := t.UTC()
+		expiresAt = &value
+	} else if expiresIn := int64FromAny(firstExisting(body, "expires_in", "expiresIn")); expiresIn > 0 {
+		value := time.Now().UTC().Add(time.Duration(expiresIn) * time.Second)
+		expiresAt = &value
+	}
+	return token, expiresAt, body, nil
+}
+
+func classifyDirectLoginFailure(statusCode int, body []byte) error {
+	lower := strings.ToLower(string(body))
+	switch {
+	case strings.Contains(lower, "captcha") || strings.Contains(lower, "turnstile") || strings.Contains(lower, "recaptcha"):
+		return infraerrors.New(http.StatusConflict, "LOGIN_CAPTCHA_REQUIRED", "supplier direct login requires captcha; use browser extension fallback")
+	case strings.Contains(lower, "2fa") || strings.Contains(lower, "totp") || strings.Contains(lower, "mfa"):
+		return infraerrors.New(http.StatusConflict, "LOGIN_MFA_REQUIRED", "supplier direct login requires 2FA; use browser extension fallback")
+	case strings.Contains(lower, "challenge") || strings.Contains(lower, "risk") || strings.Contains(lower, "verify"):
+		return infraerrors.New(http.StatusConflict, "BROWSER_FALLBACK_REQUIRED", "supplier direct login requires browser verification")
+	case strings.Contains(lower, "invalid") || strings.Contains(lower, "password") || strings.Contains(lower, "credential"):
+		return infraerrors.New(http.StatusUnauthorized, "LOGIN_CREDENTIAL_INVALID", "supplier direct login credential is invalid")
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+		return infraerrors.New(statusCode, "LOGIN_CREDENTIAL_INVALID", "supplier direct login credential is invalid")
+	default:
+		return infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_BAD_STATUS", "supplier login endpoint returned non-success status")
+	}
 }
 
 func buildSub2APIUserEndpointURL(apiBaseURL string, endpointPath string) (string, error) {
@@ -202,6 +434,15 @@ func (c *SessionProfileClient) CreateKey(ctx context.Context, in ports.SessionPr
 	if err != nil {
 		return nil, err
 	}
+	if existing, err := c.findExistingProviderKey(ctx, endpoint, in.Bundle, request); err == nil && existing != nil {
+		existing.SupplierID = request.SupplierID
+		existing.ExternalGroupID = firstNonEmpty(existing.ExternalGroupID, request.ExternalGroupID)
+		existing.Name = firstNonEmpty(existing.Name, request.Name)
+		if existing.CreatedAt.IsZero() {
+			existing.CreatedAt = c.now().UTC()
+		}
+		return existing, nil
+	}
 	payload := map[string]any{
 		"name": strings.TrimSpace(request.Name),
 	}
@@ -235,6 +476,38 @@ func (c *SessionProfileClient) CreateKey(ctx context.Context, in ports.SessionPr
 		result.CreatedAt = c.now().UTC()
 	}
 	return result, nil
+}
+
+func (c *SessionProfileClient) findExistingProviderKey(ctx context.Context, endpoint string, bundle map[string]any, request ports.CreateProviderKeyInput) (*ports.ProviderKeyResult, error) {
+	name := strings.TrimSpace(request.Name)
+	if name == "" {
+		return nil, nil
+	}
+	listEndpoint := appendQueryValues(endpoint, map[string]string{
+		"page":      "1",
+		"page_size": "100",
+		"search":    name,
+	})
+	body, err := c.doSessionJSON(ctx, http.MethodGet, listEndpoint, bundle, false)
+	if err != nil {
+		return nil, err
+	}
+	values, err := unwrapDataArray(body)
+	if err != nil {
+		return nil, err
+	}
+	for _, value := range values {
+		raw, ok := value.(map[string]any)
+		if !ok || !providerKeyMatchesRequest(raw, request) {
+			continue
+		}
+		result, err := parseSub2APIKeyCreateResponse(bodyFromMap(raw))
+		if err != nil || strings.TrimSpace(result.Secret) == "" {
+			continue
+		}
+		return result, nil
+	}
+	return nil, nil
 }
 
 func (c *SessionProfileClient) ReadRates(ctx context.Context, in ports.SessionProbeInput) (*ports.ReadRatesResult, error) {
@@ -972,6 +1245,57 @@ func sanitizeProviderKeyPayload(raw map[string]any) map[string]any {
 	return out
 }
 
+func providerKeyMatchesRequest(raw map[string]any, request ports.CreateProviderKeyInput) bool {
+	name := strings.TrimSpace(request.Name)
+	if name != "" && strings.TrimSpace(stringFromAny(raw["name"])) != name {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(stringFromAny(raw["status"])))
+	if status != "" && status != "active" {
+		return false
+	}
+	expectedGroupID := strings.TrimSpace(request.ExternalGroupID)
+	if expectedGroupID == "" {
+		return true
+	}
+	actualGroupID := providerKeyGroupID(raw)
+	return actualGroupID == "" || actualGroupID == expectedGroupID
+}
+
+func providerKeyGroupID(raw map[string]any) string {
+	groupID := firstNonEmpty(stringFromAny(raw["group_id"]), idStringFromAny(raw["group_id"]))
+	if groupID != "" && groupID != "0" {
+		return groupID
+	}
+	if group := firstMapValue(raw, "group", "Group"); len(group) > 0 {
+		groupID = firstNonEmpty(stringFromAny(group["id"]), idStringFromAny(group["id"]))
+		if groupID != "" && groupID != "0" {
+			return groupID
+		}
+	}
+	if routes, ok := firstArrayValue(raw, "group_routes", "groupRoutes", "GroupRoutes"); ok {
+		for _, value := range routes {
+			route, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			groupID = firstNonEmpty(stringFromAny(route["group_id"]), idStringFromAny(route["group_id"]))
+			if groupID != "" && groupID != "0" {
+				return groupID
+			}
+		}
+	}
+	return ""
+}
+
+func bodyFromMap(raw map[string]any) []byte {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 func parseRateEntriesResponse(data []byte) []ports.ProviderRateEntry {
 	values, err := unwrapDataArray(data)
 	if err != nil {
@@ -1003,12 +1327,29 @@ func parseAvailableChannelRates(data []byte) []ports.ProviderRateEntry {
 		}
 		entries = append(entries, parseSupportedModelRates(channel)...)
 		entries = append(entries, parseModelPricingRates(channel)...)
+		if platforms, ok := firstArrayValue(channel, "platforms", "Platforms"); ok {
+			for _, platformValue := range platforms {
+				platform, ok := platformValue.(map[string]any)
+				if !ok {
+					continue
+				}
+				entries = append(entries, parseSupportedModelRatesWithContext(channel, platform)...)
+				entries = append(entries, parseModelPricingRatesWithContext(channel, platform)...)
+			}
+		}
 	}
 	return dedupeRateEntries(entries)
 }
 
 func parseSupportedModelRates(channel map[string]any) []ports.ProviderRateEntry {
-	values, ok := firstArrayValue(channel, "supported_models", "supportedModels", "SupportedModels")
+	return parseSupportedModelRatesWithContext(nil, channel)
+}
+
+func parseSupportedModelRatesWithContext(channel map[string]any, platform map[string]any) []ports.ProviderRateEntry {
+	if len(platform) == 0 {
+		return nil
+	}
+	values, ok := firstArrayValue(platform, "supported_models", "supportedModels", "SupportedModels")
 	if !ok {
 		return nil
 	}
@@ -1023,13 +1364,20 @@ func parseSupportedModelRates(channel map[string]any) []ports.ProviderRateEntry 
 		if len(pricing) == 0 {
 			continue
 		}
-		out = append(out, priceEntriesFromPricing(modelName, pricing, mergeRawPayload(channel, model, pricing))...)
+		out = append(out, priceEntriesFromPricing(modelName, pricing, mergeRawPayload(channel, platform, model, pricing))...)
 	}
 	return out
 }
 
 func parseModelPricingRates(channel map[string]any) []ports.ProviderRateEntry {
-	values, ok := firstArrayValue(channel, "model_pricing", "modelPricing", "ModelPricing", "pricing", "Pricing")
+	return parseModelPricingRatesWithContext(nil, channel)
+}
+
+func parseModelPricingRatesWithContext(channel map[string]any, platform map[string]any) []ports.ProviderRateEntry {
+	if len(platform) == 0 {
+		return nil
+	}
+	values, ok := firstArrayValue(platform, "model_pricing", "modelPricing", "ModelPricing", "pricing", "Pricing")
 	if !ok {
 		return nil
 	}
@@ -1041,7 +1389,7 @@ func parseModelPricingRates(channel map[string]any) []ports.ProviderRateEntry {
 		}
 		models := modelNamesFromPricing(pricing)
 		for _, model := range models {
-			out = append(out, priceEntriesFromPricing(model, pricing, mergeRawPayload(channel, pricing))...)
+			out = append(out, priceEntriesFromPricing(model, pricing, mergeRawPayload(channel, platform, pricing))...)
 		}
 	}
 	return out
@@ -1128,6 +1476,8 @@ func priceEntriesFromPricing(model string, pricing map[string]any, raw map[strin
 	addMicros("output", "1m_tokens", firstExisting(pricing, "output_price_micros", "outputPriceMicros", "OutputPriceMicros"))
 	addMicros("cache_write", "1m_tokens", firstExisting(pricing, "cache_write_price_micros", "cacheWritePriceMicros", "CacheWritePriceMicros"))
 	addMicros("cache_read", "1m_tokens", firstExisting(pricing, "cache_read_price_micros", "cacheReadPriceMicros", "CacheReadPriceMicros"))
+	addMicros("image_input", "1m_tokens", firstExisting(pricing, "image_input_price_micros", "imageInputPriceMicros", "ImageInputPriceMicros"))
+	addMicros("image_cache_read", "1m_tokens", firstExisting(pricing, "image_cache_read_price_micros", "imageCacheReadPriceMicros", "ImageCacheReadPriceMicros"))
 	addMicros("image_output", "1m_tokens", firstExisting(pricing, "image_output_price_micros", "imageOutputPriceMicros", "ImageOutputPriceMicros"))
 	addMicros("per_request", "request", firstExisting(pricing, "per_request_price_micros", "perRequestPriceMicros", "PerRequestPriceMicros"))
 
@@ -1135,6 +1485,8 @@ func priceEntriesFromPricing(model string, pricing map[string]any, raw map[strin
 	addTokenUSD("output", firstExisting(pricing, "output_price", "outputPrice", "OutputPrice"))
 	addTokenUSD("cache_write", firstExisting(pricing, "cache_write_price", "cacheWritePrice", "CacheWritePrice"))
 	addTokenUSD("cache_read", firstExisting(pricing, "cache_read_price", "cacheReadPrice", "CacheReadPrice"))
+	addTokenUSD("image_input", firstExisting(pricing, "image_input_price", "imageInputPrice", "ImageInputPrice"))
+	addTokenUSD("image_cache_read", firstExisting(pricing, "image_cache_read_price", "imageCacheReadPrice", "ImageCacheReadPrice"))
 	addTokenUSD("image_output", firstExisting(pricing, "image_output_price", "imageOutputPrice", "ImageOutputPrice"))
 	addRequestUSD(firstExisting(pricing, "per_request_price", "perRequestPrice", "PerRequestPrice"))
 	return out
@@ -1657,6 +2009,14 @@ func parseSafeURL(raw string, reason string) (*url.URL, error) {
 		return nil, infraerrors.New(http.StatusBadRequest, reason, "supplier session url must not contain user info")
 	}
 	return u, nil
+}
+
+func originFromRawURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func stringValue(in map[string]any, key string) string {

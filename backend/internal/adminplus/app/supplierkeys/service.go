@@ -201,6 +201,7 @@ func (s *Service) Provision(ctx context.Context, in ProvisionKeyInput) (*Provisi
 		Priority:              normalized.LocalAccountPriority,
 		RateMultiplier:        normalized.LocalAccountRateMultiplier,
 		GroupIDs:              normalized.LocalAccountGroupIDs,
+		SkipDefaultGroupBind:  true,
 		SkipMixedChannelCheck: true,
 	})
 	if localErr != nil {

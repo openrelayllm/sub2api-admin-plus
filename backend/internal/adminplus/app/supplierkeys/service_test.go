@@ -81,6 +81,8 @@ func TestServiceProvisionCreatesProviderKeyLocalAccountAndBinding(t *testing.T) 
 	require.Equal(t, service.AccountTypeAPIKey, local.input.Type)
 	require.Equal(t, "sk-provider-secret", local.input.Credentials["api_key"])
 	require.Equal(t, "https://relay.example.com/v1", local.input.Credentials["base_url"])
+	require.True(t, local.input.SkipDefaultGroupBind)
+	require.True(t, local.input.SkipMixedChannelCheck)
 	require.Equal(t, []ports.CreateProviderKeyInput{{
 		SupplierID:      7,
 		ExternalGroupID: "88",

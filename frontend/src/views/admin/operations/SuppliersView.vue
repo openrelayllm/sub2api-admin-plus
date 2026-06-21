@@ -257,7 +257,7 @@
           <template #empty>
             <EmptyState
               title="暂无供应商"
-              description="先添加供应商父级，再通过插件上报会话，同步分组后按分组开通 Key 和本地账号。"
+              description="先添加供应商父级，优先后端直登读取余额，再同步分组并按分组开通 Key 和本地账号。"
               action-text="添加供应商"
               @action="openCreateDialog"
             />
@@ -452,9 +452,10 @@
           <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
             <div class="text-sm font-medium text-gray-900 dark:text-gray-100">会话来源</div>
             <div class="mt-3 space-y-2 text-sm text-gray-600 dark:text-dark-300">
+              <div>来源：{{ sessionSourceLabel(currentSession?.session_source) }}</div>
               <div class="break-all">Origin：{{ currentSession?.origin || '-' }}</div>
               <div class="break-all">API：{{ currentSession?.api_base_url || '-' }}</div>
-              <div>插件任务：{{ currentSession?.source_extension_task_id || '-' }}</div>
+              <div v-if="currentSession?.source_extension_task_id">插件任务：{{ currentSession.source_extension_task_id }}</div>
             </div>
           </div>
           <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
@@ -466,6 +467,38 @@
               <span class="badge badge-gray">Cookie {{ summaryCookieCount }}</span>
               <span v-if="sessionSummaryString('organization_id')" class="badge badge-primary">Org {{ sessionSummaryString('organization_id') }}</span>
               <span v-if="sessionSummaryString('project_id')" class="badge badge-primary">Project {{ sessionSummaryString('project_id') }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div class="text-sm font-medium text-gray-900 dark:text-gray-100">当前余额</div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                {{ currentBalanceCaption }}
+              </div>
+            </div>
+            <span class="badge" :class="currentBalanceBadgeClass">{{ currentBalanceBadgeText }}</span>
+          </div>
+          <div class="grid gap-3 md:grid-cols-4">
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">余额</div>
+              <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                {{ formatMoney(currentBalanceValue?.balance_cents || 0, currentBalanceValue?.currency || 'USD') }}
+              </div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">来源</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">{{ currentBalanceSourceLabel }}</div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">刷新时间</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatDateTime(currentBalanceValue?.captured_at) }}</div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">下次刷新</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatDateTime(currentBalanceValue?.refresh_after) }}</div>
             </div>
           </div>
         </div>
@@ -512,6 +545,14 @@
         <button type="button" class="btn btn-secondary" :disabled="sessionLoading || !sessionSupplier" @click="reloadCurrentSession">
           <Icon name="refresh" size="sm" :class="{ 'animate-spin': sessionLoading }" />
           刷新会话
+        </button>
+        <button type="button" class="btn btn-secondary" :disabled="currentBalanceLoading || !sessionSupplier" @click="reloadCurrentBalance(true)">
+          <Icon name="refresh" size="sm" :class="{ 'animate-spin': currentBalanceLoading }" />
+          刷新余额
+        </button>
+        <button type="button" class="btn btn-primary" :disabled="loggingInSession || !sessionSupplier" @click="loginCurrentSession">
+          <Icon name="shield" size="sm" :class="{ 'animate-spin': loggingInSession }" />
+          后端直登并读取余额
         </button>
         <button type="button" class="btn btn-primary" :disabled="probingSession || !currentSession?.has_encrypted_bundle" @click="probeCurrentSession">
           <Icon name="beaker" size="sm" :class="{ 'animate-spin': probingSession }" />
@@ -670,7 +711,7 @@
           <template #empty>
             <EmptyState
               title="暂无供应商分组"
-              description="先通过 Chrome 插件上报供应商会话，再同步分组。"
+              description="先完成后端直登或浏览器会话上报，再同步供应商分组。"
               action-text="同步分组"
               @action="syncCurrentGroups"
             />
@@ -909,11 +950,13 @@ import { useAppStore } from '@/stores/app'
 import {
   createSupplier,
   deleteSupplier,
+  getSupplierCurrentBalance,
   getSupplierSession,
   listLocalSub2APIAccounts,
   listSupplierKeys,
   listSupplierGroups,
   listSuppliers,
+  loginSupplierSession,
   probeSupplierSession,
   provisionSupplierKey,
   repairSupplierKeyBinding,
@@ -923,6 +966,7 @@ import {
   type LocalSub2APIAccount,
   type Supplier,
   type SupplierBrowserSession,
+  type SupplierCurrentBalance,
   type SupplierGroup,
   type SupplierGroupStatus,
   type SupplierHealthStatus,
@@ -964,8 +1008,11 @@ const supplierGroups = ref<SupplierGroup[]>([])
 const supplierKeys = ref<SupplierKey[]>([])
 const localAccounts = ref<LocalSub2APIAccount[]>([])
 const sessionStore = reactive<Record<number, SupplierBrowserSession | undefined>>({})
+const currentBalanceStore = reactive<Record<number, SupplierCurrentBalance | undefined>>({})
 const sessionLoading = ref(false)
+const loggingInSession = ref(false)
 const probingSession = ref(false)
+const currentBalanceLoading = ref(false)
 const groupsLoading = ref(false)
 const groupsSyncing = ref(false)
 const repairAccountsLoading = ref(false)
@@ -1061,7 +1108,7 @@ const columns: Column[] = [
   { key: 'status', label: '状态' },
   { key: 'kind_type', label: '归类 / 类型' },
   { key: 'credential', label: '采集凭据' },
-  { key: 'session', label: '浏览器会话' },
+  { key: 'session', label: '供应商会话' },
   { key: 'address', label: '地址' },
   { key: 'created_at', label: '创建时间', sortable: true },
   { key: 'actions', label: '操作', class: 'text-right' }
@@ -1099,6 +1146,42 @@ const selectedRows = computed(() => suppliers.value.filter((item) => selectedIds
 const currentSession = computed(() => {
   const supplierID = sessionSupplier.value?.id
   return supplierID ? sessionStore[supplierID] : undefined
+})
+
+const currentBalanceValue = computed(() => {
+  const supplierID = sessionSupplier.value?.id
+  return supplierID ? currentBalanceStore[supplierID] : undefined
+})
+
+const currentBalanceBadgeText = computed(() => {
+  const balance = currentBalanceValue.value
+  if (!balance) return '未读取'
+  if (balance.fallback) return '兜底值'
+  if (balance.expired) return '已过期'
+  if (balance.stale) return '待刷新'
+  return '最新'
+})
+
+const currentBalanceBadgeClass = computed(() => {
+  const balance = currentBalanceValue.value
+  if (!balance || balance.fallback || balance.expired) return 'badge-danger'
+  if (balance.stale) return 'badge-warning'
+  return 'badge-success'
+})
+
+const currentBalanceCaption = computed(() => {
+  const balance = currentBalanceValue.value
+  if (!balance) return '打开后读取 Redis 当前值，必要时可手动刷新'
+  if (balance.fallback) return balance.refresh_error_message || '读取失败，暂按 0 处理'
+  if (balance.stale) return '缓存已到刷新窗口，后台会重新获取'
+  return '缓存有效，调度器会周期刷新'
+})
+
+const currentBalanceSourceLabel = computed(() => {
+  const source = currentBalanceValue.value?.source
+  if (source === 'provider_session') return '供应商会话'
+  if (source === 'fallback') return '兜底'
+  return source || '-'
 })
 
 const currentGroupSession = computed(() => {
@@ -1288,6 +1371,13 @@ function sessionStatusClass(status?: SupplierBrowserSession['status']): string {
   return 'badge-gray'
 }
 
+function sessionSourceLabel(source?: SupplierBrowserSession['session_source']): string {
+  if (source === 'direct_login') return '后端直登'
+  if (source === 'browser_extension') return 'Chrome 兜底'
+  if (source === 'manual_import') return '手动导入'
+  return '-'
+}
+
 function groupStatusLabel(status?: SupplierGroupStatus): string {
   if (status === 'active') return '有效'
   if (status === 'missing') return '已缺失'
@@ -1419,6 +1509,22 @@ async function reloadCurrentSession() {
     sessionLoadError.value = (error as { message?: string }).message || '当前供应商还没有浏览器会话'
   } finally {
     sessionLoading.value = false
+  }
+}
+
+async function reloadCurrentBalance(refresh: boolean) {
+  if (!sessionSupplier.value) return
+  currentBalanceLoading.value = true
+  try {
+    const balance = await getSupplierCurrentBalance(sessionSupplier.value.id, { refresh })
+    currentBalanceStore[sessionSupplier.value.id] = balance
+    if (refresh) {
+      await loadSuppliers()
+    }
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '读取当前余额失败')
+  } finally {
+    currentBalanceLoading.value = false
   }
 }
 
@@ -1572,7 +1678,7 @@ function openSessionDialog(supplier: Supplier) {
   lastProbe.value = null
   sessionLoadError.value = ''
   sessionDialogOpen.value = true
-  void reloadCurrentSession()
+  void Promise.all([reloadCurrentSession(), reloadCurrentBalance(false)])
 }
 
 function openGroupsDialog(supplier: Supplier) {
@@ -1597,12 +1703,32 @@ async function probeCurrentSession() {
     })
     lastProbe.value = result.probe
     appStore.showSuccess('会话探测完成，已读取供应商余额')
-    await Promise.all([reloadCurrentSession(), loadSuppliers()])
+    await Promise.all([reloadCurrentSession(), reloadCurrentBalance(false), loadSuppliers()])
   } catch (error) {
     sessionLoadError.value = (error as { message?: string }).message || '会话探测失败'
     appStore.showError(sessionLoadError.value)
   } finally {
     probingSession.value = false
+  }
+}
+
+async function loginCurrentSession() {
+  if (!sessionSupplier.value) return
+  loggingInSession.value = true
+  sessionLoadError.value = ''
+  try {
+    const result = await loginSupplierSession(sessionSupplier.value.id, {
+      record_balance_snapshot: true
+    })
+    sessionStore[sessionSupplier.value.id] = result.session
+    lastProbe.value = result.probe || null
+    appStore.showSuccess(result.probe ? '后端直登完成，已读取供应商余额' : '后端直登完成')
+    await Promise.all([reloadCurrentBalance(false), loadSuppliers()])
+  } catch (error) {
+    sessionLoadError.value = (error as { message?: string }).message || '后端直登失败'
+    appStore.showError(sessionLoadError.value)
+  } finally {
+    loggingInSession.value = false
   }
 }
 
@@ -1639,7 +1765,7 @@ async function loadCurrentGroups() {
 function openProvisionDialog(group: SupplierGroup) {
   if (!groupsSupplier.value) return
   if (!currentGroupSession.value?.has_encrypted_bundle) {
-    appStore.showError('当前供应商还没有可用浏览器会话，请先通过插件登录并上报会话')
+    appStore.showError('当前供应商还没有可用会话，请先后端直登或通过插件兜底上报')
     return
   }
   provisionGroup.value = group

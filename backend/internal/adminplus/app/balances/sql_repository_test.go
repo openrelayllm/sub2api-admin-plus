@@ -33,6 +33,9 @@ func TestSQLRepositoryCreateBalanceSnapshot(t *testing.T) {
 		WillReturnRows(newBalanceSnapshotRows().AddRow(
 			int64(11), int64(7), "manual", "candidate", int64(5000), "USD", true, []byte(`{"source":"manual"}`), capturedAt, createdAt,
 		))
+	mock.ExpectExec(`UPDATE admin_plus_suppliers`).
+		WithArgs(int64(7), int64(5000), "USD", capturedAt).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	got, err := repo.CreateSnapshot(context.Background(), &adminplusdomain.BalanceSnapshot{
 		SupplierID:     7,

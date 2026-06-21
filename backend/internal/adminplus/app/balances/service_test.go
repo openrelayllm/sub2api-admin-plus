@@ -204,6 +204,90 @@ func TestServiceSyncFromSessionAllowsProbeWithoutBalance(t *testing.T) {
 	require.Nil(t, result.Event)
 }
 
+func TestServiceGetCurrentUsesFreshCache(t *testing.T) {
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	cache := &fakeBalanceCache{current: &CurrentBalance{
+		SupplierID:     7,
+		RuntimeStatus:  adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:   9000,
+		Currency:       "USD",
+		SwitchEligible: true,
+		Source:         "provider_session",
+		CapturedAt:     now.Add(-time.Minute),
+		RefreshAfter:   now.Add(time.Minute),
+		ExpiresAt:      now.Add(10 * time.Minute),
+	}}
+	reader := &fakeBalanceProbeAdapter{}
+	svc := NewServiceWithCurrentCache(newFakeBalanceRepository(), nil, &fakeBalanceSessionReader{}, reader, cache)
+	svc.now = func() time.Time { return now }
+
+	current, err := svc.GetCurrent(context.Background(), CurrentBalanceInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(9000), current.BalanceCents)
+	require.False(t, current.Stale)
+	require.False(t, current.Expired)
+	require.False(t, current.Fallback)
+	require.Equal(t, 0, reader.calls)
+	require.Equal(t, 1, cache.getCalls)
+}
+
+func TestServiceGetCurrentRefreshesStaleCache(t *testing.T) {
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	balanceCents := int64(1234)
+	cache := &fakeBalanceCache{current: &CurrentBalance{
+		SupplierID:     7,
+		RuntimeStatus:  adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:   9000,
+		Currency:       "USD",
+		SwitchEligible: true,
+		Source:         "provider_session",
+		CapturedAt:     now.Add(-7 * time.Minute),
+		RefreshAfter:   now.Add(-time.Minute),
+		ExpiresAt:      now.Add(8 * time.Minute),
+	}}
+	session := &fakeBalanceSessionReader{input: ports.SessionProbeInput{SupplierID: 7}}
+	reader := &fakeBalanceProbeAdapter{result: &ports.SessionProbeResult{
+		SupplierID:      7,
+		Status:          "ok",
+		SystemType:      "sub2api",
+		BalanceCents:    &balanceCents,
+		BalanceCurrency: "usd",
+		ProbedAt:        now,
+	}}
+	svc := NewServiceWithCurrentCache(newFakeBalanceRepository(), nil, session, reader, cache)
+	svc.now = func() time.Time { return now }
+
+	current, err := svc.GetCurrent(context.Background(), CurrentBalanceInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1234), current.BalanceCents)
+	require.Equal(t, "USD", current.Currency)
+	require.False(t, current.Stale)
+	require.False(t, current.Expired)
+	require.Equal(t, 1, reader.calls)
+	require.Equal(t, 1, cache.setCalls)
+	require.Equal(t, int64(1234), cache.setCurrent.BalanceCents)
+}
+
+func TestServiceGetCurrentFallsBackToZeroWhenCacheMissAndRefreshFails(t *testing.T) {
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	cache := &fakeBalanceCache{err: ErrCurrentBalanceCacheMiss}
+	reader := &fakeBalanceProbeAdapter{err: infraerrors.New(http.StatusBadGateway, "SUPPLIER_UNAVAILABLE", "supplier unavailable")}
+	svc := NewServiceWithCurrentCache(newFakeBalanceRepository(), nil, &fakeBalanceSessionReader{}, reader, cache)
+	svc.now = func() time.Time { return now }
+
+	current, err := svc.GetCurrent(context.Background(), CurrentBalanceInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(0), current.BalanceCents)
+	require.True(t, current.Fallback)
+	require.True(t, current.Stale)
+	require.True(t, current.Expired)
+	require.Equal(t, "SUPPLIER_UNAVAILABLE", current.RefreshErrorReason)
+	require.Equal(t, 1, reader.calls)
+}
+
 type fakeBalanceRepository struct {
 	nextSnapshotID int64
 	nextEventID    int64
@@ -228,9 +312,15 @@ func (r *fakeBalanceSessionReader) DecryptedProbeInput(_ context.Context, suppli
 
 type fakeBalanceProbeAdapter struct {
 	result *ports.SessionProbeResult
+	err    error
+	calls  int
 }
 
 func (a *fakeBalanceProbeAdapter) ProbeSub2APIUserProfile(_ context.Context, _ ports.SessionProbeInput) (*ports.SessionProbeResult, error) {
+	a.calls++
+	if a.err != nil {
+		return nil, a.err
+	}
 	return a.result, nil
 }
 
@@ -244,6 +334,38 @@ func newFakeBalanceRepository() *fakeBalanceRepository {
 		nextSnapshotID: 1,
 		nextEventID:    1,
 	}
+}
+
+type fakeBalanceCache struct {
+	current    *CurrentBalance
+	err        error
+	getCalls   int
+	setCalls   int
+	setCurrent *CurrentBalance
+	setTTL     time.Duration
+}
+
+func (c *fakeBalanceCache) GetCurrent(_ context.Context, _ int64) (*CurrentBalance, error) {
+	c.getCalls++
+	if c.err != nil {
+		return nil, c.err
+	}
+	return cloneCurrentBalance(c.current), nil
+}
+
+func (c *fakeBalanceCache) SetCurrent(_ context.Context, current *CurrentBalance, ttl time.Duration) error {
+	c.setCalls++
+	c.setCurrent = cloneCurrentBalance(current)
+	c.setTTL = ttl
+	return nil
+}
+
+func cloneCurrentBalance(in *CurrentBalance) *CurrentBalance {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func (r *fakeBalanceRepository) CreateSnapshot(_ context.Context, snapshot *adminplusdomain.BalanceSnapshot) (*adminplusdomain.BalanceSnapshot, error) {

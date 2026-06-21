@@ -436,7 +436,7 @@ function supplierKeyDisplay(row: SupplierAccount): string {
 
 function goSupplierGroups(row: SupplierAccount) {
   void router.push({
-    path: '/admin/operations/suppliers',
+    path: '/admin/suppliers',
     query: {
       supplier_id: row.supplier_id,
       q: supplierLabel(row.supplier_id),

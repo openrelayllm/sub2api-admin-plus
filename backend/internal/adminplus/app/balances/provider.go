@@ -11,5 +11,5 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(Repository), new(*SQLRepository)),
 	wire.Bind(new(Notifier), new(*FeishuNotifier)),
 	wire.Bind(new(SessionReader), new(*sessionsapp.Service)),
-	NewServiceWithDependencies,
+	NewServiceWithCurrentCache,
 )

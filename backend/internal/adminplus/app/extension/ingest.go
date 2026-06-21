@@ -118,6 +118,7 @@ func (p *IngestProcessor) processSessionBundle(ctx context.Context, task *adminp
 	if p.sessions != nil {
 		_, err := p.sessions.Upsert(ctx, sessionsapp.UpsertInput{
 			SupplierID:              task.SupplierID,
+			SessionSource:           adminplusdomain.SupplierSessionSourceBrowserExtension,
 			Origin:                  stringValue(bundle, "origin"),
 			APIBaseURL:              stringValue(mapValue(bundle, "context"), "api_base_url"),
 			SessionSummary:          summary,

@@ -82,6 +82,22 @@ func (h *BalanceHandler) ListEvents(c *gin.Context) {
 	response.Success(c, paginatedData(paged, total, page))
 }
 
+func (h *BalanceHandler) GetSupplierCurrent(c *gin.Context) {
+	supplierID, ok := parseSupplierID(c)
+	if !ok {
+		return
+	}
+	current, err := h.service.GetCurrent(c.Request.Context(), balancesapp.CurrentBalanceInput{
+		SupplierID:               supplierID,
+		Refresh:                  parseBoolQuery(c, "refresh"),
+		LowBalanceThresholdCents: parseInt64Query(c, "low_balance_threshold_cents"),
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, current)
+}
+
 func (h *BalanceHandler) AcknowledgeEvent(c *gin.Context) {
 	id, ok := parseBalanceEventID(c)
 	if !ok {

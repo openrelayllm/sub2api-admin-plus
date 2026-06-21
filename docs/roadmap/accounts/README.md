@@ -587,9 +587,9 @@ flowchart TD
 
 - 新增供应商。
 - 配置 dashboard URL、login URL、API base URL。
-- 配置浏览器登录账号、密码或临时 token。
-- 展示插件登录状态、分组同步状态、最后会话探测时间。
-- 提供“登录供应商并同步分组”动作。
+- 配置后端直登凭据、登录协议参数或临时 token；所有敏感字段加密保存并脱敏展示。
+- 展示会话来源、直登状态、插件兜底状态、分组同步状态和最后会话探测时间。
+- 提供“后端直登并同步分组”动作；直登失败且需要验证码/2FA/强风控时，再引导使用 Chrome 插件兜底上报已登录会话。
 
 ### 11.2 供应商分组弹窗内开通 Key/账号
 
@@ -637,7 +637,8 @@ backend/internal/handler/adminplus/
 - `local/sub2apiadmin` 面向本地 Sub2API。
 - `app/accounts` 做编排和幂等，不直接依赖页面 DOM。
 - Provider Adapter 是采集主路径，负责分组、费率、余额、公告、账单、健康、并发和第三方密钥创建。
-- Chrome 插件只负责识别站点、采集浏览器会话、采集页面上下文和上报第三方供应商信息；不承载分组解析、密钥创建、费率、余额、账单等业务动作。
+- Provider Adapter 同时负责可自动化的供应商后端直登。
+- Chrome 插件只负责在直登不可用时识别站点、采集已登录浏览器会话、采集页面上下文和上报第三方供应商信息；不承载分组解析、密钥创建、费率、余额、账单等业务动作。
 
 ## 13. 数据表草案
 
@@ -881,7 +882,52 @@ POST /api/v1/admin-plus/suppliers/:id/keys/:keyID/repair-binding
 
 该接口只允许修复 `failed` 且错误原因为 `LOCAL_ACCOUNT_CREATE_FAILED` 或 `SUPPLIER_ACCOUNT_BIND_FAILED` 的 Key；它不会再次调用 Provider Adapter 创建第三方 Key，只会读取已有本地 Sub2API account、写入 `admin_plus_supplier_accounts` 绑定，并把 `admin_plus_supplier_keys` 更新为 `bound`。接口同样接入 `Idempotency-Key` 去重。
 
-### 14.7 插件上报供应商会话
+### 14.7 后端直登供应商会话
+
+```http
+POST /api/v1/admin-plus/suppliers/:id/session/login
+```
+
+作用：后端使用已加密保存的供应商登录配置或本次请求提供的临时凭据执行直登，成功后写入统一供应商会话。该接口由 Provider Adapter 调用供应商用户侧登录 API，不经过 Chrome 插件。
+
+请求示例：
+
+```json
+{
+  "username": "operator@example.com",
+  "password": "******",
+  "remember": false,
+  "login_context": {
+    "api_base_url": "https://supplier.example.com",
+    "login_agreement_revision": "a90464c54fba46d4"
+  }
+}
+```
+
+响应示例：
+
+```json
+{
+  "session_source": "direct_login",
+  "session_status": "valid",
+  "capabilities": {
+    "can_read_balance": true,
+    "can_read_groups": true,
+    "can_create_key": true
+  },
+  "fallback_required": false
+}
+```
+
+失败时必须返回明确原因：
+
+- `LOGIN_CREDENTIAL_INVALID`：用户名或密码错误。
+- `LOGIN_CAPTCHA_REQUIRED`：需要验证码，提示插件兜底或人工处理。
+- `LOGIN_MFA_REQUIRED`：需要 2FA，提示插件兜底或人工处理。
+- `LOGIN_PROVIDER_CHANGED`：登录协议变化，需要补 Provider Adapter。
+- `BROWSER_FALLBACK_REQUIRED`：供应商强绑定浏览器上下文，需要 Chrome 插件兜底。
+
+### 14.8 插件兜底上报供应商会话
 
 ```http
 POST /api/v1/admin-plus/extension/session/capture-task
@@ -889,9 +935,9 @@ POST /api/v1/admin-plus/extension/tasks/:id/complete
 POST /api/v1/admin-plus/suppliers/:id/browser-sessions
 ```
 
-推荐主路径仍然是短租约 `capture_supplier_session` 任务：插件先创建会话采集任务，再在 `complete.result.session_bundle` 中提交会话包。这样可以绑定 `device_id`、`lease_token`、任务状态和审计记录。
+插件兜底推荐使用短租约 `capture_supplier_session` 任务：插件先创建会话采集任务，再在 `complete.result.session_bundle` 中提交会话包。这样可以绑定 `device_id`、`lease_token`、任务状态和审计记录。
 
-`POST /api/v1/admin-plus/suppliers/:id/browser-sessions` 已作为管理员登录态下的直接写入入口落地，主要用于手动导入、插件联调和调试，不作为插件长期绕过短租约的主路径。
+`POST /api/v1/admin-plus/suppliers/:id/browser-sessions` 已作为管理员登录态下的直接写入入口落地，主要用于手动导入、插件联调和调试，不作为插件兜底长期绕过短租约的主路径。
 
 `complete` 请求中的 `result.session_bundle`：
 
@@ -977,7 +1023,10 @@ POST /api/v1/admin-plus/suppliers/:id/keys/:keyID/repair-binding
 ```mermaid
 stateDiagram-v2
   [*] --> supplier_created
-  supplier_created --> session_ready: 插件登录并上报会话
+  supplier_created --> direct_login_trying: 后端直登
+  direct_login_trying --> session_ready: 直登成功
+  direct_login_trying --> browser_fallback_required: 验证码/2FA/强风控
+  browser_fallback_required --> session_ready: 插件兜底上报会话
   session_ready --> groups_synced: 分组同步成功
   groups_synced --> provider_key_creating: 适配器创建密钥
   provider_key_creating --> key_created: 第三方创建成功
@@ -1002,8 +1051,8 @@ stateDiagram-v2
 - 删除绑定、禁用本地账号、撤销第三方密钥必须拆成独立动作，避免误删可用资产。
 - Provider Adapter 不能成为任意 URL 代理。每个供应商必须先保存 `base_url`、`api_base_url` 和 host 白名单，后端只允许访问该供应商域名下的已知接口路径。
 - 余额、分组、费率、公告、健康和账单采集默认只允许只读请求；创建第三方密钥等写操作必须单独声明 capability、单独确认和单独审计。
-- 插件上报的 cookie、token、CSRF、页面上下文和供应商登录密码都按高敏凭据处理，必须服务端加密、设置过期时间、日志脱敏，不允许前端回显明文。
-- 供应商会话必须记录来源设备、来源页面、任务 ID、采集时间、过期时间和最近探测结果。
+- 后端直登凭据、插件上报的 cookie、token、CSRF、页面上下文和供应商登录密码都按高敏凭据处理，必须服务端加密、设置过期时间、日志脱敏，不允许前端回显明文。
+- 供应商会话必须记录来源：`direct_login` / `browser_extension` / `manual_import`；插件兜底会话还必须记录来源设备、来源页面、任务 ID、采集时间、过期时间和最近探测结果。
 - Sub2API 同源供应商的普通下游会话只能调用用户侧 API。除非供应商明确授权 Admin API Key 或只读 DB/Redis，否则不得调用供应商 `/api/v1/admin/*`。
 - 所有直接读取本地或供应商 DB/Redis 的连接必须使用只读账号，并限制在 Adapter 层。
 
@@ -1014,6 +1063,7 @@ stateDiagram-v2
 - 分组归一化：名称、倍率、私有标记、provider family。
 - key 指纹和 last4 生成。
 - Provider Adapter 能力探测：`can_read_groups`、`can_read_balance`、`can_create_key`、`can_read_billing`、`can_export_bills`。
+- Provider Adapter 后端直登：无验证码成功、密码错误、验证码/2FA 兜底、登录协议变化。
 - Provider Adapter 账单读取：`ReadBilling(session, date_range)` 只保存脱敏后的 raw payload，不能落库 cookie、access token、secret 或第三方 key 明文。
 - Sub2API 供应商余额归一化：从用户侧 profile 读取 `balance`，不得使用本地账号 quota 替代供应商余额。
 - Provider Adapter 创建密钥成功和失败分支。
@@ -1036,7 +1086,7 @@ stateDiagram-v2
 ### 18.3 Chrome E2E
 
 - 打开真实 Sub2API 供应商后台。
-- 插件登录或复用登录态。
+- 在后端直登不可用时，运营者在供应商网页完成登录，插件复用已登录态。
 - 上报真实供应商会话包，不允许 mock。
 - 插件上报内容只包含会话和页面上下文，不包含已解析业务数据或创建密钥结果。
 - 将 key 同步创建到本地 Sub2API。
@@ -1045,12 +1095,12 @@ stateDiagram-v2
 ## 19. 验收标准
 
 - 可以从供应商管理页创建供应商父级。
-- 插件可以登录一个真实 Sub2API 供应商后台。
-- 插件可以把真实供应商会话包上报给 Admin Plus。
-- Provider Adapter 可以基于真实会话包完成能力探测。
+- 后端可以直登一个无验证码的真实 Sub2API 同源供应商；如遇验证码/2FA/强风控，系统明确提示 Chrome 插件兜底。
+- 插件可以把真实供应商浏览器会话包上报给 Admin Plus。
+- Provider Adapter 可以基于真实统一会话包完成能力探测。
 - 系统可以读取并展示该供应商真实分组列表。
 - 供应商分组弹窗能展示每个分组是否已绑定第三方 Key 和本地 Sub2API 账号。
-- 系统可以基于真实供应商 Sub2API 用户侧会话读取当前下游用户余额，并按余额决定 `monitor_only` / `candidate`。
+- 系统可以基于真实供应商 Sub2API 用户侧统一会话读取当前下游用户余额，并按余额决定 `monitor_only` / `candidate`。
 - 运营者可以在某个未绑定分组行创建第三方密钥。
 - 系统通过 Provider Adapter 创建第三方密钥。
 - 插件不创建第三方密钥，不上报已解析的业务采集结果。
