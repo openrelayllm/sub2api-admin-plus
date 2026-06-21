@@ -155,6 +155,64 @@ func TestServiceListFiltersSuppliers(t *testing.T) {
 	require.Equal(t, "Active Relay", items[0].Name)
 }
 
+func TestServiceMatchSitePrefersExactHostPort(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	first, err := svc.Create(context.Background(), CreateSupplierInput{
+		Name:         "Local Relay A",
+		Kind:         adminplusdomain.SupplierKindRelay,
+		Type:         adminplusdomain.SupplierTypeSub2API,
+		DashboardURL: "http://127.0.0.1:51001",
+		APIBaseURL:   "http://127.0.0.1:51001",
+	})
+	require.NoError(t, err)
+	second, err := svc.Create(context.Background(), CreateSupplierInput{
+		Name:         "Local Relay B",
+		Kind:         adminplusdomain.SupplierKindRelay,
+		Type:         adminplusdomain.SupplierTypeSub2API,
+		DashboardURL: "http://127.0.0.1:51002",
+		APIBaseURL:   "http://127.0.0.1:51002",
+	})
+	require.NoError(t, err)
+
+	matched, err := svc.MatchSite(context.Background(), SiteMatchInput{
+		URL: "http://127.0.0.1:51002/dashboard",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "matched", matched.Status)
+	require.Len(t, matched.Suppliers, 1)
+	require.Equal(t, second.ID, matched.Suppliers[0].ID)
+	require.NotEqual(t, first.ID, matched.Suppliers[0].ID)
+}
+
+func TestServiceEnsureFromSiteCandidateCreatesSub2APISupplier(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+
+	result, err := svc.EnsureFromSiteCandidate(context.Background(), CreateFromSiteCandidateInput{
+		Name:         "AI Pixel",
+		DashboardURL: "https://ai-pixel.online/dashboard",
+		APIBaseURL:   "https://ai-pixel.online",
+		SourceHost:   "ai-pixel.online",
+		SourceURL:    "https://ai-pixel.online/dashboard",
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.Created)
+	require.False(t, result.Matched)
+	require.Equal(t, adminplusdomain.SupplierKindRelay, result.Supplier.Kind)
+	require.Equal(t, adminplusdomain.SupplierTypeSub2API, result.Supplier.Type)
+	require.Equal(t, adminplusdomain.SupplierRuntimeStatusMonitorOnly, result.Supplier.RuntimeStatus)
+	require.Equal(t, "https://ai-pixel.online", result.Supplier.APIBaseURL)
+
+	matched, err := svc.EnsureFromSiteCandidate(context.Background(), CreateFromSiteCandidateInput{
+		SourceURL: "https://ai-pixel.online/settings",
+	})
+	require.NoError(t, err)
+	require.True(t, matched.Matched)
+	require.False(t, matched.Created)
+	require.Equal(t, result.Supplier.ID, matched.Supplier.ID)
+}
+
 func TestServiceUpdateSupplierKeepsBrowserCredentialWhenSecretsOmitted(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	supplier, err := svc.Create(context.Background(), CreateSupplierInput{

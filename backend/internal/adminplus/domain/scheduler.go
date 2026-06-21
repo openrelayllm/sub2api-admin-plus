@@ -24,8 +24,11 @@ type ScheduledTask struct {
 	SupplierID   int64             `json:"supplier_id"`
 	SupplierName string            `json:"supplier_name"`
 	TaskType     ExtensionTaskType `json:"task_type"`
+	Action       string            `json:"action"`
 	TaskID       int64             `json:"task_id,omitempty"`
 	ScheduleKey  string            `json:"schedule_key"`
 	Created      bool              `json:"created"`
+	Synced       bool              `json:"synced,omitempty"`
+	Total        int               `json:"total,omitempty"`
 	Reason       string            `json:"reason,omitempty"`
 }

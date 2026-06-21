@@ -22,12 +22,12 @@ type SupplierSignal struct {
 }
 
 type GenerateInput struct {
-	Suppliers       []SupplierSignal
-	BalanceEvents   []*adminplusdomain.BalanceEvent
-	PromotionEvents []*adminplusdomain.PromotionEvent
-	HealthEvents    []*adminplusdomain.HealthEvent
-	Reconciliation  adminplusdomain.ReconciliationSummary
-	MinProfitMargin float64
+	Suppliers          []SupplierSignal
+	BalanceEvents      []*adminplusdomain.BalanceEvent
+	AnnouncementEvents []*adminplusdomain.AnnouncementEvent
+	HealthEvents       []*adminplusdomain.HealthEvent
+	Reconciliation     adminplusdomain.ReconciliationSummary
+	MinProfitMargin    float64
 }
 
 type GenerateResult struct {
@@ -75,7 +75,7 @@ func (s *Service) Generate(ctx context.Context, in GenerateInput) (*GenerateResu
 	items := make([]*adminplusdomain.ActionRecommendation, 0)
 	items = append(items, s.actionsFromSuppliers(now, in.Suppliers, bestCandidate)...)
 	items = append(items, s.actionsFromBalanceEvents(now, suppliers, in.BalanceEvents, bestCandidate)...)
-	items = append(items, s.actionsFromPromotionEvents(now, suppliers, in.PromotionEvents)...)
+	items = append(items, s.actionsFromAnnouncementEvents(now, suppliers, in.AnnouncementEvents)...)
 	items = append(items, s.actionsFromHealthEvents(now, suppliers, in.HealthEvents, bestCandidate)...)
 	if item := s.actionFromReconciliation(now, in.Reconciliation, in.MinProfitMargin); item != nil {
 		items = append(items, item)
@@ -169,19 +169,19 @@ func (s *Service) actionsFromBalanceEvents(now time.Time, suppliers map[int64]Su
 	return items
 }
 
-func (s *Service) actionsFromPromotionEvents(now time.Time, suppliers map[int64]SupplierSignal, events []*adminplusdomain.PromotionEvent) []*adminplusdomain.ActionRecommendation {
+func (s *Service) actionsFromAnnouncementEvents(now time.Time, suppliers map[int64]SupplierSignal, events []*adminplusdomain.AnnouncementEvent) []*adminplusdomain.ActionRecommendation {
 	items := make([]*adminplusdomain.ActionRecommendation, 0, len(events))
 	for _, event := range events {
-		if event == nil || event.Status != adminplusdomain.PromotionStatusOpen {
+		if event == nil || event.Status != adminplusdomain.AnnouncementStatusOpen {
 			continue
 		}
 		switch event.Recommendation {
-		case adminplusdomain.PromotionRecommendationRechargeToUnlock:
-			items = append(items, newAction(now, event.SupplierID, nil, adminplusdomain.ActionTypeRechargeSupplier, adminplusdomain.ActionSeverityInfo, "promotion_recharge_to_unlock", "Recharge to unlock promotion", "Supplier has a promotion but no usable balance. Recharge may unlock lower cost, but it must not be used for switching until balance is positive.", "potentially lower future API cost", []string{"promotion", "no_balance"}))
-		case adminplusdomain.PromotionRecommendationSwitchCandidate:
+		case adminplusdomain.AnnouncementRecommendationRechargeToUnlock:
+			items = append(items, newAction(now, event.SupplierID, nil, adminplusdomain.ActionTypeRechargeSupplier, adminplusdomain.ActionSeverityInfo, "announcement_recharge_to_unlock", "Recharge to unlock announcement", "Supplier has a announcement but no usable balance. Recharge may unlock lower cost, but it must not be used for switching until balance is positive.", "potentially lower future API cost", []string{"announcement", "no_balance"}))
+		case adminplusdomain.AnnouncementRecommendationSwitchCandidate:
 			supplier := suppliers[event.SupplierID]
 			if supplier.BalanceCents > 0 && adminplusdomain.IsSwitchableSupplierStatus(supplier.RuntimeStatus) {
-				items = append(items, newAction(now, event.SupplierID, nil, adminplusdomain.ActionTypeIncreaseWeight, adminplusdomain.ActionSeverityInfo, "promotion_switch_candidate", "Review promoted supplier weight", "Supplier has a usable promotion and positive balance.", "route more traffic to lower-cost supplier after approval", []string{"promotion", "switch_eligible"}))
+				items = append(items, newAction(now, event.SupplierID, nil, adminplusdomain.ActionTypeIncreaseWeight, adminplusdomain.ActionSeverityInfo, "announcement_switch_candidate", "Review promoted supplier weight", "Supplier has a usable announcement and positive balance.", "route more traffic to lower-cost supplier after approval", []string{"announcement", "switch_eligible"}))
 			}
 		}
 	}

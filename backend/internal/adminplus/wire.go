@@ -3,12 +3,12 @@ package adminplus
 import (
 	sub2apiprovider "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	notificationsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	reconciliationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
 	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
@@ -33,7 +33,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(supplierkeysapp.SessionReader), new(*sessionsapp.Service)),
 	healthapp.ProviderSet,
 	notificationsapp.ProviderSet,
-	promotionsapp.ProviderSet,
+	announcementsapp.ProviderSet,
 	ratesapp.ProviderSet,
 	reconciliationapp.ProviderSet,
 	schedulerapp.ProviderSet,

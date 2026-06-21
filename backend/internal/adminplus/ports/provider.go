@@ -4,9 +4,7 @@ import (
 	"context"
 	"time"
 
-	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
-	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 )
 
 type ProviderKind string
@@ -66,6 +64,63 @@ type UserProfileSnapshot struct {
 
 type SessionProbeAdapter interface {
 	ProbeSub2APIUserProfile(ctx context.Context, in SessionProbeInput) (*SessionProbeResult, error)
+}
+
+type ProviderBalanceSnapshotInput struct {
+	SupplierID               int64
+	Source                   string
+	RuntimeStatus            adminplusdomain.SupplierRuntimeStatus
+	BalanceCents             int64
+	Currency                 string
+	LowBalanceThresholdCents int64
+	RawPayload               map[string]any
+	CapturedAt               *time.Time
+}
+
+type ProviderAnnouncement struct {
+	Type             adminplusdomain.AnnouncementType
+	Title            string
+	Description      string
+	Currency         string
+	MinRechargeCents int64
+	BonusPercent     *float64
+	DiscountPercent  *float64
+	RuntimeStatus    adminplusdomain.SupplierRuntimeStatus
+	BalanceCents     int64
+	StartsAt         *time.Time
+	EndsAt           *time.Time
+	RawPayload       map[string]any
+}
+
+type ReadAnnouncementsResult struct {
+	SupplierID    int64
+	SystemType    string
+	Origin        string
+	APIBaseURL    string
+	Announcements []ProviderAnnouncement
+	CapturedAt    time.Time
+}
+
+type SessionAnnouncementAdapter interface {
+	ReadAnnouncements(ctx context.Context, in SessionProbeInput) (*ReadAnnouncementsResult, error)
+}
+
+type ProviderHealthSampleInput struct {
+	SupplierID                   int64
+	Source                       string
+	Model                        string
+	FirstTokenLatencyMS          int64
+	TotalLatencyMS               int64
+	StatusCode                   int
+	ErrorClass                   string
+	ObservedConcurrency          int
+	AvailableConcurrency         *int
+	ConcurrencyLimit             *int
+	FirstTokenThresholdMS        int64
+	TotalLatencyThresholdMS      int64
+	ConcurrencySaturationPercent float64
+	RawPayload                   map[string]any
+	CapturedAt                   *time.Time
 }
 
 type ProviderGroup struct {
@@ -146,6 +201,48 @@ type SessionRateAdapter interface {
 	ReadRates(ctx context.Context, in SessionProbeInput) (*ReadRatesResult, error)
 }
 
+type ProviderBillLine struct {
+	ExternalBillID    string
+	ExternalRequestID string
+	APIKeyName        string
+	Model             string
+	Endpoint          string
+	RequestType       string
+	BillingMode       string
+	ReasoningEffort   string
+	Currency          string
+	CostCents         int64
+	InputTokens       int64
+	OutputTokens      int64
+	CacheReadTokens   int64
+	TotalTokens       int64
+	FirstTokenMS      int64
+	DurationMS        int64
+	UserAgent         string
+	StartedAt         time.Time
+	EndedAt           *time.Time
+	RawPayload        map[string]any
+}
+
+type ReadBillingInput struct {
+	SupplierID int64
+	StartedAt  time.Time
+	EndedAt    time.Time
+}
+
+type ReadBillingResult struct {
+	SupplierID int64
+	SystemType string
+	Origin     string
+	APIBaseURL string
+	Lines      []ProviderBillLine
+	CapturedAt time.Time
+}
+
+type SessionBillingAdapter interface {
+	ReadBilling(ctx context.Context, in SessionProbeInput, request ReadBillingInput) (*ReadBillingResult, error)
+}
+
 type BillExportRequest struct {
 	SupplierID int64
 	StartedAt  time.Time
@@ -164,8 +261,8 @@ type BillExportResult struct {
 type ProviderAdapter interface {
 	Identity() ProviderIdentity
 	FetchRateCatalog(ctx context.Context, fetch FetchContext) ([]ProviderRateEntry, error)
-	FetchBalance(ctx context.Context, fetch FetchContext) (*balancesapp.RecordSnapshotInput, error)
-	FetchPromotions(ctx context.Context, fetch FetchContext) ([]promotionsapp.RecordPromotionInput, error)
-	FetchHealthSample(ctx context.Context, fetch FetchContext) (*healthapp.RecordSampleInput, error)
+	FetchBalance(ctx context.Context, fetch FetchContext) (*ProviderBalanceSnapshotInput, error)
+	FetchAnnouncements(ctx context.Context, fetch FetchContext) ([]ProviderAnnouncement, error)
+	FetchHealthSample(ctx context.Context, fetch FetchContext) (*ProviderHealthSampleInput, error)
 	ExportBills(ctx context.Context, request BillExportRequest) (*BillExportResult, error)
 }

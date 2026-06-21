@@ -1,4 +1,4 @@
-package promotions
+package announcements
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func NewSQLRepository(db *sql.DB) *SQLRepository {
 	return &SQLRepository{db: db}
 }
 
-func (r *SQLRepository) CreateEvent(ctx context.Context, event *adminplusdomain.PromotionEvent) (*adminplusdomain.PromotionEvent, error) {
+func (r *SQLRepository) CreateEvent(ctx context.Context, event *adminplusdomain.AnnouncementEvent) (*adminplusdomain.AnnouncementEvent, error) {
 	if r == nil || r.db == nil {
 		return nil, dbNotConfigured()
 	}
@@ -30,7 +30,7 @@ func (r *SQLRepository) CreateEvent(ctx context.Context, event *adminplusdomain.
 		return nil, err
 	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO admin_plus_promotion_events (
+		INSERT INTO admin_plus_announcement_events (
 			supplier_id, source, type, title, description, currency,
 			min_recharge_cents, bonus_percent, discount_percent, runtime_status,
 			balance_cents, switch_eligible, recommendation, status,
@@ -61,10 +61,10 @@ func (r *SQLRepository) CreateEvent(ctx context.Context, event *adminplusdomain.
 		event.CapturedAt,
 		rawPayload,
 	)
-	return scanPromotionEvent(row)
+	return scanAnnouncementEvent(row)
 }
 
-func (r *SQLRepository) ListEvents(ctx context.Context, filter EventFilter) ([]*adminplusdomain.PromotionEvent, error) {
+func (r *SQLRepository) ListEvents(ctx context.Context, filter EventFilter) ([]*adminplusdomain.AnnouncementEvent, error) {
 	if r == nil || r.db == nil {
 		return nil, dbNotConfigured()
 	}
@@ -89,7 +89,7 @@ func (r *SQLRepository) ListEvents(ctx context.Context, filter EventFilter) ([]*
 			min_recharge_cents, bonus_percent, discount_percent, runtime_status,
 			balance_cents, switch_eligible, recommendation, status,
 			starts_at, ends_at, captured_at, created_at, acknowledged_at, raw_payload
-		FROM admin_plus_promotion_events
+		FROM admin_plus_announcement_events
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY created_at DESC, id DESC
 		LIMIT ` + limitRef
@@ -100,9 +100,9 @@ func (r *SQLRepository) ListEvents(ctx context.Context, filter EventFilter) ([]*
 	}
 	defer func() { _ = rows.Close() }()
 
-	items := make([]*adminplusdomain.PromotionEvent, 0)
+	items := make([]*adminplusdomain.AnnouncementEvent, 0)
 	for rows.Next() {
-		item, err := scanPromotionEvent(rows)
+		item, err := scanAnnouncementEvent(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -114,12 +114,12 @@ func (r *SQLRepository) ListEvents(ctx context.Context, filter EventFilter) ([]*
 	return items, nil
 }
 
-func (r *SQLRepository) UpdateEventStatus(ctx context.Context, id int64, status adminplusdomain.PromotionStatus) (*adminplusdomain.PromotionEvent, error) {
+func (r *SQLRepository) UpdateEventStatus(ctx context.Context, id int64, status adminplusdomain.AnnouncementStatus) (*adminplusdomain.AnnouncementEvent, error) {
 	if r == nil || r.db == nil {
 		return nil, dbNotConfigured()
 	}
 	row := r.db.QueryRowContext(ctx, `
-		UPDATE admin_plus_promotion_events
+		UPDATE admin_plus_announcement_events
 		SET status = $2,
 			acknowledged_at = CASE WHEN $2 = 'acknowledged' THEN NOW() ELSE NULL END
 		WHERE id = $1
@@ -128,19 +128,19 @@ func (r *SQLRepository) UpdateEventStatus(ctx context.Context, id int64, status 
 			balance_cents, switch_eligible, recommendation, status,
 			starts_at, ends_at, captured_at, created_at, acknowledged_at, raw_payload
 	`, id, string(status))
-	event, err := scanPromotionEvent(row)
+	event, err := scanAnnouncementEvent(row)
 	if err == sql.ErrNoRows {
-		return nil, infraerrors.New(http.StatusNotFound, "PROMOTION_EVENT_NOT_FOUND", "promotion event not found")
+		return nil, infraerrors.New(http.StatusNotFound, "ANNOUNCEMENT_EVENT_NOT_FOUND", "announcement event not found")
 	}
 	return event, err
 }
 
-type promotionScanner interface {
+type announcementScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanPromotionEvent(scanner promotionScanner) (*adminplusdomain.PromotionEvent, error) {
-	var event adminplusdomain.PromotionEvent
+func scanAnnouncementEvent(scanner announcementScanner) (*adminplusdomain.AnnouncementEvent, error) {
+	var event adminplusdomain.AnnouncementEvent
 	var eventType, runtimeStatus, recommendation, status string
 	var bonusPercent, discountPercent sql.NullFloat64
 	var startsAt, endsAt, acknowledgedAt sql.NullTime
@@ -171,10 +171,10 @@ func scanPromotionEvent(scanner promotionScanner) (*adminplusdomain.PromotionEve
 	if err != nil {
 		return nil, err
 	}
-	event.Type = adminplusdomain.PromotionType(eventType)
+	event.Type = adminplusdomain.AnnouncementType(eventType)
 	event.RuntimeStatus = adminplusdomain.SupplierRuntimeStatus(runtimeStatus)
-	event.Recommendation = adminplusdomain.PromotionRecommendation(recommendation)
-	event.Status = adminplusdomain.PromotionStatus(status)
+	event.Recommendation = adminplusdomain.AnnouncementRecommendation(recommendation)
+	event.Status = adminplusdomain.AnnouncementStatus(status)
 	if bonusPercent.Valid {
 		v := bonusPercent.Float64
 		event.BonusPercent = &v

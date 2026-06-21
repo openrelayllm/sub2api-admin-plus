@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
@@ -21,13 +21,13 @@ type ResultProcessor interface {
 }
 
 type IngestProcessor struct {
-	rates      *ratesapp.Service
-	balances   *balancesapp.Service
-	promotions *promotionsapp.Service
-	health     *healthapp.Service
-	billing    *billingapp.Service
-	sessions   *sessionsapp.Service
-	cipher     SessionCipher
+	rates         *ratesapp.Service
+	balances      *balancesapp.Service
+	announcements *announcementsapp.Service
+	health        *healthapp.Service
+	billing       *billingapp.Service
+	sessions      *sessionsapp.Service
+	cipher        SessionCipher
 }
 
 type SessionCipher interface {
@@ -37,31 +37,31 @@ type SessionCipher interface {
 func NewIngestProcessor(
 	rates *ratesapp.Service,
 	balances *balancesapp.Service,
-	promotions *promotionsapp.Service,
+	announcements *announcementsapp.Service,
 	health *healthapp.Service,
 	billing *billingapp.Service,
 	sessions *sessionsapp.Service,
 ) *IngestProcessor {
 	return &IngestProcessor{
-		rates:      rates,
-		balances:   balances,
-		promotions: promotions,
-		health:     health,
-		billing:    billing,
-		sessions:   sessions,
+		rates:         rates,
+		balances:      balances,
+		announcements: announcements,
+		health:        health,
+		billing:       billing,
+		sessions:      sessions,
 	}
 }
 
 func NewIngestProcessorWithCipher(
 	rates *ratesapp.Service,
 	balances *balancesapp.Service,
-	promotions *promotionsapp.Service,
+	announcements *announcementsapp.Service,
 	health *healthapp.Service,
 	billing *billingapp.Service,
 	sessions *sessionsapp.Service,
 	cipher SessionCipher,
 ) *IngestProcessor {
-	processor := NewIngestProcessor(rates, balances, promotions, health, billing, sessions)
+	processor := NewIngestProcessor(rates, balances, announcements, health, billing, sessions)
 	processor.cipher = cipher
 	return processor
 }
@@ -77,8 +77,8 @@ func (p *IngestProcessor) ProcessTaskResult(ctx context.Context, task *adminplus
 		return p.processRates(ctx, task, result)
 	case adminplusdomain.ExtensionTaskTypeFetchBalance:
 		return p.processBalance(ctx, task, result)
-	case adminplusdomain.ExtensionTaskTypeFetchPromotions:
-		return p.processPromotions(ctx, task, result)
+	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
+		return p.processAnnouncements(ctx, task, result)
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return p.processHealth(ctx, task, result)
 	case adminplusdomain.ExtensionTaskTypeExportBills:
@@ -129,6 +129,41 @@ func (p *IngestProcessor) processSessionBundle(ctx context.Context, task *adminp
 		})
 		if err != nil {
 			return nil, err
+		}
+	}
+	if p.balances != nil && p.balances.CanSyncFromSession() {
+		synced, err := p.balances.SyncFromSession(ctx, balancesapp.SyncFromSessionInput{
+			SupplierID: task.SupplierID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if synced != nil {
+			var balanceCents any
+			var balanceCurrency string
+			if synced.Probe != nil {
+				if synced.Probe.BalanceCents != nil {
+					balanceCents = *synced.Probe.BalanceCents
+				}
+				balanceCurrency = synced.Probe.BalanceCurrency
+			}
+			out["balance_probe"] = map[string]any{
+				"system_type":   synced.SystemType,
+				"origin":        synced.Origin,
+				"api_base_url":  synced.APIBaseURL,
+				"synced_at":     synced.SyncedAt,
+				"balance_cents": balanceCents,
+				"currency":      balanceCurrency,
+			}
+			if synced.Snapshot != nil {
+				out["balance_snapshot_id"] = synced.Snapshot.ID
+				out["balance_cents"] = synced.Snapshot.BalanceCents
+				out["balance_currency"] = synced.Snapshot.Currency
+			}
+			if synced.Event != nil {
+				out["balance_event_id"] = synced.Event.ID
+				out["balance_event_type"] = string(synced.Event.Type)
+			}
 		}
 	}
 	delete(result, "session_bundle")
@@ -200,8 +235,8 @@ func (p *IngestProcessor) processBalance(ctx context.Context, task *adminplusdom
 	return out, nil
 }
 
-func (p *IngestProcessor) processPromotions(ctx context.Context, task *adminplusdomain.ExtensionTask, result map[string]any) (map[string]any, error) {
-	itemsRaw, ok := result["promotions"].([]any)
+func (p *IngestProcessor) processAnnouncements(ctx context.Context, task *adminplusdomain.ExtensionTask, result map[string]any) (map[string]any, error) {
+	itemsRaw, ok := result["announcements"].([]any)
 	if !ok || len(itemsRaw) == 0 {
 		return nil, nil
 	}
@@ -214,10 +249,10 @@ func (p *IngestProcessor) processPromotions(ctx context.Context, task *adminplus
 		startsAt := optionalTimeValue(item, "starts_at")
 		endsAt := optionalTimeValue(item, "ends_at")
 		capturedAt := optionalTimeValue(item, "captured_at")
-		_, err := p.promotions.RecordPromotion(ctx, promotionsapp.RecordPromotionInput{
+		_, err := p.announcements.RecordAnnouncement(ctx, announcementsapp.RecordAnnouncementInput{
 			SupplierID:       task.SupplierID,
 			Source:           sourceValue(result),
-			Type:             adminplusdomain.PromotionType(stringValue(item, "type")),
+			Type:             adminplusdomain.AnnouncementType(stringValue(item, "type")),
 			Title:            stringValue(item, "title"),
 			Description:      stringValue(item, "description"),
 			Currency:         stringValue(item, "currency"),
@@ -236,7 +271,7 @@ func (p *IngestProcessor) processPromotions(ctx context.Context, task *adminplus
 		}
 		count++
 	}
-	return map[string]any{"promotion_events": count}, nil
+	return map[string]any{"announcement_events": count}, nil
 }
 
 func (p *IngestProcessor) processHealth(ctx context.Context, task *adminplusdomain.ExtensionTask, result map[string]any) (map[string]any, error) {

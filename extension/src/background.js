@@ -186,20 +186,28 @@ async function captureSupplierSession(supplierID, autoCreate) {
   const identification = await identifyCurrentSite()
   const client = new AdminPlusClient(config)
   let supplier = resolveSupplierFromIdentification(identification, supplierID)
-  if (!supplier && identification.status === 'unknown' && autoCreate) {
-    supplier = await discoverSupplierFromCurrentSite(client, identification)
-  }
   if (!supplier) {
-    const error = new Error('当前网站未匹配可上报的供应商')
-    error.reason = 'SUPPLIER_SITE_NOT_MATCHED'
-    throw error
+    supplier = supplierFromCurrentSite(identification, autoCreate)
   }
 
   const task = await client.createCaptureSessionTask(config.deviceID, supplier.id, {
     source_url: identification.activeTab?.url || '',
     source_host: identification.activeTab?.host || '',
-    auto_created_supplier: Boolean(supplier.auto_created)
+    source_origin: identification.activeTab?.origin || '',
+    dashboard_url: supplier.dashboard_url || identification.activeTab?.url || '',
+    api_base_url: supplier.api_base_url || identification.activeTab?.origin || '',
+    auto_create_supplier: Boolean(autoCreate),
+    page_context: {
+      title: identification.activeTab?.title || ''
+    }
   })
+  supplier = {
+    ...supplier,
+    id: task.supplier_id,
+    supplier_id: task.supplier_id,
+    dashboard_url: supplier.dashboard_url || identification.activeTab?.url || '',
+    api_base_url: supplier.api_base_url || identification.activeTab?.origin || ''
+  }
   await client.heartbeat(task)
   const tab = await ensureSupplierTab(supplier.dashboard_url || identification.activeTab?.url)
   try {
@@ -282,6 +290,22 @@ async function discoverSupplierFromCurrentSite(client, identification) {
     ...supplier,
     auto_created: true,
     score: 100
+  }
+}
+
+function supplierFromCurrentSite(identification, autoCreate) {
+  if (!autoCreate) {
+    const error = new Error('当前网站未匹配可上报的供应商')
+    error.reason = 'SUPPLIER_SITE_NOT_MATCHED'
+    throw error
+  }
+  const tab = identification.activeTab || {}
+  return {
+    id: 0,
+    supplier_id: 0,
+    name: tab.host || '当前供应商',
+    dashboard_url: tab.url || '',
+    api_base_url: tab.origin || ''
   }
 }
 

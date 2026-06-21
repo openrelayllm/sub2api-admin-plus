@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	reconciliationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
 	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
@@ -64,10 +64,10 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			SupplierKey:    adminplushandler.NewSupplierKeyHandler(supplierKeyService),
 			Rate:           adminplushandler.NewRateHandler(ratesapp.NewServiceWithDependencies(newRouteSurfaceRateRepository(), nil, &routeSurfaceSessionReader{}, &routeSurfaceRateReader{})),
 			Balance:        adminplushandler.NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository())),
-			Promotion:      adminplushandler.NewPromotionHandler(promotionsapp.NewService(promotionsapp.NewMemoryRepository())),
+			Announcement:   adminplushandler.NewAnnouncementHandler(announcementsapp.NewService(announcementsapp.NewMemoryRepository())),
 			Health:         adminplushandler.NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository())),
-			Billing:        adminplushandler.NewBillingHandler(billingapp.NewService(billingapp.NewMemoryRepository())),
-			Extension:      adminplushandler.NewExtensionHandler(extensionService),
+			Billing:        adminplushandler.NewBillingHandler(billingapp.NewServiceWithDependencies(billingapp.NewMemoryRepository(), &routeSurfaceSessionReader{}, &routeSurfaceBillingReader{})),
+			Extension:      adminplushandler.NewExtensionHandler(extensionService, nil),
 			Scheduler:      adminplushandler.NewSchedulerHandler(schedulerapp.NewService(supplierService, extensionService)),
 			Action:         adminplushandler.NewActionHandler(actionsapp.NewRuleService()),
 			Reconciliation: adminplushandler.NewReconciliationHandler(reconciliationapp.NewService()),
@@ -126,6 +126,7 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/suppliers/:id/keys/provision",
 		"POST /api/v1/admin-plus/suppliers/:id/keys/:keyID/repair-binding",
 		"POST /api/v1/admin-plus/suppliers/:id/rates/sync",
+		"POST /api/v1/admin-plus/suppliers/:id/billing/sync",
 		"GET /api/v1/admin-plus/suppliers/:id/session",
 		"POST /api/v1/admin-plus/suppliers/:id/session/probe",
 		"POST /api/v1/admin-plus/suppliers/:id/browser-sessions",
@@ -142,9 +143,9 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/admin-plus/balances/snapshots",
 		"GET /api/v1/admin-plus/balances/events",
 		"PATCH /api/v1/admin-plus/balances/events/:id/ack",
-		"POST /api/v1/admin-plus/promotions",
-		"GET /api/v1/admin-plus/promotions",
-		"PATCH /api/v1/admin-plus/promotions/:id/ack",
+		"POST /api/v1/admin-plus/announcements",
+		"GET /api/v1/admin-plus/announcements",
+		"PATCH /api/v1/admin-plus/announcements/:id/ack",
 		"POST /api/v1/admin-plus/health/samples",
 		"GET /api/v1/admin-plus/health/samples",
 		"GET /api/v1/admin-plus/health/events",
@@ -188,6 +189,9 @@ func TestAdminPlusDeadRoutesStayUnregistered(t *testing.T) {
 		"GET /api/v1/admin/payment",
 		"GET /api/v1/admin/subscriptions",
 		"GET /api/v1/admin/redeem-codes",
+		"POST /api/v1/admin-plus/promotions",
+		"GET /api/v1/admin-plus/promotions",
+		"PATCH /api/v1/admin-plus/promotions/:id/ack",
 		"GET /v1/chat/completions",
 		"POST /v1/chat/completions",
 	}
@@ -215,6 +219,9 @@ func TestAdminPlusDeadPathsReturn404(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/groups/1"},
 		{http.MethodGet, "/api/v1/admin/payment"},
 		{http.MethodGet, "/api/v1/admin/subscriptions"},
+		{http.MethodPost, "/api/v1/admin-plus/promotions"},
+		{http.MethodGet, "/api/v1/admin-plus/promotions"},
+		{http.MethodPatch, "/api/v1/admin-plus/promotions/1/ack"},
 		{http.MethodPost, "/v1/chat/completions"},
 	}
 
@@ -255,6 +262,12 @@ type routeSurfaceRateReader struct{}
 
 func (r *routeSurfaceRateReader) ReadRates(_ context.Context, in ports.SessionProbeInput) (*ports.ReadRatesResult, error) {
 	return &ports.ReadRatesResult{SupplierID: in.SupplierID, SystemType: "sub2api"}, nil
+}
+
+type routeSurfaceBillingReader struct{}
+
+func (r *routeSurfaceBillingReader) ReadBilling(_ context.Context, in ports.SessionProbeInput, _ ports.ReadBillingInput) (*ports.ReadBillingResult, error) {
+	return &ports.ReadBillingResult{SupplierID: in.SupplierID, SystemType: "sub2api"}, nil
 }
 
 type routeSurfaceKeyAdapter struct{}

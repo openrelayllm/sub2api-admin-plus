@@ -8,6 +8,7 @@ import (
 	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -33,6 +34,22 @@ type EventFilter struct {
 	Limit      int
 }
 
+type SyncFromSessionInput struct {
+	SupplierID               int64
+	LowBalanceThresholdCents int64
+}
+
+type SyncFromSessionResult struct {
+	SupplierID int64                            `json:"supplier_id"`
+	SystemType string                           `json:"system_type"`
+	Origin     string                           `json:"origin"`
+	APIBaseURL string                           `json:"api_base_url"`
+	SyncedAt   time.Time                        `json:"synced_at"`
+	Probe      *ports.SessionProbeResult        `json:"probe"`
+	Snapshot   *adminplusdomain.BalanceSnapshot `json:"snapshot,omitempty"`
+	Event      *adminplusdomain.BalanceEvent    `json:"event,omitempty"`
+}
+
 type Repository interface {
 	CreateSnapshot(ctx context.Context, snapshot *adminplusdomain.BalanceSnapshot) (*adminplusdomain.BalanceSnapshot, error)
 	FindLatestSnapshot(ctx context.Context, supplierID int64, currency string, capturedAt time.Time) (*adminplusdomain.BalanceSnapshot, error)
@@ -46,9 +63,15 @@ type Notifier interface {
 	NotifyBalanceEvent(ctx context.Context, event *adminplusdomain.BalanceEvent, snapshot *adminplusdomain.BalanceSnapshot) error
 }
 
+type SessionReader interface {
+	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
+}
+
 type Service struct {
 	repo     Repository
 	notifier Notifier
+	session  SessionReader
+	reader   ports.SessionProbeAdapter
 	now      func() time.Time
 }
 
@@ -62,6 +85,17 @@ func NewServiceWithNotifier(repo Repository, notifier Notifier) *Service {
 		notifier: notifier,
 		now:      time.Now,
 	}
+}
+
+func NewServiceWithDependencies(repo Repository, notifier Notifier, session SessionReader, reader ports.SessionProbeAdapter) *Service {
+	service := NewServiceWithNotifier(repo, notifier)
+	service.session = session
+	service.reader = reader
+	return service
+}
+
+func (s *Service) CanSyncFromSession() bool {
+	return s != nil && s.repo != nil && s.session != nil && s.reader != nil
 }
 
 func (s *Service) RecordSnapshot(ctx context.Context, in RecordSnapshotInput) (*adminplusdomain.BalanceEvent, *adminplusdomain.BalanceSnapshot, error) {
@@ -99,6 +133,70 @@ func (s *Service) notifyBalanceEvent(ctx context.Context, event *adminplusdomain
 	if err := s.notifier.NotifyBalanceEvent(ctx, event, snapshot); err != nil {
 		slog.Warn("admin plus balance notification failed", "supplier_id", event.SupplierID, "event_id", event.ID, "type", event.Type, "err", err)
 	}
+}
+
+func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("balance service is not configured")
+	}
+	if s.session == nil {
+		return nil, internalError("supplier browser session service is not configured")
+	}
+	if s.reader == nil {
+		return nil, internalError("supplier provider adapter is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("BALANCE_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if in.LowBalanceThresholdCents < 0 {
+		return nil, badRequest("BALANCE_THRESHOLD_INVALID", "low balance threshold must be non-negative")
+	}
+	probeInput, err := s.session.DecryptedProbeInput(ctx, in.SupplierID)
+	if err != nil {
+		return nil, err
+	}
+	probe, err := s.reader.ProbeSub2APIUserProfile(ctx, probeInput)
+	if err != nil {
+		return nil, err
+	}
+	result := &SyncFromSessionResult{
+		SupplierID: in.SupplierID,
+		Probe:      probe,
+	}
+	if probe != nil {
+		result.SystemType = probe.SystemType
+		result.Origin = probe.Origin
+		result.APIBaseURL = probe.APIBaseURL
+		result.SyncedAt = probe.ProbedAt.UTC()
+		if result.SyncedAt.IsZero() {
+			result.SyncedAt = s.now().UTC()
+		}
+		if probe.BalanceCents != nil {
+			event, snapshot, err := s.RecordSnapshot(ctx, RecordSnapshotInput{
+				SupplierID:               in.SupplierID,
+				Source:                   "provider_session",
+				RuntimeStatus:            runtimeStatusForBalance(*probe.BalanceCents),
+				BalanceCents:             *probe.BalanceCents,
+				Currency:                 probe.BalanceCurrency,
+				LowBalanceThresholdCents: in.LowBalanceThresholdCents,
+				RawPayload: map[string]any{
+					"provider":     probe.SystemType,
+					"profile":      probe.Profile,
+					"capabilities": probe.Capabilities,
+				},
+				CapturedAt: &probe.ProbedAt,
+			})
+			if err != nil {
+				return nil, err
+			}
+			result.Event = event
+			result.Snapshot = snapshot
+		}
+	}
+	if result.SyncedAt.IsZero() {
+		result.SyncedAt = s.now().UTC()
+	}
+	return result, nil
 }
 
 func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]*adminplusdomain.BalanceSnapshot, error) {
@@ -247,4 +345,11 @@ func badRequest(reason string, message string) error {
 
 func internalError(message string) error {
 	return infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", message)
+}
+
+func runtimeStatusForBalance(balanceCents int64) adminplusdomain.SupplierRuntimeStatus {
+	if balanceCents > 0 {
+		return adminplusdomain.SupplierRuntimeStatusCandidate
+	}
+	return adminplusdomain.SupplierRuntimeStatusMonitorOnly
 }

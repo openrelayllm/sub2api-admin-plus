@@ -7,6 +7,7 @@ import (
 	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -40,14 +41,36 @@ type BillLineFilter struct {
 	Limit      int
 }
 
+type SyncFromSessionInput struct {
+	SupplierID int64
+	StartedAt  time.Time
+	EndedAt    time.Time
+}
+
+type SyncFromSessionResult struct {
+	SupplierID int64                               `json:"supplier_id"`
+	SystemType string                              `json:"system_type"`
+	Origin     string                              `json:"origin"`
+	APIBaseURL string                              `json:"api_base_url"`
+	SyncedAt   time.Time                           `json:"synced_at"`
+	Total      int                                 `json:"total"`
+	Items      []*adminplusdomain.SupplierBillLine `json:"items"`
+}
+
 type Repository interface {
 	CreateBillLine(ctx context.Context, line *adminplusdomain.SupplierBillLine) (*adminplusdomain.SupplierBillLine, error)
 	ListBillLines(ctx context.Context, filter BillLineFilter) ([]*adminplusdomain.SupplierBillLine, error)
 }
 
+type SessionReader interface {
+	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
+}
+
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo    Repository
+	session SessionReader
+	reader  ports.SessionBillingAdapter
+	now     func() time.Time
 }
 
 func NewService(repo Repository) *Service {
@@ -55,6 +78,13 @@ func NewService(repo Repository) *Service {
 		repo: repo,
 		now:  time.Now,
 	}
+}
+
+func NewServiceWithDependencies(repo Repository, session SessionReader, reader ports.SessionBillingAdapter) *Service {
+	service := NewService(repo)
+	service.session = session
+	service.reader = reader
+	return service
 }
 
 func (s *Service) ImportBillLines(ctx context.Context, lines []ImportBillLineInput) ([]*adminplusdomain.SupplierBillLine, error) {
@@ -91,6 +121,84 @@ func (s *Service) ListBillLines(ctx context.Context, filter BillLineFilter) ([]*
 	}
 	filter.Limit = normalizeLimit(filter.Limit)
 	return s.repo.ListBillLines(ctx, filter)
+}
+
+func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("billing service is not configured")
+	}
+	if s.session == nil {
+		return nil, internalError("supplier browser session service is not configured")
+	}
+	if s.reader == nil {
+		return nil, internalError("supplier billing provider adapter is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("BILLING_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if in.StartedAt.IsZero() || in.EndedAt.IsZero() || !in.StartedAt.Before(in.EndedAt) {
+		return nil, badRequest("BILLING_TIME_RANGE_INVALID", "billing ended_at must be after started_at")
+	}
+	probeInput, err := s.session.DecryptedProbeInput(ctx, in.SupplierID)
+	if err != nil {
+		return nil, err
+	}
+	readResult, err := s.reader.ReadBilling(ctx, probeInput, ports.ReadBillingInput{
+		SupplierID: in.SupplierID,
+		StartedAt:  in.StartedAt.UTC(),
+		EndedAt:    in.EndedAt.UTC(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]ImportBillLineInput, 0, len(readResult.Lines))
+	for _, line := range readResult.Lines {
+		lines = append(lines, ImportBillLineInput{
+			SupplierID:        in.SupplierID,
+			Source:            "provider_session",
+			ExternalBillID:    line.ExternalBillID,
+			ExternalRequestID: line.ExternalRequestID,
+			APIKeyName:        line.APIKeyName,
+			Model:             line.Model,
+			Endpoint:          line.Endpoint,
+			RequestType:       line.RequestType,
+			BillingMode:       line.BillingMode,
+			ReasoningEffort:   line.ReasoningEffort,
+			Currency:          line.Currency,
+			CostCents:         line.CostCents,
+			InputTokens:       line.InputTokens,
+			OutputTokens:      line.OutputTokens,
+			CacheReadTokens:   line.CacheReadTokens,
+			TotalTokens:       line.TotalTokens,
+			FirstTokenMS:      line.FirstTokenMS,
+			DurationMS:        line.DurationMS,
+			UserAgent:         line.UserAgent,
+			StartedAt:         line.StartedAt,
+			EndedAt:           line.EndedAt,
+			RawPayload:        line.RawPayload,
+		})
+	}
+	items := make([]*adminplusdomain.SupplierBillLine, 0)
+	if len(lines) > 0 {
+		imported, err := s.ImportBillLines(ctx, lines)
+		if err != nil {
+			return nil, err
+		}
+		items = imported
+	}
+	syncedAt := readResult.CapturedAt.UTC()
+	if syncedAt.IsZero() {
+		syncedAt = s.now().UTC()
+	}
+	return &SyncFromSessionResult{
+		SupplierID: in.SupplierID,
+		SystemType: readResult.SystemType,
+		Origin:     readResult.Origin,
+		APIBaseURL: readResult.APIBaseURL,
+		SyncedAt:   syncedAt,
+		Total:      len(items),
+		Items:      items,
+	}, nil
 }
 
 func (s *Service) buildLine(in ImportBillLineInput) (*adminplusdomain.SupplierBillLine, error) {

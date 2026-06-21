@@ -153,6 +153,45 @@ func TestServiceProbeOpenAIResponsesRecordsGPT55Sample(t *testing.T) {
 	require.Empty(t, result.Events)
 }
 
+func TestServiceSyncFromSessionRunsOpenAICompatibleProbe(t *testing.T) {
+	repo := newFakeHealthRepository()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/responses", r.URL.Path)
+		require.Equal(t, "Bearer sk-test", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+	}))
+	t.Cleanup(server.Close)
+	repo.probeTarget = &ProbeTarget{
+		SupplierID:              7,
+		SupplierAPIBaseURL:      server.URL,
+		LocalAccountID:          11,
+		LocalAccountPlatform:    "openai",
+		LocalAccountType:        "apikey",
+		LocalAccountStatus:      "active",
+		LocalAccountConcurrency: 4,
+		APIKey:                  "sk-test",
+	}
+	svc := NewService(repo)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	tick := 0
+	svc.now = func() time.Time {
+		tick++
+		return now.Add(time.Duration(tick*100) * time.Millisecond)
+	}
+
+	result, err := svc.SyncFromSession(context.Background(), SyncFromSessionInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), result.SupplierID)
+	require.Equal(t, 1, result.Total)
+	require.NotNil(t, result.Result)
+	require.NotNil(t, result.Result.Sample)
+	require.Equal(t, "responses_probe", result.Result.Sample.Source)
+	require.Equal(t, "gpt-5.5", result.Result.Sample.Model)
+	require.Equal(t, result.Result.Sample.CapturedAt, result.SyncedAt)
+}
+
 type fakeHealthRepository struct {
 	nextSampleID int64
 	nextEventID  int64

@@ -76,6 +76,21 @@ type ProbeInput struct {
 	ConcurrencySaturationPercent float64
 }
 
+type SyncFromSessionInput struct {
+	SupplierID                   int64
+	Model                        string
+	FirstTokenThresholdMS        int64
+	TotalLatencyThresholdMS      int64
+	ConcurrencySaturationPercent float64
+}
+
+type SyncFromSessionResult struct {
+	SupplierID int64               `json:"supplier_id"`
+	SyncedAt   time.Time           `json:"synced_at"`
+	Total      int                 `json:"total"`
+	Result     *RecordSampleResult `json:"result"`
+}
+
 type Repository interface {
 	CreateSample(ctx context.Context, sample *adminplusdomain.HealthSample) (*adminplusdomain.HealthSample, error)
 	CreateEvent(ctx context.Context, event *adminplusdomain.HealthEvent) (*adminplusdomain.HealthEvent, error)
@@ -317,6 +332,34 @@ func (s *Service) ProbeOpenAIResponses(ctx context.Context, in ProbeInput) (*Rec
 		RawPayload:                   rawPayload,
 		CapturedAt:                   &startedAt,
 	})
+}
+
+func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {
+	if in.SupplierID <= 0 {
+		return nil, badRequest("HEALTH_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	result, err := s.ProbeOpenAIResponses(ctx, ProbeInput{
+		SupplierID:                   in.SupplierID,
+		Model:                        in.Model,
+		FirstTokenThresholdMS:        in.FirstTokenThresholdMS,
+		TotalLatencyThresholdMS:      in.TotalLatencyThresholdMS,
+		ConcurrencySaturationPercent: in.ConcurrencySaturationPercent,
+	})
+	if err != nil {
+		return nil, err
+	}
+	syncedAt := s.now().UTC()
+	total := 0
+	if result != nil && result.Sample != nil {
+		syncedAt = result.Sample.CapturedAt
+		total = 1
+	}
+	return &SyncFromSessionResult{
+		SupplierID: in.SupplierID,
+		SyncedAt:   syncedAt,
+		Total:      total,
+		Result:     result,
+	}, nil
 }
 
 type healthThresholds struct {

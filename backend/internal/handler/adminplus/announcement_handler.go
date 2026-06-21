@@ -4,21 +4,21 @@ import (
 	"net/http"
 	"strconv"
 
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
-type PromotionHandler struct {
-	service *promotionsapp.Service
+type AnnouncementHandler struct {
+	service *announcementsapp.Service
 }
 
-func NewPromotionHandler(service *promotionsapp.Service) *PromotionHandler {
-	return &PromotionHandler{service: service}
+func NewAnnouncementHandler(service *announcementsapp.Service) *AnnouncementHandler {
+	return &AnnouncementHandler{service: service}
 }
 
-type recordPromotionRequest struct {
+type recordAnnouncementRequest struct {
 	SupplierID       int64          `json:"supplier_id" binding:"required"`
 	Source           string         `json:"source"`
 	Type             string         `json:"type" binding:"required"`
@@ -36,8 +36,22 @@ type recordPromotionRequest struct {
 	RawPayload       map[string]any `json:"raw_payload"`
 }
 
-func (h *PromotionHandler) RecordPromotion(c *gin.Context) {
-	var req recordPromotionRequest
+func (h *AnnouncementHandler) SyncSupplierAnnouncements(c *gin.Context) {
+	supplierID, ok := parseSupplierID(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.SyncFromSession(c.Request.Context(), announcementsapp.SyncFromSessionInput{
+		SupplierID: supplierID,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Created(c, result)
+}
+
+func (h *AnnouncementHandler) RecordAnnouncement(c *gin.Context) {
+	var req recordAnnouncementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
@@ -54,10 +68,10 @@ func (h *PromotionHandler) RecordPromotion(c *gin.Context) {
 	if !ok {
 		return
 	}
-	event, err := h.service.RecordPromotion(c.Request.Context(), promotionsapp.RecordPromotionInput{
+	event, err := h.service.RecordAnnouncement(c.Request.Context(), announcementsapp.RecordAnnouncementInput{
 		SupplierID:       req.SupplierID,
 		Source:           req.Source,
-		Type:             adminplusdomain.PromotionType(req.Type),
+		Type:             adminplusdomain.AnnouncementType(req.Type),
 		Title:            req.Title,
 		Description:      req.Description,
 		Currency:         req.Currency,
@@ -77,12 +91,12 @@ func (h *PromotionHandler) RecordPromotion(c *gin.Context) {
 	response.Created(c, event)
 }
 
-func (h *PromotionHandler) ListEvents(c *gin.Context) {
+func (h *AnnouncementHandler) ListEvents(c *gin.Context) {
 	page := parsePagination(c)
-	items, err := h.service.ListEvents(c.Request.Context(), promotionsapp.EventFilter{
+	items, err := h.service.ListEvents(c.Request.Context(), announcementsapp.EventFilter{
 		SupplierID:     parseInt64Query(c, "supplier_id"),
-		Status:         adminplusdomain.PromotionStatus(c.Query("status")),
-		Recommendation: adminplusdomain.PromotionRecommendation(c.Query("recommendation")),
+		Status:         adminplusdomain.AnnouncementStatus(c.Query("status")),
+		Recommendation: adminplusdomain.AnnouncementRecommendation(c.Query("recommendation")),
 		Limit:          fetchLimitForPagination(page),
 	})
 	if response.ErrorFrom(c, err) {
@@ -92,8 +106,8 @@ func (h *PromotionHandler) ListEvents(c *gin.Context) {
 	response.Success(c, paginatedData(paged, total, page))
 }
 
-func (h *PromotionHandler) AcknowledgeEvent(c *gin.Context) {
-	id, ok := parsePromotionEventID(c)
+func (h *AnnouncementHandler) AcknowledgeEvent(c *gin.Context) {
+	id, ok := parseAnnouncementEventID(c)
 	if !ok {
 		return
 	}
@@ -104,10 +118,10 @@ func (h *PromotionHandler) AcknowledgeEvent(c *gin.Context) {
 	response.Success(c, event)
 }
 
-func parsePromotionEventID(c *gin.Context) (int64, bool) {
+func parseAnnouncementEventID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		response.Error(c, http.StatusBadRequest, "invalid promotion event id")
+		response.Error(c, http.StatusBadRequest, "invalid announcement event id")
 		return 0, false
 	}
 	return id, true

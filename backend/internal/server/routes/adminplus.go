@@ -34,6 +34,8 @@ func RegisterAdminPlusRoutes(
 			suppliers.POST("/:id/keys/provision", h.AdminPlus.SupplierKey.Provision)
 			suppliers.POST("/:id/keys/:keyID/repair-binding", h.AdminPlus.SupplierKey.RepairBinding)
 			suppliers.POST("/:id/rates/sync", h.AdminPlus.Rate.SyncSupplierRates)
+			suppliers.POST("/:id/announcements/sync", h.AdminPlus.Announcement.SyncSupplierAnnouncements)
+			suppliers.POST("/:id/billing/sync", h.AdminPlus.Billing.SyncSupplierBilling)
 			suppliers.GET("/:id/session", h.AdminPlus.Session.Get)
 			suppliers.POST("/:id/session/probe", h.AdminPlus.Session.Probe)
 			suppliers.POST("/:id/browser-sessions", h.AdminPlus.Session.Upsert)
@@ -64,11 +66,11 @@ func RegisterAdminPlusRoutes(
 			balances.PATCH("/events/:id/ack", h.AdminPlus.Balance.AcknowledgeEvent)
 		}
 
-		promotions := adminPlus.Group("/promotions")
+		announcements := adminPlus.Group("/announcements")
 		{
-			promotions.POST("", h.AdminPlus.Promotion.RecordPromotion)
-			promotions.GET("", h.AdminPlus.Promotion.ListEvents)
-			promotions.PATCH("/:id/ack", h.AdminPlus.Promotion.AcknowledgeEvent)
+			announcements.POST("", h.AdminPlus.Announcement.RecordAnnouncement)
+			announcements.GET("", h.AdminPlus.Announcement.ListEvents)
+			announcements.PATCH("/:id/ack", h.AdminPlus.Announcement.AcknowledgeEvent)
 		}
 
 		health := adminPlus.Group("/health")

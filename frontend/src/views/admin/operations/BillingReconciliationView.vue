@@ -13,10 +13,6 @@
             <Icon name="refresh" size="sm" />
             刷新
           </button>
-          <button type="button" class="btn btn-secondary" @click="openImportDialog">
-            <Icon name="upload" size="sm" />
-            导入账单
-          </button>
           <button type="button" class="btn btn-primary" :disabled="reconciling || billPagination.total === 0" @click="openUsageDialog">
             <Icon name="play" size="sm" />
             读取用量并对账
@@ -71,11 +67,8 @@
           </div>
 
           <div v-if="activeTab === 'bills'" class="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <select v-model.number="billFilter.supplier_id" class="input h-9 min-w-[220px] py-1 text-sm" @change="handleBillFilterChange">
-              <option :value="0">全部供应商</option>
-              <option v-for="supplier in suppliers" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option>
-            </select>
-            <button type="button" class="btn btn-secondary btn-sm" @click="openImportDialog">导入账单</button>
+            <span class="text-sm text-gray-500 dark:text-dark-400">{{ billSyncStatusLabel }}</span>
+            <button type="button" class="btn btn-secondary btn-sm" @click="openImportDialog">手工补录</button>
           </div>
 
           <div v-else-if="activeTab === 'usage'" class="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -159,6 +152,50 @@
         </div>
 
         <div v-else-if="activeTab === 'bills'">
+          <div class="border-b border-gray-100 bg-white px-5 py-5 dark:border-dark-700 dark:bg-dark-900">
+            <div class="grid gap-4 lg:grid-cols-[1.2fr_1.2fr_auto] lg:items-end">
+              <label class="block">
+                <span class="input-label">1. 供应商</span>
+                <select v-model.number="billFilter.supplier_id" class="input" @change="handleBillFilterChange">
+                  <option :value="0">全部供应商</option>
+                  <option v-for="supplier in suppliers" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option>
+                </select>
+              </label>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label class="block">
+                  <span class="input-label">2. 开始时间</span>
+                  <input v-model="billSyncForm.started_at" type="datetime-local" class="input" />
+                </label>
+                <label class="block">
+                  <span class="input-label">结束时间</span>
+                  <input v-model="billSyncForm.ended_at" type="datetime-local" class="input" />
+                </label>
+              </div>
+              <button
+                type="button"
+                class="btn btn-primary h-10"
+                :disabled="syncingBilling || !billFilter.supplier_id"
+                @click="syncBillingFromSupplier"
+              >
+                <Icon name="sync" size="sm" />
+                {{ syncingBilling ? '同步中...' : '3. 同步账单' }}
+              </button>
+            </div>
+            <div class="mt-4 grid gap-3 text-sm lg:grid-cols-3">
+              <div class="flex items-center gap-2 text-gray-600 dark:text-dark-300">
+                <Icon name="calendar" size="sm" class="text-gray-400" />
+                <span>{{ billSyncRangeLabel }}</span>
+              </div>
+              <div class="flex items-center gap-2 text-gray-600 dark:text-dark-300">
+                <Icon name="server" size="sm" class="text-gray-400" />
+                <span>{{ selectedBillSupplierLabel }}</span>
+              </div>
+              <div class="flex items-center gap-2" :class="lastBillingSync ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-dark-400'">
+                <Icon :name="lastBillingSync ? 'checkCircle' : 'infoCircle'" size="sm" />
+                <span>{{ billSyncStatusLabel }}</span>
+              </div>
+            </div>
+          </div>
           <div class="overflow-x-auto">
             <table class="w-full min-w-[1500px] divide-y divide-gray-200 dark:divide-dark-700">
               <thead class="bg-gray-50 dark:bg-dark-800">
@@ -394,9 +431,11 @@ import {
   listLocalUsageLines,
   listSuppliers,
   runReconciliation,
+  syncSupplierBilling,
   type LocalUsageLine,
   type ReconciliationLine,
   type ReconciliationResult,
+  type SyncSupplierBillingResponse,
   type Supplier,
   type SupplierBillLine
 } from '@/api/admin/adminPlus'
@@ -408,6 +447,7 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const importing = ref(false)
+const syncingBilling = ref(false)
 const reconciling = ref(false)
 const importDialogOpen = ref(false)
 const usageDialogOpen = ref(false)
@@ -418,6 +458,7 @@ const suppliers = ref<Supplier[]>([])
 const billLines = ref<SupplierBillLine[]>([])
 const localUsages = ref<LocalUsageLine[]>([])
 const result = ref<ReconciliationResult | null>(null)
+const lastBillingSync = ref<SyncSupplierBillingResponse | null>(null)
 
 const billPagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0, pages: 0 })
 const localUsagePagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0, pages: 0 })
@@ -425,6 +466,11 @@ const resultPagination = reactive({ page: 1, page_size: getPersistedPageSize(), 
 
 const billFilter = reactive({
   supplier_id: 0
+})
+
+const billSyncForm = reactive({
+  started_at: toDateTimeLocal(new Date(Date.now() - 24 * 60 * 60 * 1000)),
+  ended_at: toDateTimeLocal(new Date())
 })
 
 const billForm = reactive({
@@ -486,6 +532,17 @@ const visibleReconciliationLines = computed(() => {
   return filteredReconciliationLines.value.slice(start, start + resultPagination.page_size)
 })
 const usageRangeLabel = computed(() => `${formatDateTime(toRFC3339(usageForm.from))} - ${formatDateTime(toRFC3339(usageForm.to))}`)
+const billSyncRangeLabel = computed(() => `${formatDateTime(toRFC3339(billSyncForm.started_at))} - ${formatDateTime(toRFC3339(billSyncForm.ended_at))}`)
+const selectedBillSupplierLabel = computed(() => {
+  if (!billFilter.supplier_id) return '选择供应商后同步'
+  return supplierName(billFilter.supplier_id)
+})
+const billSyncStatusLabel = computed(() => {
+  if (syncingBilling.value) return '正在从供应商读取'
+  if (lastBillingSync.value) return `上次同步 ${lastBillingSync.value.total} 条`
+  if (!billFilter.supplier_id) return '先选择供应商'
+  return '等待同步'
+})
 
 function centsFromYuan(value: number): number {
   return Math.round(Number(value || 0) * 100)
@@ -573,6 +630,10 @@ async function loadPage() {
     if (!billForm.supplier_id && suppliers.value[0]) {
       billForm.supplier_id = suppliers.value[0].id
     }
+    if (!billFilter.supplier_id && suppliers.value[0]) {
+      billFilter.supplier_id = suppliers.value[0].id
+      await loadBillLines()
+    }
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '加载账单失败')
   } finally {
@@ -595,6 +656,10 @@ async function loadBillLines() {
 
 function handleBillFilterChange() {
   billPagination.page = 1
+  lastBillingSync.value = null
+  if (billFilter.supplier_id) {
+    billForm.supplier_id = billFilter.supplier_id
+  }
   void loadBillLines()
 }
 
@@ -652,6 +717,28 @@ async function importBill() {
     appStore.showError((error as { message?: string }).message || '导入账单失败')
   } finally {
     importing.value = false
+  }
+}
+
+async function syncBillingFromSupplier() {
+  if (!billFilter.supplier_id) {
+    appStore.showError('请选择供应商')
+    return
+  }
+  syncingBilling.value = true
+  try {
+    const result = await syncSupplierBilling(billFilter.supplier_id, {
+      started_at: toRFC3339(billSyncForm.started_at),
+      ended_at: toRFC3339(billSyncForm.ended_at)
+    })
+    lastBillingSync.value = result
+    billPagination.page = 1
+    await loadBillLines()
+    appStore.showSuccess(`已同步 ${result.total} 条供应商账单`)
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '同步供应商账单失败')
+  } finally {
+    syncingBilling.value = false
   }
 }
 

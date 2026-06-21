@@ -7,6 +7,7 @@ import (
 	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -143,6 +144,66 @@ func TestServiceRecordSnapshotValidatesInput(t *testing.T) {
 	require.Equal(t, "BALANCE_SUPPLIER_ID_INVALID", infraerrors.Reason(err))
 }
 
+func TestServiceSyncFromSessionRecordsBalanceSnapshot(t *testing.T) {
+	repo := newFakeBalanceRepository()
+	probedAt := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	balanceCents := int64(1234)
+	session := &fakeBalanceSessionReader{input: ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     "https://relay.example.com",
+		APIBaseURL: "https://relay.example.com/api/v1",
+		Bundle:     map[string]any{"access_token": "browser-token"},
+	}}
+	reader := &fakeBalanceProbeAdapter{result: &ports.SessionProbeResult{
+		SupplierID:      7,
+		Status:          "ok",
+		SystemType:      "sub2api",
+		Origin:          "https://relay.example.com",
+		APIBaseURL:      "https://relay.example.com/api/v1",
+		BalanceCents:    &balanceCents,
+		BalanceCurrency: "cny",
+		Capabilities:    map[string]bool{"can_read_balance": true},
+		ProbedAt:        probedAt,
+	}}
+	svc := NewServiceWithDependencies(repo, nil, session, reader)
+
+	result, err := svc.SyncFromSession(context.Background(), SyncFromSessionInput{
+		SupplierID:               7,
+		LowBalanceThresholdCents: 2000,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), session.supplierID)
+	require.Equal(t, "sub2api", result.SystemType)
+	require.Equal(t, probedAt, result.SyncedAt)
+	require.NotNil(t, result.Snapshot)
+	require.NotNil(t, result.Event)
+	require.Equal(t, int64(1234), result.Snapshot.BalanceCents)
+	require.Equal(t, "CNY", result.Snapshot.Currency)
+	require.Equal(t, adminplusdomain.BalanceEventTypeLowBalance, result.Event.Type)
+}
+
+func TestServiceSyncFromSessionAllowsProbeWithoutBalance(t *testing.T) {
+	probedAt := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	session := &fakeBalanceSessionReader{}
+	reader := &fakeBalanceProbeAdapter{result: &ports.SessionProbeResult{
+		SupplierID:   7,
+		Status:       "ok",
+		SystemType:   "sub2api",
+		Capabilities: map[string]bool{"can_read_balance": false},
+		ProbedAt:     probedAt,
+	}}
+	svc := NewServiceWithDependencies(newFakeBalanceRepository(), nil, session, reader)
+
+	result, err := svc.SyncFromSession(context.Background(), SyncFromSessionInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, probedAt, result.SyncedAt)
+	require.NotNil(t, result.Probe)
+	require.Nil(t, result.Snapshot)
+	require.Nil(t, result.Event)
+}
+
 type fakeBalanceRepository struct {
 	nextSnapshotID int64
 	nextEventID    int64
@@ -153,6 +214,24 @@ type fakeBalanceRepository struct {
 type fakeBalanceNotifier struct {
 	err    error
 	events []*adminplusdomain.BalanceEvent
+}
+
+type fakeBalanceSessionReader struct {
+	input      ports.SessionProbeInput
+	supplierID int64
+}
+
+func (r *fakeBalanceSessionReader) DecryptedProbeInput(_ context.Context, supplierID int64) (ports.SessionProbeInput, error) {
+	r.supplierID = supplierID
+	return r.input, nil
+}
+
+type fakeBalanceProbeAdapter struct {
+	result *ports.SessionProbeResult
+}
+
+func (a *fakeBalanceProbeAdapter) ProbeSub2APIUserProfile(_ context.Context, _ ports.SessionProbeInput) (*ports.SessionProbeResult, error) {
+	return a.result, nil
 }
 
 func (n *fakeBalanceNotifier) NotifyBalanceEvent(_ context.Context, event *adminplusdomain.BalanceEvent, _ *adminplusdomain.BalanceSnapshot) error {

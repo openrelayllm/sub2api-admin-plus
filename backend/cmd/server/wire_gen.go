@@ -11,12 +11,12 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
-	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/reconciliation"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
@@ -181,27 +181,27 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	rateHandler := adminplus.NewRateHandler(ratesService)
 	balancesSQLRepository := balances.NewSQLRepository(db)
 	balancesFeishuNotifier := balances.NewFeishuNotifierFromEnv(notificationsSQLRepository)
-	balancesService := balances.NewServiceWithNotifier(balancesSQLRepository, balancesFeishuNotifier)
+	balancesService := balances.NewServiceWithDependencies(balancesSQLRepository, balancesFeishuNotifier, sessionsService, sessionProfileClient)
 	balanceHandler := adminplus.NewBalanceHandler(balancesService)
-	promotionsSQLRepository := promotions.NewSQLRepository(db)
-	promotionsFeishuNotifier := promotions.NewFeishuNotifierFromEnv(notificationsSQLRepository)
-	promotionsService := promotions.NewServiceWithNotifier(promotionsSQLRepository, promotionsFeishuNotifier)
-	promotionHandler := adminplus.NewPromotionHandler(promotionsService)
+	announcementsSQLRepository := announcements.NewSQLRepository(db)
+	announcementsFeishuNotifier := announcements.NewFeishuNotifierFromEnv(notificationsSQLRepository)
+	announcementsService := announcements.NewServiceWithDependencies(announcementsSQLRepository, announcementsFeishuNotifier, sessionsService, sessionProfileClient)
+	announcementHandler := adminplus.NewAnnouncementHandler(announcementsService)
 	healthSQLRepository := health.NewSQLRepository(db)
 	healthFeishuNotifier := health.NewFeishuNotifierFromEnv(notificationsSQLRepository)
 	healthService := health.NewServiceWithNotifier(healthSQLRepository, healthFeishuNotifier)
 	healthHandler := adminplus.NewHealthHandler(healthService)
 	notificationHandler := adminplus.NewNotificationHandler(notificationsSQLRepository)
 	billingSQLRepository := billing.NewSQLRepository(db)
-	service2 := billing.NewService(billingSQLRepository)
+	service2 := billing.NewServiceWithDependencies(billingSQLRepository, sessionsService, sessionProfileClient)
 	billingHandler := adminplus.NewBillingHandler(service2)
 	extensionSQLRepository := extension.NewSQLRepository(db)
 	sessionCipher := extension.UseSessionCipher(secretEncryptor)
-	ingestProcessor := extension.NewIngestProcessorWithCipher(ratesService, balancesService, promotionsService, healthService, service2, sessionsService, sessionCipher)
+	ingestProcessor := extension.NewIngestProcessorWithCipher(ratesService, balancesService, announcementsService, healthService, service2, sessionsService, sessionCipher)
 	extensionService := extension.NewServiceWithDependencies(extensionSQLRepository, ingestProcessor, suppliersService)
-	extensionHandler := adminplus.NewExtensionHandler(extensionService)
+	extensionHandler := adminplus.NewExtensionHandler(extensionService, suppliersService)
 	sessionHandler := adminplus.NewSessionHandler(sessionsService, balancesService)
-	schedulerService := scheduler.NewService(suppliersService, extensionService)
+	schedulerService := scheduler.NewServiceWithDependencies(suppliersService, extensionService, suppliergroupsService, ratesService, balancesService, announcementsService, healthService, service2)
 	schedulerHandler := adminplus.NewSchedulerHandler(schedulerService)
 	actionsSQLRepository := actions.NewSQLRepository(db)
 	actionsService := actions.NewService(actionsSQLRepository)
@@ -214,7 +214,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	runtimeRepository := sub2api.NewRuntimeRepository(readDB, sub2APIRedis)
 	sub2apiService := sub2api.NewService(sub2apiSQLRepository, runtimeRepository)
 	sub2APIHandler := adminplus.NewSub2APIHandler(sub2apiService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, rateHandler, balanceHandler, promotionHandler, healthHandler, notificationHandler, billingHandler, extensionHandler, sessionHandler, schedulerHandler, actionHandler, reconciliationHandler, sub2APIHandler)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, rateHandler, balanceHandler, announcementHandler, healthHandler, notificationHandler, billingHandler, extensionHandler, sessionHandler, schedulerHandler, actionHandler, reconciliationHandler, sub2APIHandler)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)

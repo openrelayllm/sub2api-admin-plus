@@ -20,6 +20,11 @@ type importBillLinesRequest struct {
 	Lines []billLineDTO `json:"lines" binding:"required"`
 }
 
+type syncSupplierBillingRequest struct {
+	StartedAt string `json:"started_at" binding:"required"`
+	EndedAt   string `json:"ended_at" binding:"required"`
+}
+
 type billLineDTO struct {
 	SupplierID        int64          `json:"supplier_id" binding:"required"`
 	Source            string         `json:"source"`
@@ -106,6 +111,35 @@ func (h *BillingHandler) ListBillLines(c *gin.Context) {
 	}
 	paged, total := paginateSlice(items, page)
 	response.Success(c, paginatedData(paged, total, page))
+}
+
+func (h *BillingHandler) SyncSupplierBilling(c *gin.Context) {
+	supplierID, ok := parseSupplierID(c)
+	if !ok {
+		return
+	}
+	var req syncSupplierBillingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	startedAt, ok := parseRequiredTime(c, "started_at", req.StartedAt)
+	if !ok {
+		return
+	}
+	endedAt, ok := parseRequiredTime(c, "ended_at", req.EndedAt)
+	if !ok {
+		return
+	}
+	result, err := h.service.SyncFromSession(c.Request.Context(), billingapp.SyncFromSessionInput{
+		SupplierID: supplierID,
+		StartedAt:  *startedAt,
+		EndedAt:    *endedAt,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Created(c, result)
 }
 
 func parseRequiredTime(c *gin.Context, field string, value string) (*time.Time, bool) {

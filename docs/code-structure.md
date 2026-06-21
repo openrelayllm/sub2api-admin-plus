@@ -54,7 +54,7 @@ backend/
         suppliergroups/             # 供应商分组事实表，Provider Adapter 同步后落库
         supplierkeys/               # 第三方 Key 元数据、本地账号创建和绑定编排
         rates/                      # 费率抓取、快照、变更事件
-        promotions/                 # 优惠活动监控、充值建议
+        announcements/              # 公告监控、关键词分类、充值建议
         billing/                    # 账单导入、账单明细归一化
         reconciliation/             # 对账、成本、收入、毛利计算
         health/                     # 首 token、耗时、错误率、并发、健康分
@@ -121,7 +121,7 @@ admin_plus_suppliers
 
 供应商状态规则已在业务层固化：
 
-- `monitor_only` 允许无余额，用于无充值供应商的优惠/费率监控。
+- `monitor_only` 允许无余额，用于无充值供应商的公告/费率监控。
 - `candidate` 和 `active` 必须有正余额，否则不允许作为切换候选。
 - 凭据响应只返回是否配置和脱敏值，不返回浏览器登录密码、临时 token、PostgreSQL DSN、Redis DSN 或可选管理 API Key 明文。
 
@@ -143,7 +143,7 @@ admin_plus_supplier_accounts       # 账号/Key 子级，绑定第三方 Key 和
 - 未绑定分组行通过 `POST /api/v1/admin-plus/suppliers/:id/keys/provision` 创建第三方 Key、同步创建本地 Sub2API 账号，并写入 `admin_plus_supplier_keys` 和 `admin_plus_supplier_accounts`。
 - `keys/provision` 已接入通用 `Idempotency-Key` 去重和结果重放；同一供应商分组还通过 `admin_plus_supplier_keys` 唯一索引限制只能存在一个 `provisioning` / `bound` / `manual_secret_required` Key。
 - 本地账号创建或绑定失败的 Key 通过 `POST /api/v1/admin-plus/suppliers/:id/keys/:keyID/repair-binding` 在分组弹窗内选择已有本地 Sub2API account 修复；该入口不调用 Provider Adapter，不创建第三方 Key。
-- 独立账号/Key 绑定页当前只读展示已生成绑定，用作审计和历史查看；列表重点展示供应商分组名称、渠道族、倍率、真实本地用量 token 和账号成本金额，不展示单 Key 余额；不在该页保留创建、编辑或删除按钮。
+- 独立账号/Key 绑定页当前只读展示已生成绑定，用作审计和历史查看；列表按 Sub2API API 密钥页密度展示本地账号名称、脱敏供应商 Key、供应商上下文、供应商分组名称、渠道颜色、倍率、真实本地用量 token 和账号成本金额，不展示单 Key 余额；不在该页保留创建、编辑或删除按钮。
 
 当前已落地费率快照与变更事件最小闭环：
 
@@ -193,13 +193,13 @@ admin_plus_rate_change_events
 
 ```text
 backend/internal/adminplus/domain/balance.go
-backend/internal/adminplus/domain/promotion.go
+backend/internal/adminplus/domain/announcement.go
 backend/internal/adminplus/domain/health.go
 backend/internal/adminplus/domain/extension.go
 backend/internal/adminplus/domain/billing.go
 backend/internal/adminplus/domain/action.go
 backend/internal/adminplus/app/balances/
-backend/internal/adminplus/app/promotions/
+backend/internal/adminplus/app/announcements/
 backend/internal/adminplus/app/health/
 backend/internal/adminplus/app/extension/
 backend/internal/adminplus/app/scheduler/
@@ -208,7 +208,7 @@ backend/internal/adminplus/app/reconciliation/
 backend/internal/adminplus/app/actions/
 backend/internal/adminplus/app/sub2api/
 backend/internal/handler/adminplus/balance_handler.go
-backend/internal/handler/adminplus/promotion_handler.go
+backend/internal/handler/adminplus/announcement_handler.go
 backend/internal/handler/adminplus/health_handler.go
 backend/internal/handler/adminplus/billing_handler.go
 backend/internal/handler/adminplus/extension_handler.go
@@ -250,9 +250,9 @@ POST   /api/v1/admin-plus/balances/snapshots
 GET    /api/v1/admin-plus/balances/snapshots
 GET    /api/v1/admin-plus/balances/events
 PATCH  /api/v1/admin-plus/balances/events/:id/ack
-POST   /api/v1/admin-plus/promotions
-GET    /api/v1/admin-plus/promotions
-PATCH  /api/v1/admin-plus/promotions/:id/ack
+POST   /api/v1/admin-plus/announcements
+GET    /api/v1/admin-plus/announcements
+PATCH  /api/v1/admin-plus/announcements/:id/ack
 POST   /api/v1/admin-plus/health/probe
 POST   /api/v1/admin-plus/health/samples
 GET    /api/v1/admin-plus/health/samples
@@ -261,6 +261,7 @@ PATCH  /api/v1/admin-plus/health/events/:id/ack
 GET    /api/v1/admin-plus/notifications/deliveries
 POST   /api/v1/admin-plus/billing/lines/import
 GET    /api/v1/admin-plus/billing/lines
+POST   /api/v1/admin-plus/suppliers/:id/billing/sync
 POST   /api/v1/admin-plus/extension/tasks
 GET    /api/v1/admin-plus/extension/tasks
 POST   /api/v1/admin-plus/extension/tasks/claim
@@ -307,12 +308,13 @@ PATCH  /api/v1/admin-plus/actions/recommendations/:id/status
 - 余额首次或从高于阈值跌到低于阈值生成 `low_balance` 事件。
 - 余额从 0 或低余额恢复到可用区间生成 `recovered` 事件。
 
-优惠监控规则：
+公告监控规则：
 
-- 无余额供应商仍可记录优惠活动。
-- 无余额供应商的优惠只生成 `recharge_to_unlock` 建议，提醒及时充值以获取更低成本。
-- 有余额且状态为 `candidate` / `active` 的供应商优惠生成 `switch_candidate` 建议。
-- `disabled` 供应商优惠仅作为 `informational` 信息，不进入切换候选。
+- 公告监控是一级能力，充值赠送、费率折扣、套餐、维护、故障和通知都是关键词分类结果。
+- 无余额供应商仍可记录公告事件。
+- 成本类公告在无余额供应商上只生成 `recharge_to_unlock` 建议，提醒及时充值以获取更低成本。
+- 成本类公告在有余额且状态为 `candidate` / `active` 的供应商上生成 `switch_candidate` 建议。
+- 维护、故障和普通通知只作为 `informational` 信息，不进入切换候选。
 
 健康监控规则：
 
@@ -328,7 +330,7 @@ PATCH  /api/v1/admin-plus/actions/recommendations/:id/status
 Chrome 插件任务规则：
 
 - 当前 Chrome 插件主任务类型是 `capture_supplier_session`：识别当前供应商网站、一键登录或读取已登录浏览器会话、上报会话包。
-- `fetch_rates`、`fetch_balance`、`fetch_promotions`、`export_bills`、`fetch_health` 保留为后端调度和浏览器兜底任务兼容类型，不再作为插件 Popup 的主交互。
+- `fetch_rates`、`fetch_groups`、`fetch_balance`、`fetch_announcements`、`fetch_health`、`export_bills` 作为任务类型名保留，但调度中心显式选择时直接执行后端同步，不再写入插件业务采集队列。
 - 插件设备通过 `device_id` 领取任务，领取后获得短期 `lease_token`。
 - 插件读取供应商浏览器凭据必须提交 `task_id + device_id + lease_token`，且任务必须处于 `claimed` 或 `running`、租约未过期。
 - 供应商浏览器登录账号、密码和临时 token 使用现有 AES-GCM `SecretEncryptor` 加密落库，普通供应商列表/详情 API 不返回明文。
@@ -336,18 +338,20 @@ Chrome 插件任务规则：
 - SQL repository 领取任务使用 `FOR UPDATE SKIP LOCKED` 原子更新，避免多个 Chrome 设备同时领取同一任务。
 - 心跳会刷新租约并把任务推进到 `running`。
 - 完成任务写入结果并进入 `succeeded`。
-- 完成 `capture_supplier_session` 后，余额、分组、费率和第三方 Key 创建主路径都由后端 Provider Adapter 使用已保存会话执行；插件不解析和上报业务结果。
-- `fetch_rates`、`fetch_balance`、`fetch_promotions`、`fetch_health`、`export_bills` 的结构化结果摄取仅保留为 compat 路径，不再作为插件 Popup 或新能力的主交互继续增强。
+- 完成 `capture_supplier_session` 后，余额、分组、费率、公告、健康、账单和第三方 Key 创建主路径都由后端 Provider Adapter 或后端 app service 使用已保存会话/本地账号执行；插件不解析和上报业务结果。
+- `fetch_rates`、`fetch_balance`、`fetch_announcements`、`fetch_health`、`export_bills` 的结构化结果摄取仅保留为 compat 路径，不再作为插件 Popup 或新能力的主交互继续增强。
 - 失败任务在未超过 `max_attempts` 前回到 `pending`，超过后进入 `failed`。
 - 当前 `MemoryRepository` 仅用于单元测试，不进入运行时对象图。
 
 调度中心规则：
 
-- `POST /api/v1/admin-plus/scheduler/run` 根据供应商状态生成插件任务。
+- 调度中心和插件任务共享 `admin_plus_extension_tasks` 队列；默认只生成 `capture_supplier_session` 会话上报任务。
+- `POST /api/v1/admin-plus/scheduler/run` 是统一调度入口：默认创建插件会话上报任务；显式选择 `fetch_groups`、`fetch_rates`、`fetch_balance`、`fetch_announcements`、`fetch_health`、`export_bills` 时直接调用后端 Provider Adapter / app service 同步分组、费率、余额、公告、健康和账单，不写插件队列。
+- 旧插件结构化业务结果摄取仅作为 compat 补录路径保留，调度中心不再创建 `fetch_*` / `export_bills` 插件业务任务。
 - 使用 `schedule_key` 对同一供应商、任务类型和时间窗口做幂等去重。
 - 默认窗口为 10 分钟，账单导出使用日级窗口。
-- 停用、暂停、凭据失效、未启用浏览器登录、缺少后台地址或缺少登录凭据的供应商不生成任务。
-- 无余额或不可切换供应商仍可生成费率、余额、优惠监控任务，但不会生成健康探测和账单导出任务。
+- 停用、暂停、凭据失效的供应商不执行调度；插件任务仍要求启用浏览器登录、配置后台地址和登录凭据；后端直连同步只要求供应商已配置后台或 API 地址并存在可解密会话。
+- 无余额或不可切换供应商仍可生成费率、分组、余额、公告监控任务，但不会生成健康探测和账单同步任务。
 - 周期 Worker 默认启用，可通过 `ADMIN_PLUS_SCHEDULER_ENABLED=false` 关闭，通过 `ADMIN_PLUS_SCHEDULER_INTERVAL_SECONDS` 调整间隔。
 
 账单与对账规则：
@@ -368,7 +372,7 @@ Chrome 插件任务规则：
 - 只生成 `ActionRecommendation`，不直接调用 Sub2API Admin API。
 - 动作建议 SQL repository 只负责保存、查询和更新状态，不参与建议生成算法。
 - `active` 供应商余额耗尽时生成暂停和切换建议。
-- 无余额供应商的优惠只生成充值建议，不生成切换建议。
+- 无余额供应商的成本类公告只生成充值建议，不生成切换建议。
 - 请求错误生成暂停建议；如果存在可用候选，再生成切换建议。
 - 首 token 慢、总耗时慢或并发饱和生成降权建议。
 - 低毛利率生成利润排查建议，避免中转商长期亏损。
@@ -376,11 +380,11 @@ Chrome 插件任务规则：
 
 通知规则：
 
-- 余额事件、费率变更事件、优惠事件、健康事件和对账异常当前已接入飞书自定义机器人。
+- 余额事件、费率变更事件、公告事件、健康事件和对账异常当前已接入飞书自定义机器人。
 - 通用配置使用 `ADMIN_PLUS_FEISHU_WEBHOOK_URL` 和 `ADMIN_PLUS_FEISHU_WEBHOOK_SECRET`。
 - 兼容旧余额变量 `ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_URL` 和 `ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_SECRET`。
 - 发送前写入 `admin_plus_notification_deliveries`，同一业务事件同一通道通过 `dedupe_key` 去重。
-- 费率、健康和优惠等高频事件使用窗口化 `dedupe_key` 限流，避免同一事件窗口重复刷屏。
+- 费率、健康和公告等高频事件使用窗口化 `dedupe_key` 限流，避免同一事件窗口重复刷屏。
 - 通知成功或失败都会记录投递状态，不回滚业务快照或事件。
 - 当前尚未完成多通道和失败重试策略。
 
@@ -396,7 +400,7 @@ current:
   backend/internal/adminplus/app/supplierkeys/*
   backend/internal/adminplus/app/rates/*
   backend/internal/adminplus/app/balances/*
-  backend/internal/adminplus/app/promotions/*
+  backend/internal/adminplus/app/announcements/*
   backend/internal/adminplus/app/health/*
   backend/internal/adminplus/app/extension/*
   backend/internal/adminplus/app/billing/*
@@ -483,7 +487,7 @@ extension/
 - 在 sub2apiplus Web 已登录时连接插件；未登录时只打开 Web 登录页，不在插件内设计登录表单。
 - 使用供应商后台账号密码或临时 token 自动登录，或读取当前已登录状态。
 - 采集前端 storage、可访问 Cookie、HttpOnly Cookie、CSRF 和必要请求上下文，形成供应商会话包。
-- 将会话包上报给 Admin Plus，由后端使用会话 API 完成费率、余额、优惠、账单和健康采集。
+- 将会话包上报给 Admin Plus，由后端使用会话 API 完成费率、余额、公告、账单和健康采集。
 - 页面 DOM 解析、截图、CSV 下载只作为供应商无可用会话 API 时的兜底能力。
 - 上报任务状态、错误和最小诊断信息。
 
@@ -544,7 +548,7 @@ admin_plus_supplier_accounts
 admin_plus_supplier_credentials
 admin_plus_rate_snapshots
 admin_plus_rate_change_events
-admin_plus_promotion_events
+admin_plus_announcement_events
 admin_plus_bill_imports
 admin_plus_bill_items
 admin_plus_reconciliation_runs
@@ -649,9 +653,9 @@ MVP 1 优先实现：
 - 供应商下挂账号/Key 子级绑定。
 - 子级绑定本地 Sub2API `accounts.id`，并缓存账号名称、平台、类型和调度状态快照。
 - 供应商父级管理页已对齐 Sub2API 后台表格工作台形态：筛选条、右侧工具、选择列、批量状态、批量删除、行内编辑、行内状态、账号入口和删除确认。
-- 账号/Key 子级绑定页已对齐 Sub2API 后台表格工作台形态：供应商筛选、本地账号搜索、分页、刷新、分组/费率、真实用量/金额、状态、本地账号和供应商侧 Key 只读展示。该页不提供新增、编辑、删除和批量操作。
+- 账号/Key 子级绑定页已对齐 Sub2API API 密钥列表形态：供应商筛选、本地账号搜索、分页、刷新、名称/API Key、分组、真实用量、状态、并发、创建时间和跳转分组操作。分组使用 Sub2API `GroupBadge` 同款名称、渠道颜色和倍率展示；该页不提供新增、编辑、删除和批量操作。
 
-无余额供应商只能监控费率和优惠，不能进入切换候选。切换候选实际落在子账号/Key 维度，但余额门禁使用父级供应商余额口径；子级负责成本、健康、并发和对账追溯。
+无余额供应商只能监控费率和公告，不能进入切换候选。切换候选实际落在子账号/Key 维度，但余额门禁使用父级供应商余额口径；子级负责成本、健康、并发和对账追溯。
 
 ### `rates`
 
@@ -661,17 +665,17 @@ MVP 1 优先实现：
 - 生成变更事件和通知。
 - 计算费率变化对毛利的影响。
 
-### `promotions`
+### `announcements`
 
-- 监控充值赠送、折扣费率、套餐折扣、限时活动。
-- 对无余额供应商继续监控优惠。
-- 只生成充值建议，不直接生成切换建议。
+- 读取供应商公告、通知、充值页和活动页。
+- 按关键词分类为充值赠送、费率折扣、套餐、限时公告、维护、故障、普通通知。
+- 成本类公告可以生成充值或调权建议；非成本类公告只生成信息或风险信号。
 
 ### `billing`
 
-- 导入供应商账单。
-- 接收 Chrome 插件导出的账单文件。
-- 标准化账单明细。
+- 使用已保存供应商会话触发 `billing.Service.SyncFromSession`。
+- 由后端 Provider Adapter 执行 `ReadBilling(session, date_range)`，Sub2API 同源供应商优先读取用户侧 `/api/v1/usage`，并写入 `admin_plus_supplier_bill_lines`。
+- 手工导入和旧插件导出只作为补录/compat 路径，不作为账单主事实源。
 
 ### `reconciliation`
 
@@ -713,7 +717,7 @@ MVP 1 优先实现：
 /api/v1/admin-plus/sub2api/accounts
 /api/v1/admin-plus/sub2api/account-runtime
 /api/v1/admin-plus/rates
-/api/v1/admin-plus/promotions
+/api/v1/admin-plus/announcements
 /api/v1/admin-plus/bills
 /api/v1/admin-plus/reconciliation
 /api/v1/admin-plus/health
@@ -740,7 +744,7 @@ backend/internal/adminplus/scheduler
 MVP 1 任务：
 
 - `rate_poll_job`：每 10 分钟抓取费率。
-- `promotion_poll_job`：定时抓取优惠。
+- `announcement_poll_job`：定时同步公告并执行关键词分类。
 - `balance_poll_job`：定时检查余额和额度。
 - `health_probe_job`：定时测速和并发探测。
 - `bill_export_job`：每天触发账单导出。
@@ -798,10 +802,23 @@ Chrome 插件 -> Sub2API 管理员 token
 12. 实现 Sub2API 源站账号读取适配。
 13. 实现 Sub2API 供应商费率抓取。
 14. 实现费率快照和变更事件。
-15. 实现余额、优惠和健康采集。
-16. 实现账单导入和对账。
+15. 实现余额、公告和健康采集。
+16. 实现供应商用户侧账单同步和对账。
 17. 实现自动化建议和管理员确认执行。
 18. 实现 Chrome 插件任务协议。
+
+Sub2API 同源供应商 Provider Adapter 当前接口口径：
+
+| 能力 | 供应商用户侧接口 | 状态 |
+|------|------------------|------|
+| 余额/profile | `GET /api/v1/user/profile` | 已落地 |
+| 分组 | `GET /api/v1/groups/available`、`GET /api/v1/groups/rates` | 已落地 |
+| 费率 | `GET /api/v1/rates/snapshots`、`GET /api/v1/channels/available` | 已落地 |
+| 公告 | `GET /api/v1/announcements`、`GET /api/v1/payment/checkout-info` | 已落地，待真实供应商联调 |
+| 账单 | `GET /api/v1/usage` | 已落地，待真实供应商联调 |
+| Key 创建 | `POST /api/v1/keys` | 基础链路已落地，必须管理员确认 |
+
+能力探测只使用 GET 请求，`GET /api/v1/keys?page=1&page_size=1` 仅表示 Key 管理入口可访问，不会创建第三方 Key。
 
 ## 14. 代码审查重点
 
@@ -849,5 +866,5 @@ frontend/src/views/admin/operations/
 - `SUB2API_READONLY_REDIS_URL` 或 `SUB2API_READONLY_REDIS_DB` 只读读取并发 key，不写、不删、不 flush。
 - scheduler 生成的任务必须持久化、可重试、可审计。
 - Chrome 插件完成真实网页登录和页面数据回传前，不能把费率/余额/账单自动采集标记为完成。
-- 飞书通知已经覆盖余额、费率、健康、优惠和对账异常事件，并具备 SQL 投递审计、事件级去重、窗口限流和通知记录页面；完成闭环前必须补多通道和失败重试策略。
+- 飞书通知已经覆盖余额、费率、健康、公告和对账异常事件，并具备 SQL 投递审计、事件级去重、窗口限流和通知记录页面；完成闭环前必须补多通道和失败重试策略。
 - 动作建议执行前必须有管理员确认，执行时必须调用本地 Sub2API Admin API，并记录执行前后快照。

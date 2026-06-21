@@ -1,4 +1,4 @@
-package balances
+package announcements
 
 import (
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"

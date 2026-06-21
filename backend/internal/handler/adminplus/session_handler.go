@@ -91,34 +91,28 @@ func (h *SessionHandler) Probe(c *gin.Context) {
 			return
 		}
 	}
-	probe, err := h.service.ProbeSub2APIUserProfile(c.Request.Context(), supplierID)
-	if response.ErrorFrom(c, err) {
-		return
-	}
-	out := gin.H{"probe": probe}
 	shouldRecord := req.RecordBalanceSnapshot == nil || *req.RecordBalanceSnapshot
-	if shouldRecord && h.balances != nil && probe.BalanceCents != nil {
-		event, snapshot, err := h.balances.RecordSnapshot(c.Request.Context(), balancesapp.RecordSnapshotInput{
+	if shouldRecord && h.balances != nil {
+		result, err := h.balances.SyncFromSession(c.Request.Context(), balancesapp.SyncFromSessionInput{
 			SupplierID:               supplierID,
-			Source:                   "provider_session",
-			RuntimeStatus:            runtimeStatusForBalance(*probe.BalanceCents),
-			BalanceCents:             *probe.BalanceCents,
-			Currency:                 probe.BalanceCurrency,
 			LowBalanceThresholdCents: req.LowBalanceThresholdCents,
-			RawPayload: map[string]any{
-				"provider":     probe.SystemType,
-				"profile":      probe.Profile,
-				"capabilities": probe.Capabilities,
-			},
-			CapturedAt: &probe.ProbedAt,
 		})
 		if response.ErrorFrom(c, err) {
 			return
 		}
-		out["balance_snapshot"] = snapshot
-		out["balance_event"] = event
+		out := gin.H{"probe": result.Probe}
+		if result.Snapshot != nil {
+			out["balance_snapshot"] = result.Snapshot
+			out["balance_event"] = result.Event
+		}
+		response.Success(c, out)
+		return
 	}
-	response.Success(c, out)
+	probe, err := h.service.ProbeSub2APIUserProfile(c.Request.Context(), supplierID)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, gin.H{"probe": probe})
 }
 
 func supplierBrowserSessionSummary(bundle map[string]any) map[string]any {
@@ -232,11 +226,4 @@ func sanitizeSupplierBrowserSession(session *adminplusdomain.SupplierBrowserSess
 		"status":                   status,
 		"has_encrypted_bundle":     session.SessionBundleCiphertext != "",
 	}
-}
-
-func runtimeStatusForBalance(balanceCents int64) adminplusdomain.SupplierRuntimeStatus {
-	if balanceCents > 0 {
-		return adminplusdomain.SupplierRuntimeStatusCandidate
-	}
-	return adminplusdomain.SupplierRuntimeStatusMonitorOnly
 }

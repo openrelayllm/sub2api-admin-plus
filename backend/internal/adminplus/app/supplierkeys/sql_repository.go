@@ -463,41 +463,6 @@ func scanSupplierKey(scanner scanner) (*adminplusdomain.SupplierKey, error) {
 	return &key, nil
 }
 
-func scanSupplierAccount(scanner scanner) (*adminplusdomain.SupplierAccount, error) {
-	var account adminplusdomain.SupplierAccount
-	var runtimeStatus, healthStatus string
-	err := scanner.Scan(
-		&account.ID,
-		&account.SupplierID,
-		&account.SupplierKeyID,
-		&account.LocalSub2APIAccountID,
-		&account.LocalAccountName,
-		&account.LocalAccountPlatform,
-		&account.LocalAccountType,
-		&account.SupplierAccountIdentifier,
-		&account.SupplierAccountLabel,
-		&account.OrganizationID,
-		&account.ProjectID,
-		&account.RateProfile,
-		&account.ConfiguredConcurrency,
-		&account.ObservedMaxConcurrency,
-		&account.BalanceThresholdCents,
-		&account.BalanceCents,
-		&account.BalanceCurrency,
-		&account.HasUsableBalance,
-		&runtimeStatus,
-		&healthStatus,
-		&account.CreatedAt,
-		&account.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	account.RuntimeStatus = adminplusdomain.SupplierRuntimeStatus(runtimeStatus)
-	account.HealthStatus = adminplusdomain.SupplierHealthStatus(healthStatus)
-	return &account, nil
-}
-
 func scanSupplierAccountWithGroup(scanner scanner) (*adminplusdomain.SupplierAccount, error) {
 	var account adminplusdomain.SupplierAccount
 	var runtimeStatus, healthStatus string

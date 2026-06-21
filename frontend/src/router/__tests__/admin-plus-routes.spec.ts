@@ -30,7 +30,7 @@ describe('adminPlusRoutes', () => {
       '/admin/operations/rates',
       '/admin/operations/balances',
       '/admin/operations/health',
-      '/admin/operations/promotions',
+      '/admin/operations/announcements',
       '/admin/operations/scheduler',
       '/admin/operations/extension-tasks',
       '/admin/operations/billing',
@@ -63,7 +63,8 @@ describe('adminPlusRoutes', () => {
       '/admin/payment',
       '/admin/subscriptions',
       '/admin/redeem',
-      '/admin/backup'
+      '/admin/backup',
+      '/admin/operations/promotions'
     ]
 
     for (const deadPath of deadPaths) {
@@ -82,7 +83,7 @@ describe('adminPlusRoutes', () => {
         '/admin/operations/rates',
         '/admin/operations/balances',
         '/admin/operations/health',
-        '/admin/operations/promotions',
+        '/admin/operations/announcements',
         '/admin/operations/scheduler',
         '/admin/operations/billing',
         '/admin/operations/actions',

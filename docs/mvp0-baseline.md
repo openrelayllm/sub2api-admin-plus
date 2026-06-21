@@ -75,12 +75,12 @@ Generated artifacts are intentionally ignored:
 - 后端已注册 `/api/v1/admin-plus/*` 业务路由。
 - 运行时已使用 SQL repository，不再依赖内存仓储。
 - 已完成供应商父级、供应商账号/Key 子级绑定。
-- 已完成费率、余额、健康、优惠、插件任务、账单、对账和动作建议基础 API。
+- 已完成费率、余额、健康、公告、插件任务、账单、对账和动作建议基础 API。
 - 已完成调度中心 API 和页面，可生成幂等 Chrome 插件任务。
-- 已完成插件任务结果摄取，结构化结果可写入费率、余额、优惠、健康和账单业务表。
+- 已完成插件任务结果摄取兼容层；结构化业务结果只作为旧路径补录，不再作为费率、余额、公告、健康和账单主事实源。
 - 已完成供应商浏览器登录凭据加密持久化，只有持有有效插件任务租约的执行器可以读取明文凭据。
-- 已创建 `extension/` Chrome MV3 最小执行器，可领取任务、读取凭据、打开供应商后台、解析真实页面数据并回写成功或失败。
-- 已抽出 Chrome 插件页面解析纯函数，并通过 `node extension/test-parser.cjs` 覆盖费率、余额、优惠、账单和并发基础样例。
+- 已创建 `extension/` Chrome MV3 最小执行器，可领取任务、读取凭据、打开供应商后台、采集会话包并回写成功或失败。
+- 已抽出 Chrome 插件页面解析纯函数作为兼容兜底，并通过 `node extension/test-parser.cjs` 覆盖费率、余额、公告、账单和并发基础样例。
 - 已完成本地 Sub2API 真实只读数据能力：
   - 读取 `accounts`。
   - 读取 `usage_logs` 明细。
@@ -94,10 +94,10 @@ Generated artifacts are intentionally ignored:
 - 已完成飞书自定义机器人基础通知：
   - 通用变量为 `ADMIN_PLUS_FEISHU_WEBHOOK_URL` 和 `ADMIN_PLUS_FEISHU_WEBHOOK_SECRET`。
   - 兼容旧余额变量 `ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_URL` 和 `ADMIN_PLUS_FEISHU_BALANCE_WEBHOOK_SECRET`。
-  - 覆盖余额、费率、健康、优惠和对账异常事件。
+  - 覆盖余额、费率、健康、公告和对账异常事件。
   - 通知发送前写入 `admin_plus_notification_deliveries`。
   - 同一业务事件同一通道通过 `dedupe_key` 去重。
-  - 费率、健康和优惠等高频事件支持窗口去重，避免同一事件窗口重复刷屏。
+  - 费率、健康和公告等高频事件支持窗口去重，避免同一事件窗口重复刷屏。
   - 已提供通知记录页面和 `GET /api/v1/admin-plus/notifications/deliveries`。
   - 通知成功或失败都会记录投递状态，不回滚业务快照或事件。
 - 前端已提供 Admin Plus 独立业务导航和页面。

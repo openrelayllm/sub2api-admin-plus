@@ -49,7 +49,7 @@ function queryCounts() {
     SELECT 'admin_plus_health_events', COUNT(*) FROM admin_plus_health_events
     WHERE model LIKE 'e2e-%'
     UNION ALL
-    SELECT 'admin_plus_promotion_events', COUNT(*) FROM admin_plus_promotion_events
+    SELECT 'admin_plus_announcement_events', COUNT(*) FROM admin_plus_announcement_events
     WHERE title LIKE '%e2e-%' OR description LIKE '%e2e-%' OR raw_payload::text LIKE '%e2e-%'
     UNION ALL
     SELECT 'admin_plus_action_recommendations', COUNT(*) FROM admin_plus_action_recommendations
@@ -111,7 +111,7 @@ function deleteFixtures() {
        OR model LIKE 'e2e-%'
        OR raw_payload::text LIKE '%e2e-%';
 
-    DELETE FROM admin_plus_promotion_events
+    DELETE FROM admin_plus_announcement_events
     WHERE supplier_id IN (SELECT id FROM admin_plus_suppliers WHERE name LIKE 'e2e-%' OR notes LIKE '%e2e-%')
        OR title LIKE '%e2e-%'
        OR description LIKE '%e2e-%'

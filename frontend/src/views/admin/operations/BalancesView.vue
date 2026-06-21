@@ -5,7 +5,7 @@
         <div>
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">余额监控</h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
-            跟踪供应商余额，区分可切换供应商和仅关注优惠但余额不足的供应商。
+            跟踪供应商余额，区分可切换供应商和仅保留公告/费率监控的余额不足供应商。
           </p>
         </div>
         <button type="button" class="btn btn-secondary" :disabled="loading" @click="loadPage">

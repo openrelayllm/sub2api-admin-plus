@@ -7,7 +7,7 @@ ALTER TABLE admin_plus_extension_tasks
         'fetch_rates',
         'fetch_groups',
         'fetch_balance',
-        'fetch_promotions',
+        'fetch_announcements',
         'export_bills',
         'fetch_health',
         'capture_supplier_session'

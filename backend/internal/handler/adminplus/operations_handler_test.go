@@ -289,22 +289,28 @@ func TestSupplierSessionProbeReadsProfileAndRecordsBalance(t *testing.T) {
 	var seenAuth string
 	var seenCookie string
 	var seenOrigin string
+	profileCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		require.Equal(t, "/api/v1/user/profile", req.URL.Path)
-		seenAuth = req.Header.Get("Authorization")
-		seenCookie = req.Header.Get("Cookie")
-		seenOrigin = req.Header.Get("Origin")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"id": 9,
-				"email": "ops@example.com",
-				"status": "active",
-				"balance": 12.34,
-				"concurrency": 5,
-				"allowed_groups": [1, 2]
-			}
-		}`))
+		switch req.URL.Path {
+		case "/api/v1/user/profile":
+			seenAuth = req.Header.Get("Authorization")
+			seenCookie = req.Header.Get("Cookie")
+			seenOrigin = req.Header.Get("Origin")
+			profileCalls++
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"id": 9,
+					"email": "ops@example.com",
+					"status": "active",
+					"balance": 12.34,
+					"concurrency": 5,
+					"allowed_groups": [1, 2]
+				}
+			}`))
+		default:
+			writeOperationsSub2APICapabilityFixture(t, w, req)
+		}
 	}))
 	defer server.Close()
 
@@ -349,14 +355,92 @@ func TestSupplierSessionProbeReadsProfileAndRecordsBalance(t *testing.T) {
 		"low_balance_threshold_cents": 2000
 	}`)
 	require.Equal(t, http.StatusOK, probed.Code, probed.Body.String())
+	require.Equal(t, 1, profileCalls)
 	require.Equal(t, "Bearer secret-token", seenAuth)
 	require.Equal(t, "sid=secret-cookie", seenCookie)
 	require.Equal(t, server.URL, seenOrigin)
 	require.Contains(t, probed.Body.String(), `"system_type":"sub2api"`)
 	require.Contains(t, probed.Body.String(), `"balance_cents":1234`)
 	require.Contains(t, probed.Body.String(), `"balance_snapshot"`)
+	require.Contains(t, probed.Body.String(), `"can_read_groups":true`)
+	require.Contains(t, probed.Body.String(), `"can_create_key":true`)
 	require.NotContains(t, probed.Body.String(), "secret-token")
 	require.NotContains(t, probed.Body.String(), "secret-cookie")
+}
+
+func TestCaptureSessionAutoCreatesSupplierAndSyncsBalance(t *testing.T) {
+	var seenAuth string
+	profileCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/api/v1/user/profile":
+			seenAuth = req.Header.Get("Authorization")
+			profileCalls++
+			_, _ = w.Write([]byte(`{
+				"code": 0,
+				"message": "success",
+				"data": {
+					"id": 8850,
+					"email": "wutongci@qq.com",
+					"role": "user",
+					"status": "active",
+					"balance": 1.8347894,
+					"concurrency": 100
+				}
+			}`))
+		default:
+			writeOperationsSub2APICapabilityFixture(t, w, req)
+		}
+	}))
+	defer server.Close()
+
+	router := newOperationsHandlerTestRouterWithAutoSessionBalanceSync("", "")
+
+	created := performJSON(t, router, http.MethodPost, "/extension/session/capture-task", `{
+		"device_id": "chrome-1",
+		"lease_ttl_seconds": 60,
+		"url": "`+server.URL+`/dashboard",
+		"dashboard_url": "`+server.URL+`/dashboard",
+		"api_base_url": "`+server.URL+`",
+		"host": "`+strings.TrimPrefix(server.URL, "http://")+`",
+		"auto_create_supplier": true,
+		"page_context": {"title": "AI Pixel"}
+	}`)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+	var body struct {
+		Data struct {
+			ID         int64          `json:"id"`
+			SupplierID int64          `json:"supplier_id"`
+			LeaseToken string         `json:"lease_token"`
+			Payload    map[string]any `json:"payload"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &body))
+	require.Greater(t, body.Data.SupplierID, int64(1))
+	require.Equal(t, true, body.Data.Payload["supplier_auto_created"])
+
+	completed := performJSON(t, router, http.MethodPost, "/extension/tasks/"+strconv.FormatInt(body.Data.ID, 10)+"/complete", `{
+		"device_id": "chrome-1",
+		"lease_token": "`+body.Data.LeaseToken+`",
+		"result": {
+			"session_bundle": {
+				"origin": "`+server.URL+`",
+				"tokens": {"access_token": "real-provider-token"},
+				"required_headers": {
+					"origin": "`+server.URL+`",
+					"referer": "`+server.URL+`/dashboard"
+				},
+				"context": {"api_base_url": "`+server.URL+`"}
+			}
+		}
+	}`)
+	require.Equal(t, http.StatusOK, completed.Code, completed.Body.String())
+	require.Equal(t, 1, profileCalls)
+	require.Equal(t, "Bearer real-provider-token", seenAuth)
+	require.Contains(t, completed.Body.String(), `"balance_cents":183`)
+	require.Contains(t, completed.Body.String(), `"balance_snapshot_id":1`)
+	require.NotContains(t, completed.Body.String(), "real-provider-token")
 }
 
 func TestSupplierBrowserSessionDirectUpsertSanitizesSession(t *testing.T) {
@@ -534,13 +618,84 @@ func TestSupplierRateSyncReadsProviderSession(t *testing.T) {
 	require.NotContains(t, synced.Body.String(), "secret-cookie")
 }
 
+func TestSupplierBillingSyncReadsProviderSession(t *testing.T) {
+	var seenAuth string
+	var seenCookie string
+	var seenStartedAt string
+	var seenEndedAt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		require.Equal(t, http.MethodGet, req.Method)
+		seenAuth = req.Header.Get("Authorization")
+		seenCookie = req.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/api/v1/billing/lines":
+			seenStartedAt = req.URL.Query().Get("started_at")
+			seenEndedAt = req.URL.Query().Get("ended_at")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": 91,
+						"request_id": "req-billing-1",
+						"api_key_name": "ops-key",
+						"model": "gpt-5-mini",
+						"endpoint": "/v1/responses",
+						"request_type": "responses",
+						"billing_mode": "token",
+						"currency": "usd",
+						"cost": 1.23,
+						"input_tokens": 1000,
+						"output_tokens": 500,
+						"started_at": "2026-06-20T10:00:00Z",
+						"access_token": "must-not-return",
+						"headers": {"cookie": "must-not-return", "x-safe": "kept"}
+					}
+				]
+			}`))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer server.Close()
+
+	router := newOperationsHandlerTestRouterWithSupplierURLs(server.URL, server.URL)
+	created := performJSON(t, router, http.MethodPost, "/suppliers/1/browser-sessions", `{
+		"origin": "`+server.URL+`",
+		"session_bundle": {
+			"origin": "`+server.URL+`",
+			"tokens": {"access_token": "secret-token"},
+			"required_headers": {"cookie": "sid=secret-cookie"},
+			"context": {"api_base_url": "`+server.URL+`"}
+		}
+	}`)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+
+	synced := performJSON(t, router, http.MethodPost, "/suppliers/1/billing/sync", `{
+		"started_at": "2026-06-20T00:00:00Z",
+		"ended_at": "2026-06-21T00:00:00Z"
+	}`)
+	require.Equal(t, http.StatusCreated, synced.Code, synced.Body.String())
+	require.Equal(t, "Bearer secret-token", seenAuth)
+	require.Equal(t, "sid=secret-cookie", seenCookie)
+	require.Equal(t, "2026-06-20T00:00:00Z", seenStartedAt)
+	require.Equal(t, "2026-06-21T00:00:00Z", seenEndedAt)
+	require.Contains(t, synced.Body.String(), `"source":"provider_session"`)
+	require.Contains(t, synced.Body.String(), `"external_request_id":"req-billing-1"`)
+	require.Contains(t, synced.Body.String(), `"model":"gpt-5-mini"`)
+	require.Contains(t, synced.Body.String(), `"cost_cents":123`)
+	require.NotContains(t, synced.Body.String(), "secret-token")
+	require.NotContains(t, synced.Body.String(), "secret-cookie")
+	require.NotContains(t, synced.Body.String(), "must-not-return")
+	require.Contains(t, synced.Body.String(), `"x-safe":"kept"`)
+}
+
 func TestSupplierKeyProvisionCreatesProviderKeyLocalAccountAndBinding(t *testing.T) {
 	var seenAuth string
 	var seenCookie string
 	var payload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		require.Equal(t, http.MethodPost, req.Method)
-		require.Equal(t, "/api/v1/api-keys", req.URL.Path)
+		require.Equal(t, "/api/v1/keys", req.URL.Path)
 		seenAuth = req.Header.Get("Authorization")
 		seenCookie = req.Header.Get("Cookie")
 		require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
@@ -615,7 +770,7 @@ func TestSupplierKeyProvisionReplaysWithIdempotencyKey(t *testing.T) {
 	var providerCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		require.Equal(t, http.MethodPost, req.Method)
-		require.Equal(t, "/api/v1/api-keys", req.URL.Path)
+		require.Equal(t, "/api/v1/keys", req.URL.Path)
 		providerCalls++
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -673,7 +828,7 @@ func TestSupplierKeyRepairBindingBindsFailedKeyWithoutProviderCall(t *testing.T)
 	var providerCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		require.Equal(t, http.MethodPost, req.Method)
-		require.Equal(t, "/api/v1/api-keys", req.URL.Path)
+		require.Equal(t, "/api/v1/keys", req.URL.Path)
 		providerCalls++
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -689,7 +844,7 @@ func TestSupplierKeyRepairBindingBindsFailedKeyWithoutProviderCall(t *testing.T)
 	defer server.Close()
 
 	localAccounts := &operationsLocalAccountCreator{createErr: errors.New("local account store unavailable")}
-	router := newOperationsHandlerTestRouterWithDependencies(server.URL, server.URL, localAccounts)
+	router := newOperationsHandlerTestRouterWithDependencies(server.URL, server.URL, localAccounts, false)
 	created := performJSON(t, router, http.MethodPost, "/suppliers/1/browser-sessions", `{
 		"origin": "`+server.URL+`",
 		"session_bundle": {
@@ -859,15 +1014,44 @@ func TestNotificationHandlerListDeliveries(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"last_error":"webhook failed"`)
 }
 
+func writeOperationsSub2APICapabilityFixture(t *testing.T, w http.ResponseWriter, req *http.Request) {
+	t.Helper()
+	require.Equal(t, http.MethodGet, req.Method)
+	switch req.URL.Path {
+	case "/api/v1/groups/available":
+		_, _ = w.Write([]byte(`{"data":[{"id":10,"name":"GPT-5.5 Low Cost"}]}`))
+	case "/api/v1/channels/available":
+		_, _ = w.Write([]byte(`{"data":[{"name":"OpenAI","supported_models":[]}]}`))
+	case "/api/v1/announcements":
+		_, _ = w.Write([]byte(`{"data":[{"id":1,"title":"公告","content":"通知"}]}`))
+	case "/api/v1/payment/checkout-info":
+		_, _ = w.Write([]byte(`{"data":{"currency":"usd"}}`))
+	case "/api/v1/usage":
+		require.Equal(t, "1", req.URL.Query().Get("page"))
+		require.Equal(t, "1", req.URL.Query().Get("page_size"))
+		_, _ = w.Write([]byte(`{"data":{"items":[]}}`))
+	case "/api/v1/keys":
+		require.Equal(t, "1", req.URL.Query().Get("page"))
+		require.Equal(t, "1", req.URL.Query().Get("page_size"))
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	default:
+		http.NotFound(w, req)
+	}
+}
+
 func newOperationsHandlerTestRouter() *gin.Engine {
 	return newOperationsHandlerTestRouterWithSupplierURLs("https://relay.example.com", "https://relay.example.com")
 }
 
 func newOperationsHandlerTestRouterWithSupplierURLs(dashboardURL string, apiBaseURL string) *gin.Engine {
-	return newOperationsHandlerTestRouterWithDependencies(dashboardURL, apiBaseURL, &operationsLocalAccountCreator{})
+	return newOperationsHandlerTestRouterWithDependencies(dashboardURL, apiBaseURL, &operationsLocalAccountCreator{}, false)
 }
 
-func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBaseURL string, localAccounts *operationsLocalAccountCreator) *gin.Engine {
+func newOperationsHandlerTestRouterWithAutoSessionBalanceSync(dashboardURL string, apiBaseURL string) *gin.Engine {
+	return newOperationsHandlerTestRouterWithDependencies(dashboardURL, apiBaseURL, &operationsLocalAccountCreator{}, true)
+}
+
+func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBaseURL string, localAccounts *operationsLocalAccountCreator, autoSessionBalanceSync bool) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 
 	supplierRepo := suppliersapp.NewMemoryRepository()
@@ -884,7 +1068,6 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 		BrowserLoginUsername: "ops@example.com",
 		BrowserLoginPassword: "secret",
 	})
-	billingHandler := NewBillingHandler(billingapp.NewService(billingapp.NewMemoryRepository()))
 	sessionSvc := sessionsapp.NewServiceWithDependencies(
 		sessionsapp.NewMemoryRepository(),
 		plainSessionCipher{},
@@ -892,6 +1075,12 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 		sub2apiprovider.NewSessionProfileClient(nil),
 	)
 	sessionGroupClient := sub2apiprovider.NewSessionProfileClient(http.DefaultClient)
+	billingService := billingapp.NewServiceWithDependencies(
+		billingapp.NewMemoryRepository(),
+		sessionSvc,
+		sessionGroupClient,
+	)
+	billingHandler := NewBillingHandler(billingService)
 	rateService := ratesapp.NewServiceWithDependencies(
 		newOperationsRateRepository(),
 		nil,
@@ -927,8 +1116,18 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 		sub2apiprovider.NewSessionProfileClient(http.DefaultClient),
 		localAccounts,
 	))
-	processor := extensionapp.NewIngestProcessorWithCipher(nil, nil, nil, nil, nil, sessionSvc, plainSessionCipher{})
-	extensionHandler := NewExtensionHandler(extensionapp.NewServiceWithDependencies(extensionapp.NewMemoryRepository(), processor, supplierSvc))
+	balanceService := balancesapp.NewServiceWithDependencies(
+		balancesapp.NewMemoryRepository(),
+		nil,
+		sessionSvc,
+		sub2apiprovider.NewSessionProfileClient(http.DefaultClient),
+	)
+	var ingestBalanceService *balancesapp.Service
+	if autoSessionBalanceSync {
+		ingestBalanceService = balanceService
+	}
+	processor := extensionapp.NewIngestProcessorWithCipher(nil, ingestBalanceService, nil, nil, nil, sessionSvc, plainSessionCipher{})
+	extensionHandler := NewExtensionHandler(extensionapp.NewServiceWithDependencies(extensionapp.NewMemoryRepository(), processor, supplierSvc), supplierSvc)
 	actionHandler := NewActionHandler(actionsapp.NewRuleService())
 	notificationRepo := notificationsapp.NewMemoryRepository()
 	_, _, _ = notificationRepo.CreateDelivery(context.Background(), &adminplusdomain.NotificationDelivery{
@@ -943,7 +1142,7 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 	})
 	notificationHandler := NewNotificationHandler(notificationRepo)
 	supplierHandler := NewSupplierHandler(supplierSvc)
-	balanceHandler := NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository()))
+	balanceHandler := NewBalanceHandler(balanceService)
 	rateHandler := NewRateHandler(rateService)
 	sessionHandler := NewSessionHandler(sessionSvc, balanceHandler.service)
 
@@ -958,6 +1157,7 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 	router.POST("/suppliers/:id/keys/provision", supplierKeyHandler.Provision)
 	router.POST("/suppliers/:id/keys/:keyID/repair-binding", supplierKeyHandler.RepairBinding)
 	router.POST("/suppliers/:id/rates/sync", rateHandler.SyncSupplierRates)
+	router.POST("/suppliers/:id/billing/sync", billingHandler.SyncSupplierBilling)
 	router.POST("/billing/lines/import", billingHandler.ImportBillLines)
 	router.GET("/billing/lines", billingHandler.ListBillLines)
 	router.POST("/extension/tasks", extensionHandler.CreateTask)

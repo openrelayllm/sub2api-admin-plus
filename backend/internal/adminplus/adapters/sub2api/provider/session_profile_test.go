@@ -6,15 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSessionProfileClientProbeSub2APIUserProfile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/api/v1/user/profile", r.URL.Path)
 		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
 		require.Equal(t, "sid=abc; theme=dark", r.Header.Get("Cookie"))
 		require.Equal(t, "https://relay.example.com", r.Header.Get("Origin"))
@@ -23,18 +23,43 @@ func TestSessionProfileClientProbeSub2APIUserProfile(t *testing.T) {
 		require.Equal(t, "application/json", r.Header.Get("Accept"))
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"id": 42,
-				"email": "ops@example.com",
-				"username": "ops",
-				"role": "user",
-				"status": "enabled",
-				"balance": 12.34,
-				"concurrency": 8,
-				"allowed_groups": [1, 2]
-			}
-		}`))
+		switch r.URL.Path {
+		case "/api/v1/user/profile":
+			require.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"id": 42,
+					"email": "ops@example.com",
+					"username": "ops",
+					"role": "user",
+					"status": "enabled",
+					"balance": 12.34,
+					"concurrency": 8,
+					"allowed_groups": [1, 2]
+				}
+			}`))
+		case "/api/v1/groups/available":
+			require.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"data":[{"id":1,"name":"GPT"}]}`))
+		case "/api/v1/channels/available":
+			require.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"data":[{"name":"OpenAI"}]}`))
+		case "/api/v1/announcements":
+			require.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"data":[{"id":1,"title":"公告","content":"通知"}]}`))
+		case "/api/v1/usage":
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "1", r.URL.Query().Get("page"))
+			require.Equal(t, "1", r.URL.Query().Get("page_size"))
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case "/api/v1/keys":
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "1", r.URL.Query().Get("page"))
+			require.Equal(t, "1", r.URL.Query().Get("page_size"))
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer server.Close()
 
@@ -65,8 +90,10 @@ func TestSessionProfileClientProbeSub2APIUserProfile(t *testing.T) {
 	require.True(t, result.Capabilities["can_read_profile"])
 	require.True(t, result.Capabilities["can_read_balance"])
 	require.True(t, result.Capabilities["can_read_groups"])
-	require.False(t, result.Capabilities["can_create_key"])
-	require.False(t, result.Capabilities["can_read_billing"])
+	require.True(t, result.Capabilities["can_read_rates"])
+	require.True(t, result.Capabilities["can_read_announcements"])
+	require.True(t, result.Capabilities["can_create_key"])
+	require.True(t, result.Capabilities["can_read_billing"])
 	require.Equal(t, int64(42), result.Profile.ID)
 	require.Equal(t, "ops@example.com", result.Profile.Email)
 	require.Equal(t, []int64{1, 2}, result.Profile.AllowedGroups)
@@ -75,7 +102,7 @@ func TestSessionProfileClientProbeSub2APIUserProfile(t *testing.T) {
 func TestSessionProfileClientCreateKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/api/v1/api-keys", r.URL.Path)
+		require.Equal(t, "/api/v1/keys", r.URL.Path)
 		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
 		require.Equal(t, "sid=abc", r.Header.Get("Cookie"))
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
@@ -255,6 +282,162 @@ func TestSessionProfileClientReadRates(t *testing.T) {
 	require.Equal(t, int64(1500000), input.PriceMicros)
 	require.Equal(t, int64(6000000), findRateEntry(t, result.Entries, "output").PriceMicros)
 	require.Equal(t, int64(250000), findRateEntry(t, result.Entries, "cache_read").PriceMicros)
+}
+
+func TestSessionProfileClientReadAnnouncements(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
+		require.Equal(t, "sid=abc", r.Header.Get("Cookie"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/user/profile":
+			_, _ = w.Write([]byte(`{"data":{"id":42,"email":"ops@example.com","balance":12.34}}`))
+		case "/api/v1/payment/checkout-info":
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"currency": "usd",
+					"balance_recharge_multiplier": 1.2,
+					"global_min": 100
+				}
+			}`))
+		case "/api/v1/announcements":
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": "notice-1",
+						"title": "Limited offer",
+						"content": "Weekend limited sale",
+						"type": "limited_offer",
+						"discount_percent": "15%"
+					},
+					{
+						"id": "notice-2",
+						"title": "维护通知",
+						"content": "今晚模型网关维护，部分请求可能中断"
+					}
+				]
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.ReadAnnouncements(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"access_token": "browser-access-token",
+			"required_headers": map[string]any{
+				"cookie": "sid=abc",
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), result.SupplierID)
+	require.Equal(t, "sub2api", result.SystemType)
+	require.Len(t, result.Announcements, 3)
+	require.Equal(t, "充值倍率公告 20.00%", result.Announcements[0].Title)
+	require.Equal(t, int64(10000), result.Announcements[0].MinRechargeCents)
+	require.Equal(t, int64(1234), result.Announcements[0].BalanceCents)
+	require.NotNil(t, result.Announcements[0].BonusPercent)
+	require.InEpsilon(t, 20.0, *result.Announcements[0].BonusPercent, 0.0001)
+	require.Equal(t, "Limited offer", result.Announcements[1].Title)
+	require.Equal(t, adminplusdomain.AnnouncementTypeLimitedOffer, result.Announcements[1].Type)
+	require.Equal(t, "维护通知", result.Announcements[2].Title)
+	require.Equal(t, adminplusdomain.AnnouncementTypeMaintenance, result.Announcements[2].Type)
+	require.Equal(t, "maintenance", result.Announcements[2].RawPayload["classification"])
+}
+
+func TestSessionProfileClientReadBilling(t *testing.T) {
+	startedAt := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	endedAt := startedAt.Add(24 * time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer browser-access-token", r.Header.Get("Authorization"))
+		require.Equal(t, "sid=abc", r.Header.Get("Cookie"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/usage":
+			require.Equal(t, startedAt.Format(time.RFC3339), r.URL.Query().Get("started_at"))
+			require.Equal(t, endedAt.Format(time.RFC3339), r.URL.Query().Get("ended_at"))
+			require.Equal(t, startedAt.Format(time.RFC3339), r.URL.Query().Get("from"))
+			require.Equal(t, endedAt.Format(time.RFC3339), r.URL.Query().Get("to"))
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"items": [
+						{
+							"id": 91,
+							"request_id": "req-1",
+							"api_key_name": "ops-key",
+							"model": "gpt-5-mini",
+							"endpoint": "/v1/responses",
+							"request_type": "responses",
+							"billing_mode": "token",
+							"currency": "usd",
+							"cost": 1.23,
+							"input_tokens": 1000,
+							"output_tokens": 500,
+							"cache_read_tokens": 200,
+							"first_token_ms": 680,
+							"duration_ms": 2200,
+							"user_agent": "OpenAI/Python",
+							"started_at": "2026-06-20T10:00:00Z",
+							"ended_at": "2026-06-20T10:00:02Z",
+							"access_token": "must-not-persist",
+							"headers": {
+								"cookie": "sid=secret",
+								"x-safe": "kept"
+							}
+						}
+					]
+				}
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.ReadBilling(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"access_token": "browser-access-token",
+			"required_headers": map[string]any{
+				"cookie": "sid=abc",
+			},
+		},
+	}, ports.ReadBillingInput{
+		SupplierID: 7,
+		StartedAt:  startedAt,
+		EndedAt:    endedAt,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(7), result.SupplierID)
+	require.Equal(t, "sub2api", result.SystemType)
+	require.Len(t, result.Lines, 1)
+	line := result.Lines[0]
+	require.Equal(t, "91", line.ExternalBillID)
+	require.Equal(t, "req-1", line.ExternalRequestID)
+	require.Equal(t, "ops-key", line.APIKeyName)
+	require.Equal(t, "gpt-5-mini", line.Model)
+	require.Equal(t, int64(123), line.CostCents)
+	require.Equal(t, int64(1000), line.InputTokens)
+	require.Equal(t, int64(500), line.OutputTokens)
+	require.Equal(t, int64(200), line.CacheReadTokens)
+	require.Equal(t, int64(680), line.FirstTokenMS)
+	require.Equal(t, "usd", line.Currency)
+	require.NotContains(t, line.RawPayload, "access_token")
+	headers, ok := line.RawPayload["headers"].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, headers, "cookie")
+	require.Equal(t, "kept", headers["x-safe"])
 }
 
 func findRateEntry(t *testing.T, entries []ports.ProviderRateEntry, priceItem string) ports.ProviderRateEntry {

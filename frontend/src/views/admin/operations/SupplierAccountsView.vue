@@ -63,37 +63,30 @@
           row-key="id"
           default-sort-key="id"
           default-sort-order="desc"
-          :estimate-row-height="76"
+          :estimate-row-height="72"
         >
-          <template #cell-supplier="{ row }">
-            <div class="min-w-[180px]">
-              <div class="font-medium text-gray-900 dark:text-white">{{ supplierLabel(row.supplier_id) }}</div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">父级 #{{ row.supplier_id }}</div>
-            </div>
-          </template>
-
-          <template #cell-local_account="{ row }">
-            <div class="min-w-[220px]">
-              <div class="font-medium text-gray-900 dark:text-white">{{ row.local_account_name }}</div>
-              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
-                <span class="font-mono">#{{ row.local_sub2api_account_id }}</span>
-                <span>{{ row.local_account_platform }} / {{ row.local_account_type }}</span>
+          <template #cell-local_account_name="{ row }">
+            <div class="min-w-[260px]">
+              <div class="flex items-center gap-1.5">
+                <span class="font-medium text-gray-900 dark:text-white">{{ row.local_account_name }}</span>
+                <span class="badge badge-gray">#{{ row.local_sub2api_account_id }}</span>
               </div>
-            </div>
-          </template>
-
-          <template #cell-supplier_account="{ row }">
-            <div class="min-w-[220px]">
-              <div class="text-sm text-gray-900 dark:text-gray-100">{{ row.supplier_account_label || '-' }}</div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ row.supplier_account_identifier || '-' }}</div>
-              <div v-if="row.organization_id || row.project_id" class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                {{ row.organization_id || '-' }} / {{ row.project_id || '-' }}
+              <div class="mt-1 flex items-center gap-2">
+                <code class="code text-xs">{{ supplierKeyDisplay(row) }}</code>
+                <span v-if="row.supplier_key_external_id" class="text-xs text-gray-400 dark:text-dark-500">
+                  Key #{{ row.supplier_key_external_id }}
+                </span>
+              </div>
+              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
+                <span>{{ supplierLabel(row.supplier_id) }}</span>
+                <span>{{ row.local_account_platform }} / {{ row.local_account_type }}</span>
+                <span v-if="row.supplier_account_label">{{ row.supplier_account_label }}</span>
               </div>
             </div>
           </template>
 
           <template #cell-status="{ row }">
-            <div class="flex min-w-[150px] flex-col gap-1.5">
+            <div class="flex min-w-[132px] flex-col gap-1.5">
               <div class="flex flex-wrap gap-1.5">
                 <span class="badge w-fit" :class="runtimeClass(row.runtime_status)">{{ runtimeLabel(row.runtime_status) }}</span>
                 <span class="badge w-fit" :class="healthClass(row.health_status)">{{ healthLabel(row.health_status) }}</span>
@@ -105,15 +98,21 @@
           </template>
 
           <template #cell-usage="{ row }">
-            <div class="min-w-[190px] text-right">
-              <div class="text-base font-semibold text-gray-900 dark:text-gray-100">
-                {{ formatMoney(accountUsage(row).last30d.account_cost_cents, 'USD') }}
+            <div class="min-w-[142px] text-sm">
+              <div class="flex items-center gap-1.5">
+                <span class="text-gray-500 dark:text-gray-400">今日:</span>
+                <span class="font-medium text-gray-900 dark:text-white">
+                  {{ formatMoneyCompact(accountUsage(row).today.account_cost_cents, 'USD') }}
+                </span>
+              </div>
+              <div class="mt-0.5 flex items-center gap-1.5">
+                <span class="text-gray-500 dark:text-gray-400">近30天:</span>
+                <span class="font-medium text-gray-900 dark:text-white">
+                  {{ formatMoneyCompact(accountUsage(row).last30d.account_cost_cents, 'USD') }}
+                </span>
               </div>
               <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                近30天 {{ formatInteger(accountUsage(row).last30d.total_tokens) }} tokens
-              </div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                今日 {{ formatMoney(accountUsage(row).today.account_cost_cents, 'USD') }} / {{ formatInteger(accountUsage(row).today.total_tokens) }}
+                {{ formatInteger(accountUsage(row).last30d.total_tokens) }} tokens
               </div>
             </div>
           </template>
@@ -126,16 +125,13 @@
           </template>
 
           <template #cell-rate_profile="{ row }">
-            <div class="min-w-[240px]">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold" :class="providerPillClass(row)">
-                  {{ groupName(row) }}
-                </span>
-                <span class="inline-flex items-center rounded-md bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700 dark:bg-dark-700 dark:text-dark-200">
-                  {{ formatMultiplier(groupRate(row)) }}
-                </span>
-              </div>
-              <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
+            <div class="min-w-[220px]">
+              <GroupBadge
+                :name="groupName(row)"
+                :platform="groupPlatform(row)"
+                :rate-multiplier="groupRate(row)"
+              />
+              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
                 <span>{{ providerLabel(groupProvider(row)) }}</span>
                 <span v-if="row.supplier_external_group_id" class="font-mono">#{{ row.supplier_external_group_id }}</span>
               </div>
@@ -143,7 +139,30 @@
           </template>
 
           <template #cell-created_at="{ row }">
-            <div class="min-w-[150px] text-xs text-gray-500 dark:text-dark-400">{{ formatDateTime(row.created_at) }}</div>
+            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(row.created_at) }}</span>
+          </template>
+
+          <template #cell-actions="{ row }">
+            <div class="flex min-w-[116px] items-center justify-end gap-1">
+              <button
+                type="button"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-primary-50 hover:text-primary-600 dark:hover:bg-primary-900/20 dark:hover:text-primary-400"
+                title="查看供应商分组"
+                @click="goSupplierGroups(row)"
+              >
+                <Icon name="externalLink" size="sm" />
+                <span class="text-xs">分组</span>
+              </button>
+              <button
+                type="button"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                title="刷新"
+                @click="loadAll"
+              >
+                <Icon name="refresh" size="sm" />
+                <span class="text-xs">刷新</span>
+              </button>
+            </div>
           </template>
 
           <template #empty>
@@ -171,14 +190,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import GroupBadge from '@/components/common/GroupBadge.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
+import type { GroupPlatform } from '@/types'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useAppStore } from '@/stores/app'
 import {
@@ -195,6 +216,7 @@ import {
 
 const appStore = useAppStore()
 const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
 const loadingBindings = ref(false)
@@ -231,14 +253,13 @@ const pagination = reactive({
 })
 
 const columns: Column[] = [
-  { key: 'supplier', label: '供应商父级' },
-  { key: 'rate_profile', label: '分组 / 费率', class: 'font-semibold' },
-  { key: 'usage', label: '用量 / 金额', class: 'text-right' },
+  { key: 'local_account_name', label: '名称', sortable: true },
+  { key: 'rate_profile', label: '分组' },
+  { key: 'usage', label: '用量' },
   { key: 'status', label: '状态' },
-  { key: 'local_account', label: '本地 Sub2API 账号', sortable: true },
-  { key: 'supplier_account', label: '供应商侧账号/Key' },
   { key: 'concurrency', label: '并发', class: 'text-right' },
-  { key: 'created_at', label: '创建时间', sortable: true }
+  { key: 'created_at', label: '创建时间', sortable: true },
+  { key: 'actions', label: '操作', class: 'text-right' }
 ]
 
 const filteredBindings = computed(() => {
@@ -253,6 +274,9 @@ const filteredBindings = computed(() => {
         item.local_account_type,
         item.supplier_account_identifier || '',
         item.supplier_account_label || '',
+        item.supplier_key_name || '',
+        item.supplier_key_external_id || '',
+        item.supplier_key_last4 || '',
         item.supplier_group_name || '',
         item.supplier_group_provider || '',
         item.supplier_external_group_id || '',
@@ -271,21 +295,17 @@ const pagedBindings = computed(() => {
   return filteredBindings.value.slice(start, start + pagination.page_size)
 })
 
-function formatMoney(cents: number, currency: string): string {
+function formatMoneyCompact(cents: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: currency || 'CNY',
-    minimumFractionDigits: 2
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
   }).format((cents || 0) / 100)
 }
 
 function formatInteger(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value || 0)
-}
-
-function formatMultiplier(value?: number | null): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
-  return `${value.toFixed(4)}x`
 }
 
 function formatDateTime(value?: string | null): string {
@@ -363,6 +383,14 @@ function groupProvider(row: SupplierAccount): string {
   return row.supplier_group_provider?.trim() || row.rate_profile?.trim() || 'mixed'
 }
 
+function groupPlatform(row: SupplierAccount): GroupPlatform {
+  const provider = groupProvider(row).toLowerCase()
+  if (provider.includes('anthropic') || provider.includes('claude')) return 'anthropic'
+  if (provider.includes('gemini') || provider.includes('google')) return 'gemini'
+  if (provider.includes('openai') || provider.includes('gpt')) return 'openai'
+  return 'antigravity'
+}
+
 function groupRate(row: SupplierAccount): number {
   if (typeof row.supplier_group_rate === 'number' && row.supplier_group_rate > 0) return row.supplier_group_rate
   return 1
@@ -375,23 +403,6 @@ function providerLabel(value?: string): string {
   if (provider.includes('openai') || provider.includes('gpt')) return 'OpenAI'
   if (provider.includes('image')) return 'Image'
   return provider === 'mixed' ? '混合渠道' : value || '混合渠道'
-}
-
-function providerPillClass(row: SupplierAccount): string {
-  const provider = groupProvider(row).toLowerCase()
-  if (provider.includes('anthropic') || provider.includes('claude')) {
-    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-  }
-  if (provider.includes('gemini') || provider.includes('google')) {
-    return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-  }
-  if (provider.includes('openai') || provider.includes('gpt')) {
-    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-  }
-  if (provider.includes('image')) {
-    return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
-  }
-  return 'bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200'
 }
 
 function switchStateLabel(row: SupplierAccount): string {
@@ -414,6 +425,24 @@ function switchStateClass(row: SupplierAccount): string {
 
 function supplierLabel(id: number): string {
   return suppliers.value.find((supplier) => supplier.id === id)?.name || `#${id}`
+}
+
+function supplierKeyDisplay(row: SupplierAccount): string {
+  if (row.supplier_key_last4) return `sk-...${row.supplier_key_last4}`
+  if (row.supplier_account_identifier) return row.supplier_account_identifier
+  if (row.supplier_key_name) return row.supplier_key_name
+  return '-'
+}
+
+function goSupplierGroups(row: SupplierAccount) {
+  void router.push({
+    path: '/admin/operations/suppliers',
+    query: {
+      supplier_id: row.supplier_id,
+      q: supplierLabel(row.supplier_id),
+      open: 'groups'
+    }
+  })
 }
 
 async function loadSuppliers() {
@@ -514,6 +543,11 @@ function reloadFirstPage() {
   void loadBindings()
 }
 
+function resetBindingPagination() {
+  pagination.page = 1
+  syncBindingPagination()
+}
+
 function handlePageChange(page: number) {
   pagination.page = page
   void loadBindings()
@@ -541,7 +575,7 @@ function resetFilters() {
   filters.q = ''
   filters.runtime_status = ''
   filters.health_status = ''
-  reloadFirstPage()
+  resetBindingPagination()
 }
 
 watch(selectedSupplierID, () => {
@@ -551,7 +585,7 @@ watch(selectedSupplierID, () => {
 watch(
   () => ({ ...filters }),
   () => {
-    reloadFirstPage()
+    resetBindingPagination()
   }
 )
 

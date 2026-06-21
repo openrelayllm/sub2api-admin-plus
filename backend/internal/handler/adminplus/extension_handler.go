@@ -14,6 +14,7 @@ import (
 	"time"
 
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
+	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -21,11 +22,12 @@ import (
 )
 
 type ExtensionHandler struct {
-	service *extensionapp.Service
+	service   *extensionapp.Service
+	suppliers *suppliersapp.Service
 }
 
-func NewExtensionHandler(service *extensionapp.Service) *ExtensionHandler {
-	return &ExtensionHandler{service: service}
+func NewExtensionHandler(service *extensionapp.Service, suppliers *suppliersapp.Service) *ExtensionHandler {
+	return &ExtensionHandler{service: service, suppliers: suppliers}
 }
 
 type createExtensionTaskRequest struct {
@@ -44,9 +46,17 @@ type claimExtensionTaskRequest struct {
 }
 
 type captureSessionTaskRequest struct {
-	SupplierID      int64          `json:"supplier_id" binding:"required"`
+	SupplierID      int64          `json:"supplier_id"`
 	DeviceID        string         `json:"device_id" binding:"required"`
 	LeaseTTLSeconds int64          `json:"lease_ttl_seconds"`
+	URL             string         `json:"url"`
+	Origin          string         `json:"origin"`
+	Host            string         `json:"host"`
+	DashboardURL    string         `json:"dashboard_url"`
+	APIBaseURL      string         `json:"api_base_url"`
+	Name            string         `json:"name"`
+	AutoCreate      *bool          `json:"auto_create_supplier"`
+	PageContext     map[string]any `json:"page_context"`
 	Payload         map[string]any `json:"payload"`
 }
 
@@ -111,17 +121,83 @@ func (h *ExtensionHandler) CreateCaptureSessionTask(c *gin.Context) {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
 	}
+	supplierID, payload, err := h.resolveCaptureSessionSupplier(c, req)
+	if response.ErrorFrom(c, err) {
+		return
+	}
 	task, err := h.service.CreateLeasedTask(c.Request.Context(), extensionapp.CreateLeasedTaskInput{
-		SupplierID: req.SupplierID,
+		SupplierID: supplierID,
 		Type:       adminplusdomain.ExtensionTaskTypeCaptureSession,
 		DeviceID:   req.DeviceID,
 		LeaseTTL:   secondsDuration(req.LeaseTTLSeconds),
-		Payload:    req.Payload,
+		Payload:    payload,
 	})
 	if response.ErrorFrom(c, err) {
 		return
 	}
 	response.Created(c, task)
+}
+
+func (h *ExtensionHandler) resolveCaptureSessionSupplier(c *gin.Context, req captureSessionTaskRequest) (int64, map[string]any, error) {
+	payload := clonePayload(req.Payload)
+	if req.SupplierID > 0 {
+		payload["supplier_id"] = req.SupplierID
+		return req.SupplierID, payload, nil
+	}
+	if h.suppliers == nil {
+		return 0, payload, infraerrors.New(http.StatusBadRequest, "SUPPLIER_ID_REQUIRED", "supplier id is required")
+	}
+	sourceURL := firstNonEmpty(req.URL, req.DashboardURL, stringFromPayload(payload, "source_url"))
+	sourceHost := firstNonEmpty(req.Host, stringFromPayload(payload, "source_host"))
+	origin := firstNonEmpty(req.Origin, req.DashboardURL)
+	if sourceURL == "" && origin == "" && sourceHost == "" {
+		return 0, payload, infraerrors.New(http.StatusBadRequest, "SUPPLIER_SITE_REQUIRED", "site url or supplier id is required")
+	}
+	if sourceURL != "" {
+		payload["source_url"] = sourceURL
+	}
+	if sourceHost != "" {
+		payload["source_host"] = sourceHost
+	}
+	if origin != "" {
+		payload["source_origin"] = origin
+	}
+	match, err := h.suppliers.MatchSite(c.Request.Context(), suppliersapp.SiteMatchInput{
+		URL:    sourceURL,
+		Origin: origin,
+		Host:   sourceHost,
+	})
+	if err == nil && len(match.Suppliers) == 1 {
+		payload["supplier_id"] = match.Suppliers[0].ID
+		payload["supplier_match_status"] = match.Status
+		payload["supplier_auto_created"] = false
+		return match.Suppliers[0].ID, payload, nil
+	}
+	if err == nil && len(match.Suppliers) > 1 {
+		return 0, payload, infraerrors.New(http.StatusConflict, "SUPPLIER_SITE_AMBIGUOUS", "multiple suppliers match current site")
+	}
+	if req.AutoCreate != nil && !*req.AutoCreate {
+		return 0, payload, infraerrors.New(http.StatusNotFound, "SUPPLIER_SITE_NOT_MATCHED", "current site is not configured as a supplier")
+	}
+	title, _ := req.PageContext["title"].(string)
+	ensured, err := h.suppliers.EnsureFromSiteCandidate(c.Request.Context(), suppliersapp.CreateFromSiteCandidateInput{
+		Name:         req.Name,
+		DashboardURL: firstNonEmpty(req.DashboardURL, origin, sourceURL),
+		APIBaseURL:   req.APIBaseURL,
+		SourceHost:   sourceHost,
+		SourceURL:    sourceURL,
+		Title:        title,
+	})
+	if err != nil {
+		return 0, payload, err
+	}
+	if ensured == nil || ensured.Supplier == nil {
+		return 0, payload, infraerrors.New(http.StatusInternalServerError, "SUPPLIER_AUTO_CREATE_FAILED", "failed to resolve supplier")
+	}
+	payload["supplier_id"] = ensured.Supplier.ID
+	payload["supplier_match_status"] = ensured.MatchStatus
+	payload["supplier_auto_created"] = ensured.Created
+	return ensured.Supplier.ID, payload, nil
 }
 
 func (h *ExtensionHandler) Heartbeat(c *gin.Context) {
@@ -263,6 +339,37 @@ func parseExtensionTaskID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func clonePayload(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in)+4)
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func stringFromPayload(in map[string]any, key string) string {
+	if in == nil {
+		return ""
+	}
+	value, ok := in[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func secondsDuration(seconds int64) time.Duration {

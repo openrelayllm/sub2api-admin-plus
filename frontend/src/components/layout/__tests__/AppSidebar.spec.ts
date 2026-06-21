@@ -32,7 +32,7 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(monitorGroupMatch?.[1]).toContain("label: '费率监控'")
     expect(monitorGroupMatch?.[1]).toContain("label: '余额监控'")
     expect(monitorGroupMatch?.[1]).toContain("label: '健康监控'")
-    expect(monitorGroupMatch?.[1]).toContain("label: '优惠监控'")
+    expect(monitorGroupMatch?.[1]).toContain("label: '公告监控'")
     expect(componentSource.match(/path: '\/admin\/ops', label: t\('nav\.ops'\)/g)).toHaveLength(1)
   })
 

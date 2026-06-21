@@ -18,5 +18,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ports.SessionProbeAdapter), new(*SessionProfileClient)),
 	wire.Bind(new(ports.SessionGroupAdapter), new(*SessionProfileClient)),
 	wire.Bind(new(ports.SessionRateAdapter), new(*SessionProfileClient)),
+	wire.Bind(new(ports.SessionAnnouncementAdapter), new(*SessionProfileClient)),
+	wire.Bind(new(ports.SessionBillingAdapter), new(*SessionProfileClient)),
 	wire.Bind(new(ports.SessionKeyAdapter), new(*SessionProfileClient)),
 )

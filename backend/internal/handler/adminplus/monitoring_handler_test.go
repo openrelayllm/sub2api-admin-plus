@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -54,11 +54,11 @@ func TestBalanceHandlerRecordSnapshotCreatesLowBalanceEvent(t *testing.T) {
 	require.Equal(t, "low_balance", body.Data.Event.Type)
 }
 
-func TestPromotionHandlerRecordPromotionRecommendsRecharge(t *testing.T) {
+func TestAnnouncementHandlerRecordAnnouncementRecommendsRecharge(t *testing.T) {
 	router := newMonitoringHandlerTestRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/promotions", bytes.NewBufferString(`{
+	req := httptest.NewRequest(http.MethodPost, "/announcements", bytes.NewBufferString(`{
 		"supplier_id": 7,
 		"type": "recharge_bonus",
 		"title": "Recharge bonus",
@@ -144,7 +144,7 @@ func newMonitoringHandlerTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 
 	balanceHandler := NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository()))
-	promotionHandler := NewPromotionHandler(promotionsapp.NewService(promotionsapp.NewMemoryRepository()))
+	announcementHandler := NewAnnouncementHandler(announcementsapp.NewService(announcementsapp.NewMemoryRepository()))
 	healthHandler := NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository()))
 
 	router := gin.New()
@@ -152,9 +152,9 @@ func newMonitoringHandlerTestRouter() *gin.Engine {
 	router.GET("/balances/snapshots", balanceHandler.ListSnapshots)
 	router.GET("/balances/events", balanceHandler.ListEvents)
 	router.PATCH("/balances/events/:id/ack", balanceHandler.AcknowledgeEvent)
-	router.POST("/promotions", promotionHandler.RecordPromotion)
-	router.GET("/promotions", promotionHandler.ListEvents)
-	router.PATCH("/promotions/:id/ack", promotionHandler.AcknowledgeEvent)
+	router.POST("/announcements", announcementHandler.RecordAnnouncement)
+	router.GET("/announcements", announcementHandler.ListEvents)
+	router.PATCH("/announcements/:id/ack", announcementHandler.AcknowledgeEvent)
 	router.POST("/health/probe", healthHandler.ProbeOpenAIResponses)
 	router.POST("/health/samples", healthHandler.RecordSample)
 	router.GET("/health/samples", healthHandler.ListSamples)

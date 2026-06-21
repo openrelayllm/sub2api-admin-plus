@@ -182,6 +182,9 @@ export interface SupplierAccount {
   supplier_group_name?: string
   supplier_group_provider?: string
   supplier_group_rate?: number
+  supplier_key_name?: string
+  supplier_key_external_id?: string
+  supplier_key_last4?: string
   organization_id?: string
   project_id?: string
   rate_profile?: string
@@ -382,11 +385,11 @@ export interface BalanceEvent {
   acknowledged_at?: string | null
 }
 
-export interface PromotionEvent {
+export interface AnnouncementEvent {
   id: number
   supplier_id: number
   source: string
-  type: 'recharge_bonus' | 'rate_discount' | 'package_deal' | 'limited_offer' | 'other'
+  type: 'recharge_bonus' | 'rate_discount' | 'package_deal' | 'limited_offer' | 'maintenance' | 'incident' | 'notice' | 'other'
   title: string
   description?: string
   currency: string
@@ -473,6 +476,21 @@ export interface SupplierBillLine {
   ended_at?: string | null
   raw_payload?: Record<string, unknown>
   created_at: string
+}
+
+export interface SyncSupplierBillingPayload {
+  started_at: string
+  ended_at: string
+}
+
+export interface SyncSupplierBillingResponse {
+  supplier_id: number
+  system_type: string
+  origin: string
+  api_base_url?: string
+  synced_at: string
+  total: number
+  items: SupplierBillLine[]
 }
 
 export interface LocalUsageLine {
@@ -582,7 +600,7 @@ export interface ReconciliationResult {
 export interface ExtensionTask {
   id: number
   supplier_id: number
-  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_promotions' | 'export_bills' | 'fetch_health' | 'capture_supplier_session'
+  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_announcements' | 'export_bills' | 'fetch_health' | 'capture_supplier_session'
   schedule_key?: string
   status: 'pending' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   priority: number
@@ -620,9 +638,12 @@ export interface ScheduledTask {
   supplier_id: number
   supplier_name: string
   task_type: ExtensionTaskType
+  action: 'direct_sync' | 'extension_task' | 'compat_task'
   task_id?: number
   schedule_key: string
   created: boolean
+  synced?: boolean
+  total?: number
   reason?: string
 }
 
@@ -874,10 +895,10 @@ export async function acknowledgeBalanceEvent(id: number): Promise<BalanceEvent>
   return data
 }
 
-export async function recordPromotion(payload: {
+export async function recordAnnouncement(payload: {
   supplier_id: number
   source?: string
-  type: PromotionEvent['type']
+  type: AnnouncementEvent['type']
   title: string
   description?: string
   currency?: string
@@ -888,17 +909,30 @@ export async function recordPromotion(payload: {
   balance_cents?: number
   raw_payload?: Record<string, unknown>
 }) {
-  const { data } = await apiClient.post<PromotionEvent>('/admin-plus/promotions', payload)
+  const { data } = await apiClient.post<AnnouncementEvent>('/admin-plus/announcements', payload)
   return data
 }
 
-export async function listPromotionEvents(params?: { supplier_id?: number; status?: string; recommendation?: string } & AdminPlusPaginationParams) {
-  const { data } = await apiClient.get<AdminPlusListResponse<PromotionEvent>>('/admin-plus/promotions', { params })
+export async function syncSupplierAnnouncements(supplierId: number) {
+  const { data } = await apiClient.post<{
+    supplier_id: number
+    system_type: string
+    origin: string
+    api_base_url: string
+    synced_at: string
+    total: number
+    events: AnnouncementEvent[]
+  }>(`/admin-plus/suppliers/${supplierId}/announcements/sync`)
   return data
 }
 
-export async function acknowledgePromotionEvent(id: number): Promise<PromotionEvent> {
-  const { data } = await apiClient.patch<PromotionEvent>(`/admin-plus/promotions/${id}/ack`)
+export async function listAnnouncementEvents(params?: { supplier_id?: number; status?: string; recommendation?: string } & AdminPlusPaginationParams) {
+  const { data } = await apiClient.get<AdminPlusListResponse<AnnouncementEvent>>('/admin-plus/announcements', { params })
+  return data
+}
+
+export async function acknowledgeAnnouncementEvent(id: number): Promise<AnnouncementEvent> {
+  const { data } = await apiClient.patch<AnnouncementEvent>(`/admin-plus/announcements/${id}/ack`)
   return data
 }
 
@@ -944,6 +978,11 @@ export async function acknowledgeHealthEvent(id: number): Promise<HealthEvent> {
 
 export async function importBillLines(lines: Array<Omit<SupplierBillLine, 'id' | 'created_at' | 'source'> & { source?: string }>) {
   const { data } = await apiClient.post<AdminPlusListResponse<SupplierBillLine>>('/admin-plus/billing/lines/import', { lines })
+  return data
+}
+
+export async function syncSupplierBilling(supplierId: number, payload: SyncSupplierBillingPayload): Promise<SyncSupplierBillingResponse> {
+  const { data } = await apiClient.post<SyncSupplierBillingResponse>(`/admin-plus/suppliers/${supplierId}/billing/sync`, payload)
   return data
 }
 
@@ -1059,7 +1098,7 @@ export async function failExtensionTask(task: ExtensionTask, error_code: string,
 export async function generateActions(payload: {
   suppliers: SupplierSignal[]
   balance_events?: BalanceEvent[]
-  promotion_events?: PromotionEvent[]
+  announcement_events?: AnnouncementEvent[]
   health_events?: HealthEvent[]
   reconciliation?: ReconciliationSummary
   min_profit_margin?: number
@@ -1113,15 +1152,17 @@ export const adminPlusAPI = {
   listBalanceSnapshots,
   listBalanceEvents,
   acknowledgeBalanceEvent,
-  recordPromotion,
-  listPromotionEvents,
-  acknowledgePromotionEvent,
+  recordAnnouncement,
+  syncSupplierAnnouncements,
+  listAnnouncementEvents,
+  acknowledgeAnnouncementEvent,
   recordHealthSample,
   probeOpenAIResponsesHealth,
   listHealthSamples,
   listHealthEvents,
   acknowledgeHealthEvent,
   importBillLines,
+  syncSupplierBilling,
   listBillLines,
   runReconciliation,
   createExtensionTask,

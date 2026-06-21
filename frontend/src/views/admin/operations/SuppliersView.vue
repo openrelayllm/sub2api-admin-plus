@@ -569,7 +569,11 @@
           <template #cell-name="{ row }">
             <div class="min-w-[220px]">
               <div class="flex items-center gap-2">
-                <span class="font-medium text-gray-900 dark:text-white">{{ row.name }}</span>
+                <GroupBadge
+                  :name="row.name"
+                  :platform="groupPlatform(row.provider_family)"
+                  :rate-multiplier="row.effective_rate_multiplier"
+                />
                 <span v-if="row.is_private" class="badge badge-warning">专属</span>
                 <span v-if="row.allow_image_generation" class="badge badge-primary">图片</span>
               </div>
@@ -887,15 +891,18 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import GroupBadge from '@/components/common/GroupBadge.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
+import type { GroupPlatform } from '@/types'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { useAppStore } from '@/stores/app'
@@ -928,6 +935,8 @@ import {
 } from '@/api/admin/adminPlus'
 
 const appStore = useAppStore()
+const route = useRoute()
+const handledDeepLinkKey = ref('')
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -967,7 +976,7 @@ const repairError = ref('')
 const lastProbe = ref<SupplierSessionProbeResult | null>(null)
 
 const filters = reactive({
-  q: '',
+  q: typeof route.query.q === 'string' ? route.query.q : '',
   kind: '' as '' | SupplierKind,
   type: '' as '' | SupplierType,
   runtime_status: '' as '' | SupplierRuntimeStatus,
@@ -1196,6 +1205,14 @@ function typeLabel(value: SupplierType): string {
   }[value]
 }
 
+function groupPlatform(value?: string): GroupPlatform {
+  const provider = (value || '').toLowerCase()
+  if (provider.includes('anthropic') || provider.includes('claude')) return 'anthropic'
+  if (provider.includes('gemini') || provider.includes('google')) return 'gemini'
+  if (provider.includes('openai') || provider.includes('gpt')) return 'openai'
+  return 'antigravity'
+}
+
 function runtimeLabel(value: SupplierRuntimeStatus): string {
   return {
     monitor_only: '仅监控',
@@ -1361,11 +1378,24 @@ async function loadSuppliers() {
     pagination.page = result.page || pagination.page
     pagination.page_size = result.page_size || pagination.page_size
     void preloadVisibleSessions()
+    openDeepLinkedDialog()
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '加载供应商失败')
   } finally {
     loading.value = false
   }
+}
+
+function openDeepLinkedDialog() {
+  if (route.query.open !== 'groups') return
+  const supplierID = Number(route.query.supplier_id || 0)
+  if (!supplierID) return
+  const deepLinkKey = `${route.query.open}:${supplierID}`
+  if (handledDeepLinkKey.value === deepLinkKey) return
+  const supplier = suppliers.value.find((item) => item.id === supplierID)
+  if (!supplier) return
+  handledDeepLinkKey.value = deepLinkKey
+  openGroupsDialog(supplier)
 }
 
 async function preloadVisibleSessions() {

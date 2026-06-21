@@ -5,18 +5,18 @@ import "time"
 type ExtensionTaskType string
 
 const (
-	ExtensionTaskTypeFetchRates      ExtensionTaskType = "fetch_rates"
-	ExtensionTaskTypeFetchGroups     ExtensionTaskType = "fetch_groups"
-	ExtensionTaskTypeFetchBalance    ExtensionTaskType = "fetch_balance"
-	ExtensionTaskTypeFetchPromotions ExtensionTaskType = "fetch_promotions"
-	ExtensionTaskTypeExportBills     ExtensionTaskType = "export_bills"
-	ExtensionTaskTypeFetchHealth     ExtensionTaskType = "fetch_health"
-	ExtensionTaskTypeCaptureSession  ExtensionTaskType = "capture_supplier_session"
+	ExtensionTaskTypeFetchRates         ExtensionTaskType = "fetch_rates"
+	ExtensionTaskTypeFetchGroups        ExtensionTaskType = "fetch_groups"
+	ExtensionTaskTypeFetchBalance       ExtensionTaskType = "fetch_balance"
+	ExtensionTaskTypeFetchAnnouncements ExtensionTaskType = "fetch_announcements"
+	ExtensionTaskTypeExportBills        ExtensionTaskType = "export_bills"
+	ExtensionTaskTypeFetchHealth        ExtensionTaskType = "fetch_health"
+	ExtensionTaskTypeCaptureSession     ExtensionTaskType = "capture_supplier_session"
 )
 
 func (t ExtensionTaskType) Valid() bool {
 	switch t {
-	case ExtensionTaskTypeFetchRates, ExtensionTaskTypeFetchGroups, ExtensionTaskTypeFetchBalance, ExtensionTaskTypeFetchPromotions, ExtensionTaskTypeExportBills, ExtensionTaskTypeFetchHealth, ExtensionTaskTypeCaptureSession:
+	case ExtensionTaskTypeFetchRates, ExtensionTaskTypeFetchGroups, ExtensionTaskTypeFetchBalance, ExtensionTaskTypeFetchAnnouncements, ExtensionTaskTypeExportBills, ExtensionTaskTypeFetchHealth, ExtensionTaskTypeCaptureSession:
 		return true
 	default:
 		return false

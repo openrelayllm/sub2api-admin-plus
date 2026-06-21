@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
@@ -21,7 +21,7 @@ func TestCompleteTaskIngestsRateResult(t *testing.T) {
 	processor := NewIngestProcessor(
 		ratesapp.NewService(rateRepo),
 		balancesapp.NewService(balancesapp.NewMemoryRepository()),
-		promotionsapp.NewService(promotionsapp.NewMemoryRepository()),
+		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		billingapp.NewService(billingapp.NewMemoryRepository()),
 		sessionsapp.NewService(sessionsapp.NewMemoryRepository(), stubSessionCipher{}),
@@ -80,7 +80,7 @@ func TestCompleteTaskIngestsBillExportResult(t *testing.T) {
 	processor := NewIngestProcessor(
 		ratesapp.NewService(newIngestRateRepository()),
 		balancesapp.NewService(balancesapp.NewMemoryRepository()),
-		promotionsapp.NewService(promotionsapp.NewMemoryRepository()),
+		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		billingapp.NewService(billRepo),
 		sessionsapp.NewService(sessionsapp.NewMemoryRepository(), stubSessionCipher{}),
@@ -142,7 +142,7 @@ func TestCompleteTaskEncryptsCapturedSessionBundle(t *testing.T) {
 	processor := NewIngestProcessorWithCipher(
 		ratesapp.NewService(newIngestRateRepository()),
 		balancesapp.NewService(balancesapp.NewMemoryRepository()),
-		promotionsapp.NewService(promotionsapp.NewMemoryRepository()),
+		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		billingapp.NewService(billingapp.NewMemoryRepository()),
 		sessionsapp.NewService(sessionRepo, stubSessionCipher{}),

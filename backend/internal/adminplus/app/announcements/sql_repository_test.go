@@ -1,4 +1,4 @@
-package promotions
+package announcements
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newPromotionSQLMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
+func newAnnouncementSQLMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
@@ -22,14 +22,14 @@ func newPromotionSQLMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	return db, mock
 }
 
-func TestSQLRepositoryCreatePromotionEvent(t *testing.T) {
-	db, mock := newPromotionSQLMock(t)
+func TestSQLRepositoryCreateAnnouncementEvent(t *testing.T) {
+	db, mock := newAnnouncementSQLMock(t)
 	repo := NewSQLRepository(db)
 	capturedAt := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	createdAt := capturedAt.Add(time.Second)
 	bonus := 20.0
 
-	mock.ExpectQuery(`INSERT INTO admin_plus_promotion_events`).
+	mock.ExpectQuery(`INSERT INTO admin_plus_announcement_events`).
 		WithArgs(
 			int64(7),
 			"chrome",
@@ -50,7 +50,7 @@ func TestSQLRepositoryCreatePromotionEvent(t *testing.T) {
 			capturedAt,
 			sqlmock.AnyArg(),
 		).
-		WillReturnRows(newPromotionRows().AddRow(
+		WillReturnRows(newAnnouncementRows().AddRow(
 			int64(21),
 			int64(7),
 			"chrome",
@@ -74,10 +74,10 @@ func TestSQLRepositoryCreatePromotionEvent(t *testing.T) {
 			[]byte(`{"page":"promo"}`),
 		))
 
-	got, err := repo.CreateEvent(context.Background(), &adminplusdomain.PromotionEvent{
+	got, err := repo.CreateEvent(context.Background(), &adminplusdomain.AnnouncementEvent{
 		SupplierID:       7,
 		Source:           "chrome",
-		Type:             adminplusdomain.PromotionTypeRechargeBonus,
+		Type:             adminplusdomain.AnnouncementTypeRechargeBonus,
 		Title:            "Recharge bonus",
 		Description:      "20 percent bonus",
 		Currency:         "USD",
@@ -86,8 +86,8 @@ func TestSQLRepositoryCreatePromotionEvent(t *testing.T) {
 		RuntimeStatus:    adminplusdomain.SupplierRuntimeStatusMonitorOnly,
 		BalanceCents:     0,
 		SwitchEligible:   false,
-		Recommendation:   adminplusdomain.PromotionRecommendationRechargeToUnlock,
-		Status:           adminplusdomain.PromotionStatusOpen,
+		Recommendation:   adminplusdomain.AnnouncementRecommendationRechargeToUnlock,
+		Status:           adminplusdomain.AnnouncementStatusOpen,
 		CapturedAt:       capturedAt,
 		RawPayload:       map[string]any{"page": "promo"},
 	})
@@ -98,14 +98,14 @@ func TestSQLRepositoryCreatePromotionEvent(t *testing.T) {
 	require.Equal(t, "promo", got.RawPayload["page"])
 }
 
-func TestSQLRepositoryListPromotionEventsFiltersWithParameterizedQuery(t *testing.T) {
-	db, mock := newPromotionSQLMock(t)
+func TestSQLRepositoryListAnnouncementEventsFiltersWithParameterizedQuery(t *testing.T) {
+	db, mock := newAnnouncementSQLMock(t)
 	repo := NewSQLRepository(db)
 	capturedAt := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery(`FROM admin_plus_promotion_events\s+WHERE 1=1 AND supplier_id = \$1 AND status = \$2 AND recommendation = \$3\s+ORDER BY created_at DESC, id DESC\s+LIMIT \$4`).
+	mock.ExpectQuery(`FROM admin_plus_announcement_events\s+WHERE 1=1 AND supplier_id = \$1 AND status = \$2 AND recommendation = \$3\s+ORDER BY created_at DESC, id DESC\s+LIMIT \$4`).
 		WithArgs(int64(7), "open", "recharge_to_unlock", 50).
-		WillReturnRows(newPromotionRows().AddRow(
+		WillReturnRows(newAnnouncementRows().AddRow(
 			int64(21),
 			int64(7),
 			"chrome",
@@ -131,31 +131,31 @@ func TestSQLRepositoryListPromotionEventsFiltersWithParameterizedQuery(t *testin
 
 	items, err := repo.ListEvents(context.Background(), EventFilter{
 		SupplierID:     7,
-		Status:         adminplusdomain.PromotionStatusOpen,
-		Recommendation: adminplusdomain.PromotionRecommendationRechargeToUnlock,
+		Status:         adminplusdomain.AnnouncementStatusOpen,
+		Recommendation: adminplusdomain.AnnouncementRecommendationRechargeToUnlock,
 		Limit:          50,
 	})
 
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	require.Equal(t, adminplusdomain.PromotionRecommendationRechargeToUnlock, items[0].Recommendation)
+	require.Equal(t, adminplusdomain.AnnouncementRecommendationRechargeToUnlock, items[0].Recommendation)
 }
 
-func TestSQLRepositoryUpdatePromotionEventStatusNotFound(t *testing.T) {
-	db, mock := newPromotionSQLMock(t)
+func TestSQLRepositoryUpdateAnnouncementEventStatusNotFound(t *testing.T) {
+	db, mock := newAnnouncementSQLMock(t)
 	repo := NewSQLRepository(db)
 
-	mock.ExpectQuery(`UPDATE admin_plus_promotion_events`).
+	mock.ExpectQuery(`UPDATE admin_plus_announcement_events`).
 		WithArgs(int64(404), "acknowledged").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err := repo.UpdateEventStatus(context.Background(), 404, adminplusdomain.PromotionStatusAcknowledged)
+	_, err := repo.UpdateEventStatus(context.Background(), 404, adminplusdomain.AnnouncementStatusAcknowledged)
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "PROMOTION_EVENT_NOT_FOUND")
+	require.Contains(t, err.Error(), "ANNOUNCEMENT_EVENT_NOT_FOUND")
 }
 
-func newPromotionRows() *sqlmock.Rows {
+func newAnnouncementRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id",
 		"supplier_id",

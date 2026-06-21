@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_admin_plus_balance_events_supplier_status
 CREATE INDEX IF NOT EXISTS idx_admin_plus_balance_events_snapshot
     ON admin_plus_balance_events(snapshot_id);
 
-CREATE TABLE IF NOT EXISTS admin_plus_promotion_events (
+CREATE TABLE IF NOT EXISTS admin_plus_announcement_events (
     id BIGSERIAL PRIMARY KEY,
     supplier_id BIGINT NOT NULL REFERENCES admin_plus_suppliers(id) ON DELETE CASCADE,
     source TEXT NOT NULL DEFAULT 'manual',
@@ -70,21 +70,21 @@ CREATE TABLE IF NOT EXISTS admin_plus_promotion_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     acknowledged_at TIMESTAMPTZ NULL,
     raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    CONSTRAINT admin_plus_promotion_events_type_check CHECK (type IN ('recharge_bonus', 'rate_discount', 'package_deal', 'limited_offer', 'other')),
-    CONSTRAINT admin_plus_promotion_events_status_check CHECK (status IN ('open', 'acknowledged', 'ignored')),
-    CONSTRAINT admin_plus_promotion_events_recommendation_check CHECK (recommendation IN ('recharge_to_unlock', 'switch_candidate', 'monitor_only', 'informational')),
-    CONSTRAINT admin_plus_promotion_events_amount_check CHECK (min_recharge_cents >= 0 AND balance_cents >= 0),
-    CONSTRAINT admin_plus_promotion_events_percent_check CHECK (
+    CONSTRAINT admin_plus_announcement_events_type_check CHECK (type IN ('recharge_bonus', 'rate_discount', 'package_deal', 'limited_offer', 'maintenance', 'incident', 'notice', 'other')),
+    CONSTRAINT admin_plus_announcement_events_status_check CHECK (status IN ('open', 'acknowledged', 'ignored')),
+    CONSTRAINT admin_plus_announcement_events_recommendation_check CHECK (recommendation IN ('recharge_to_unlock', 'switch_candidate', 'monitor_only', 'informational')),
+    CONSTRAINT admin_plus_announcement_events_amount_check CHECK (min_recharge_cents >= 0 AND balance_cents >= 0),
+    CONSTRAINT admin_plus_announcement_events_percent_check CHECK (
         (bonus_percent IS NULL OR (bonus_percent >= 0 AND bonus_percent <= 100))
         AND (discount_percent IS NULL OR (discount_percent >= 0 AND discount_percent <= 100))
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_admin_plus_promotion_events_supplier_status
-    ON admin_plus_promotion_events(supplier_id, status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_plus_announcement_events_supplier_status
+    ON admin_plus_announcement_events(supplier_id, status, created_at DESC, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_admin_plus_promotion_events_recommendation
-    ON admin_plus_promotion_events(recommendation, status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_plus_announcement_events_recommendation
+    ON admin_plus_announcement_events(recommendation, status, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS admin_plus_health_samples (
     id BIGSERIAL PRIMARY KEY,
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS admin_plus_extension_tasks (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ NULL,
-    CONSTRAINT admin_plus_extension_tasks_type_check CHECK (type IN ('fetch_rates', 'fetch_groups', 'fetch_balance', 'fetch_promotions', 'export_bills', 'fetch_health', 'capture_supplier_session')),
+    CONSTRAINT admin_plus_extension_tasks_type_check CHECK (type IN ('fetch_rates', 'fetch_groups', 'fetch_balance', 'fetch_announcements', 'export_bills', 'fetch_health', 'capture_supplier_session')),
     CONSTRAINT admin_plus_extension_tasks_status_check CHECK (status IN ('pending', 'claimed', 'running', 'succeeded', 'failed', 'cancelled')),
     CONSTRAINT admin_plus_extension_tasks_attempts_check CHECK (attempts >= 0 AND max_attempts > 0)
 );

@@ -39,7 +39,7 @@ func TestServiceGenerateSwitchesFromDepletedActiveSupplierToEligibleCandidate(t 
 	require.Equal(t, int64(2), *switchAction.TargetSupplierID)
 }
 
-func TestServiceGenerateDoesNotSwitchToMonitorOnlyPromotionSupplier(t *testing.T) {
+func TestServiceGenerateDoesNotSwitchToMonitorOnlyAnnouncementSupplier(t *testing.T) {
 	svc := NewRuleService()
 
 	result, err := svc.Generate(context.Background(), GenerateInput{
@@ -51,17 +51,17 @@ func TestServiceGenerateDoesNotSwitchToMonitorOnlyPromotionSupplier(t *testing.T
 				BalanceCents:  0,
 			},
 		},
-		PromotionEvents: []*adminplusdomain.PromotionEvent{
+		AnnouncementEvents: []*adminplusdomain.AnnouncementEvent{
 			{
 				SupplierID:     7,
-				Recommendation: adminplusdomain.PromotionRecommendationRechargeToUnlock,
-				Status:         adminplusdomain.PromotionStatusOpen,
+				Recommendation: adminplusdomain.AnnouncementRecommendationRechargeToUnlock,
+				Status:         adminplusdomain.AnnouncementStatusOpen,
 			},
 		},
 	})
 
 	require.NoError(t, err)
-	requireAction(t, result.Items, adminplusdomain.ActionTypeRechargeSupplier, "promotion_recharge_to_unlock")
+	requireAction(t, result.Items, adminplusdomain.ActionTypeRechargeSupplier, "announcement_recharge_to_unlock")
 	requireNoAction(t, result.Items, adminplusdomain.ActionTypeSwitchSupplier)
 }
 

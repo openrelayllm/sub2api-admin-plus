@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -21,6 +24,16 @@ const defaultUserAgent = "sub2api-admin-plus-provider-adapter/0.1"
 type rateEndpointCandidate struct {
 	path   string
 	parser func([]byte) []ports.ProviderRateEntry
+}
+
+type billingEndpointCandidate struct {
+	path string
+}
+
+type capabilityEndpoint struct {
+	key   string
+	path  string
+	query map[string]string
 }
 
 type SessionProfileClient struct {
@@ -73,19 +86,16 @@ func (c *SessionProfileClient) ProbeSub2APIUserProfile(ctx context.Context, in p
 	if balanceCents < 0 {
 		balanceCents = 0
 	}
+	capabilities := c.probeSub2APICapabilities(ctx, apiBaseURL, in.Bundle)
+	capabilities["can_read_profile"] = true
+	capabilities["can_read_balance"] = true
 	return &ports.SessionProbeResult{
-		SupplierID: in.SupplierID,
-		Status:     "valid",
-		SystemType: "sub2api",
-		Origin:     in.Origin,
-		APIBaseURL: apiBaseURL,
-		Capabilities: map[string]bool{
-			"can_read_profile": true,
-			"can_read_balance": true,
-			"can_read_groups":  len(profile.AllowedGroups) > 0,
-			"can_create_key":   false,
-			"can_read_billing": false,
-		},
+		SupplierID:      in.SupplierID,
+		Status:          "valid",
+		SystemType:      "sub2api",
+		Origin:          in.Origin,
+		APIBaseURL:      apiBaseURL,
+		Capabilities:    capabilities,
 		Profile:         profile,
 		BalanceCents:    &balanceCents,
 		BalanceCurrency: "USD",
@@ -115,6 +125,38 @@ func buildSub2APIUserEndpointURL(apiBaseURL string, endpointPath string) (string
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func (c *SessionProfileClient) probeSub2APICapabilities(ctx context.Context, apiBaseURL string, bundle map[string]any) map[string]bool {
+	capabilities := map[string]bool{
+		"can_read_profile":       false,
+		"can_read_balance":       false,
+		"can_read_groups":        false,
+		"can_read_rates":         false,
+		"can_read_announcements": false,
+		"can_read_billing":       false,
+		"can_create_key":         false,
+	}
+	for _, endpoint := range []capabilityEndpoint{
+		{key: "can_read_groups", path: "/groups/available"},
+		{key: "can_read_rates", path: "/channels/available"},
+		{key: "can_read_announcements", path: "/announcements", query: map[string]string{"unread_only": "false"}},
+		{key: "can_read_announcements", path: "/payment/checkout-info"},
+		{key: "can_read_billing", path: "/usage", query: map[string]string{"page": "1", "page_size": "1"}},
+		{key: "can_create_key", path: "/keys", query: map[string]string{"page": "1", "page_size": "1"}},
+	} {
+		if capabilities[endpoint.key] {
+			continue
+		}
+		url, err := buildSub2APIUserEndpointURL(apiBaseURL, endpoint.path)
+		if err != nil {
+			continue
+		}
+		url = appendQueryValues(url, endpoint.query)
+		_, err = c.doSessionJSON(ctx, http.MethodGet, url, bundle, false)
+		capabilities[endpoint.key] = err == nil
+	}
+	return capabilities
 }
 
 func (c *SessionProfileClient) ReadGroups(ctx context.Context, in ports.SessionProbeInput) (*ports.ReadGroupsResult, error) {
@@ -156,7 +198,7 @@ func (c *SessionProfileClient) CreateKey(ctx context.Context, in ports.SessionPr
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "provider adapter is not configured")
 	}
 	apiBaseURL := firstNonEmpty(in.APIBaseURL, stringValueAt(in.Bundle, "context", "api_base_url"), stringValue(in.Bundle, "api_base_url"), in.Origin)
-	endpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, "/api-keys")
+	endpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, "/keys")
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +274,111 @@ func (c *SessionProfileClient) ReadRates(ctx context.Context, in ports.SessionPr
 		return nil, lastErr
 	}
 	return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_RATE_CAPABILITY_MISSING", "supplier session cannot read model rates")
+}
+
+func (c *SessionProfileClient) ReadAnnouncements(ctx context.Context, in ports.SessionProbeInput) (*ports.ReadAnnouncementsResult, error) {
+	if c == nil || c.httpClient == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "provider adapter is not configured")
+	}
+	apiBaseURL := firstNonEmpty(in.APIBaseURL, stringValueAt(in.Bundle, "context", "api_base_url"), stringValue(in.Bundle, "api_base_url"), in.Origin)
+	profileEndpoint, err := buildSub2APIUserProfileURL(apiBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	profileBody, err := c.doSessionJSON(ctx, http.MethodGet, profileEndpoint, in.Bundle, true)
+	if err != nil {
+		return nil, err
+	}
+	profile, _, err := parseSub2APIProfile(profileBody)
+	if err != nil {
+		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_SESSION_PROFILE_INVALID", "supplier profile response is invalid").WithCause(err)
+	}
+	balanceCents := int64(math.Round(profile.Balance * 100))
+	if balanceCents < 0 {
+		balanceCents = 0
+	}
+	runtimeStatus := adminplusdomain.SupplierRuntimeStatusMonitorOnly
+	if balanceCents > 0 {
+		runtimeStatus = adminplusdomain.SupplierRuntimeStatusCandidate
+	}
+
+	var announcements []ports.ProviderAnnouncement
+	var lastErr error
+	if checkoutEndpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, "/payment/checkout-info"); err == nil {
+		if checkoutBody, checkoutErr := c.doSessionJSON(ctx, http.MethodGet, checkoutEndpoint, in.Bundle, false); checkoutErr == nil {
+			announcements = append(announcements, parseCheckoutAnnouncements(checkoutBody, balanceCents, runtimeStatus)...)
+		} else {
+			lastErr = checkoutErr
+		}
+	}
+	if announcementsEndpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, "/announcements"); err == nil {
+		if announcementsBody, announcementsErr := c.doSessionJSON(ctx, http.MethodGet, announcementsEndpoint, in.Bundle, false); announcementsErr == nil {
+			announcements = append(announcements, parseProviderAnnouncements(announcementsBody, balanceCents, runtimeStatus)...)
+		} else {
+			lastErr = announcementsErr
+		}
+	}
+	announcements = dedupeAnnouncements(announcements)
+	if len(announcements) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return &ports.ReadAnnouncementsResult{
+		SupplierID:    in.SupplierID,
+		SystemType:    "sub2api",
+		Origin:        in.Origin,
+		APIBaseURL:    apiBaseURL,
+		Announcements: announcements,
+		CapturedAt:    c.now().UTC(),
+	}, nil
+}
+
+func (c *SessionProfileClient) ReadBilling(ctx context.Context, in ports.SessionProbeInput, request ports.ReadBillingInput) (*ports.ReadBillingResult, error) {
+	if c == nil || c.httpClient == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "provider adapter is not configured")
+	}
+	if request.SupplierID <= 0 {
+		return nil, infraerrors.New(http.StatusBadRequest, "SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if request.StartedAt.IsZero() || request.EndedAt.IsZero() || !request.StartedAt.Before(request.EndedAt) {
+		return nil, infraerrors.New(http.StatusBadRequest, "SUPPLIER_BILLING_TIME_RANGE_INVALID", "invalid supplier billing time range")
+	}
+	apiBaseURL := firstNonEmpty(in.APIBaseURL, stringValueAt(in.Bundle, "context", "api_base_url"), stringValue(in.Bundle, "api_base_url"), in.Origin)
+	candidates := []billingEndpointCandidate{
+		{path: "/usage"},
+		{path: "/billing/lines"},
+		{path: "/billing/usage"},
+		{path: "/usage/lines"},
+		{path: "/user/billing"},
+	}
+	var lastErr error
+	for _, candidate := range candidates {
+		endpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, candidate.path)
+		if err != nil {
+			return nil, err
+		}
+		endpoint = appendBillingQuery(endpoint, request)
+		body, err := c.doSessionJSON(ctx, http.MethodGet, endpoint, in.Bundle, false)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		lines := parseSub2APIBillingLines(body)
+		if len(lines) == 0 {
+			continue
+		}
+		return &ports.ReadBillingResult{
+			SupplierID: in.SupplierID,
+			SystemType: "sub2api",
+			Origin:     in.Origin,
+			APIBaseURL: apiBaseURL,
+			Lines:      lines,
+			CapturedAt: c.now().UTC(),
+		}, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_BILLING_CAPABILITY_MISSING", "supplier session cannot read billing lines")
 }
 
 func (c *SessionProfileClient) doSessionJSON(ctx context.Context, method string, endpoint string, bundle map[string]any, strict bool) ([]byte, error) {
@@ -417,6 +564,18 @@ func unwrapDataArray(data []byte) ([]any, error) {
 		if arr, ok := obj["data"].([]any); ok {
 			return arr, nil
 		}
+		for _, key := range []string{"items", "list", "records", "rows", "lines"} {
+			if arr, ok := obj[key].([]any); ok {
+				return arr, nil
+			}
+		}
+		if dataValue, ok := obj["data"].(map[string]any); ok {
+			for _, key := range []string{"items", "list", "records", "rows", "lines"} {
+				if arr, ok := dataValue[key].([]any); ok {
+					return arr, nil
+				}
+			}
+		}
 	}
 	return []any{}, nil
 }
@@ -486,6 +645,315 @@ func parseSub2APIKeyCreateResponse(data []byte) (*ports.ProviderKeyResult, error
 		result.ExternalGroupID = ""
 	}
 	return result, nil
+}
+
+func parseCheckoutAnnouncements(data []byte, balanceCents int64, runtimeStatus adminplusdomain.SupplierRuntimeStatus) []ports.ProviderAnnouncement {
+	body, ok := unwrapDataObject(data)
+	if !ok {
+		return nil
+	}
+	currency := firstNonEmpty(stringFromAny(body["currency"]), "USD")
+	announcements := make([]ports.ProviderAnnouncement, 0)
+	if multiplier := float64FromAny(firstExisting(body, "balance_recharge_multiplier", "balanceRechargeMultiplier")); multiplier > 1 {
+		bonus := (multiplier - 1) * 100
+		minRechargeCents := firstCostCentsValue(body, "global_min", "min_amount", "minAmount", "payment_min_amount")
+		announcements = append(announcements, ports.ProviderAnnouncement{
+			Type:             adminplusdomain.AnnouncementTypeRechargeBonus,
+			Title:            fmt.Sprintf("充值倍率公告 %.2f%%", bonus),
+			Description:      "供应商充值页显示余额充值倍率大于 1。",
+			Currency:         currency,
+			MinRechargeCents: minRechargeCents,
+			BonusPercent:     &bonus,
+			RuntimeStatus:    runtimeStatus,
+			BalanceCents:     balanceCents,
+			RawPayload: map[string]any{
+				"source":                      "provider_announcement",
+				"source_detail":               "payment_checkout_info",
+				"classification":              "recharge_bonus",
+				"matched_keywords":            []string{"recharge_multiplier"},
+				"balance_recharge_multiplier": multiplier,
+				"recharge_fee_rate":           float64FromAny(body["recharge_fee_rate"]),
+				"global_min":                  body["global_min"],
+				"global_max":                  body["global_max"],
+			},
+		})
+	}
+	if text := strings.TrimSpace(stringFromAny(body["help_text"])); announcementTextLooksUseful(text) {
+		classification := classifyAnnouncementText(text)
+		announcements = append(announcements, ports.ProviderAnnouncement{
+			Type:          classification.Type,
+			Title:         titleFromText("充值页公告", text),
+			Description:   text,
+			Currency:      currency,
+			RuntimeStatus: runtimeStatus,
+			BalanceCents:  balanceCents,
+			RawPayload: map[string]any{
+				"source":           "provider_announcement",
+				"source_detail":    "payment_checkout_help",
+				"classification":   classification.Name,
+				"matched_keywords": classification.MatchedKeywords,
+			},
+		})
+	}
+	for _, plan := range checkoutPlans(body) {
+		announcement, ok := announcementFromCheckoutPlan(plan, currency, balanceCents, runtimeStatus)
+		if ok {
+			announcements = append(announcements, announcement)
+		}
+	}
+	return announcements
+}
+
+func announcementFromCheckoutPlan(plan map[string]any, currency string, balanceCents int64, runtimeStatus adminplusdomain.SupplierRuntimeStatus) (ports.ProviderAnnouncement, bool) {
+	name := firstNonEmpty(stringFromAny(plan["name"]), stringFromAny(plan["product_name"]), "Subscription package")
+	price := float64FromAny(plan["price"])
+	originalPrice, hasOriginal := positiveFloat(firstExisting(plan, "original_price", "originalPrice"))
+	if !hasOriginal || originalPrice <= 0 || price <= 0 || price >= originalPrice {
+		return ports.ProviderAnnouncement{}, false
+	}
+	discount := (originalPrice - price) / originalPrice * 100
+	return ports.ProviderAnnouncement{
+		Type:             adminplusdomain.AnnouncementTypePackageDeal,
+		Title:            fmt.Sprintf("%s package discount %.2f%%", name, discount),
+		Description:      firstNonEmpty(stringFromAny(plan["description"]), "Supplier checkout plan is priced below original price."),
+		Currency:         currency,
+		MinRechargeCents: int64(math.Round(price * 100)),
+		DiscountPercent:  &discount,
+		RuntimeStatus:    runtimeStatus,
+		BalanceCents:     balanceCents,
+		RawPayload: map[string]any{
+			"source":         "provider_announcement",
+			"source_detail":  "payment_checkout_plan",
+			"classification": "package_deal",
+			"plan_id":        firstExisting(plan, "id"),
+			"group_id":       firstExisting(plan, "group_id", "groupId"),
+			"price":          price,
+			"original_price": originalPrice,
+		},
+	}, true
+}
+
+func parseProviderAnnouncements(data []byte, balanceCents int64, runtimeStatus adminplusdomain.SupplierRuntimeStatus) []ports.ProviderAnnouncement {
+	values, err := unwrapDataArray(data)
+	if err != nil {
+		return nil
+	}
+	announcements := make([]ports.ProviderAnnouncement, 0, len(values))
+	for _, value := range values {
+		raw, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		title := firstNonEmpty(stringFromAny(raw["title"]), stringFromAny(raw["name"]))
+		content := firstNonEmpty(stringFromAny(raw["content"]), stringFromAny(raw["description"]), stringFromAny(raw["body"]))
+		text := strings.TrimSpace(strings.Join([]string{title, content}, " "))
+		if !announcementTextLooksUseful(text) {
+			continue
+		}
+		classification := classifyAnnouncementText(text)
+		startsAt, hasStartsAt := firstTimeValue(raw, "starts_at", "startsAt")
+		endsAt, hasEndsAt := firstTimeValue(raw, "ends_at", "endsAt")
+		var startsAtPtr *time.Time
+		if hasStartsAt {
+			value := startsAt.UTC()
+			startsAtPtr = &value
+		}
+		var endsAtPtr *time.Time
+		if hasEndsAt {
+			value := endsAt.UTC()
+			endsAtPtr = &value
+		}
+		announcements = append(announcements, ports.ProviderAnnouncement{
+			Type:          classification.Type,
+			Title:         firstNonEmpty(title, titleFromText("供应商公告", content)),
+			Description:   content,
+			Currency:      "USD",
+			RuntimeStatus: runtimeStatus,
+			BalanceCents:  balanceCents,
+			StartsAt:      startsAtPtr,
+			EndsAt:        endsAtPtr,
+			RawPayload: map[string]any{
+				"source":           "provider_announcement",
+				"source_detail":    "announcements",
+				"classification":   classification.Name,
+				"matched_keywords": classification.MatchedKeywords,
+				"announcement_id":  firstExisting(raw, "id"),
+				"notify_mode":      firstExisting(raw, "notify_mode", "notifyMode"),
+			},
+		})
+	}
+	return announcements
+}
+
+func unwrapDataObject(data []byte) (map[string]any, bool) {
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, false
+	}
+	if obj, ok := root.(map[string]any); ok {
+		if dataValue, ok := obj["data"].(map[string]any); ok {
+			return dataValue, true
+		}
+		return obj, true
+	}
+	return nil, false
+}
+
+func checkoutPlans(body map[string]any) []map[string]any {
+	values, ok := firstArrayValue(body, "plans", "subscription_plans", "subscriptionPlans")
+	if !ok {
+		return nil
+	}
+	plans := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		plan, ok := value.(map[string]any)
+		if ok {
+			plans = append(plans, plan)
+		}
+	}
+	return plans
+}
+
+func positiveFloat(value any) (float64, bool) {
+	n, ok := float64Value(value)
+	return n, ok && n > 0
+}
+
+type announcementClassification struct {
+	Name            string
+	Type            adminplusdomain.AnnouncementType
+	MatchedKeywords []string
+}
+
+var announcementKeywordPatterns = []struct {
+	name     string
+	eventTyp adminplusdomain.AnnouncementType
+	keywords []string
+	pattern  *regexp.Regexp
+}{
+	{
+		name:     "recharge_bonus",
+		eventTyp: adminplusdomain.AnnouncementTypeRechargeBonus,
+		keywords: []string{"充值", "赠送", "余额", "bonus", "top up", "recharge"},
+		pattern:  regexp.MustCompile(`(?i)(充值|赠送|余额|bonus|top\s*up|recharge)`),
+	},
+	{
+		name:     "package_deal",
+		eventTyp: adminplusdomain.AnnouncementTypePackageDeal,
+		keywords: []string{"套餐", "package", "plan"},
+		pattern:  regexp.MustCompile(`(?i)(套餐|package|plan)`),
+	},
+	{
+		name:     "rate_discount",
+		eventTyp: adminplusdomain.AnnouncementTypeRateDiscount,
+		keywords: []string{"费率", "折扣", "优惠", "discount", "coupon", "promo"},
+		pattern:  regexp.MustCompile(`(?i)(费率|折扣|优惠|discount|coupon|promo|promotion)`),
+	},
+	{
+		name:     "maintenance",
+		eventTyp: adminplusdomain.AnnouncementTypeMaintenance,
+		keywords: []string{"维护", "停机", "maintenance", "downtime"},
+		pattern:  regexp.MustCompile(`(?i)(维护|停机|maintenance|downtime)`),
+	},
+	{
+		name:     "incident",
+		eventTyp: adminplusdomain.AnnouncementTypeIncident,
+		keywords: []string{"故障", "异常", "中断", "incident", "outage"},
+		pattern:  regexp.MustCompile(`(?i)(故障|异常|中断|incident|outage)`),
+	},
+	{
+		name:     "limited_offer",
+		eventTyp: adminplusdomain.AnnouncementTypeLimitedOffer,
+		keywords: []string{"活动", "限时", "返利", "返现", "sale", "rebate"},
+		pattern:  regexp.MustCompile(`(?i)(活动|限时|返利|返现|sale|rebate)`),
+	},
+	{
+		name:     "notice",
+		eventTyp: adminplusdomain.AnnouncementTypeNotice,
+		keywords: []string{"公告", "通知", "notice", "announcement"},
+		pattern:  regexp.MustCompile(`(?i)(公告|通知|notice|announcement)`),
+	},
+}
+
+func announcementTextLooksUseful(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	for _, item := range announcementKeywordPatterns {
+		if item.pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func classifyAnnouncementText(text string) announcementClassification {
+	text = strings.TrimSpace(text)
+	for _, item := range announcementKeywordPatterns {
+		if !item.pattern.MatchString(text) {
+			continue
+		}
+		return announcementClassification{
+			Name:            item.name,
+			Type:            item.eventTyp,
+			MatchedKeywords: matchedAnnouncementKeywords(text, item.keywords),
+		}
+	}
+	return announcementClassification{Name: "other", Type: adminplusdomain.AnnouncementTypeOther}
+}
+
+func matchedAnnouncementKeywords(text string, keywords []string) []string {
+	normalized := strings.ToLower(text)
+	out := make([]string, 0, len(keywords))
+	for _, keyword := range keywords {
+		if strings.Contains(normalized, strings.ToLower(keyword)) {
+			out = append(out, keyword)
+		}
+	}
+	return out
+}
+
+func titleFromText(prefix string, text string) string {
+	value := strings.TrimSpace(text)
+	if value == "" {
+		return prefix
+	}
+	value = strings.ReplaceAll(value, "\n", " ")
+	if len(value) > 80 {
+		value = value[:80]
+	}
+	return firstNonEmpty(value, prefix)
+}
+
+func dedupeAnnouncements(announcements []ports.ProviderAnnouncement) []ports.ProviderAnnouncement {
+	if len(announcements) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(announcements))
+	out := make([]ports.ProviderAnnouncement, 0, len(announcements))
+	for _, announcement := range announcements {
+		key := strings.ToLower(strings.Join([]string{
+			string(announcement.Type),
+			announcement.Title,
+			fmt.Sprintf("%d", announcement.MinRechargeCents),
+			fmt.Sprintf("%.4f", floatFromPtr(announcement.BonusPercent)),
+			fmt.Sprintf("%.4f", floatFromPtr(announcement.DiscountPercent)),
+		}, "\x00"))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, announcement)
+	}
+	return out
+}
+
+func floatFromPtr(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func sanitizeProviderKeyPayload(raw map[string]any) map[string]any {
@@ -670,6 +1138,344 @@ func priceEntriesFromPricing(model string, pricing map[string]any, raw map[strin
 	addTokenUSD("image_output", firstExisting(pricing, "image_output_price", "imageOutputPrice", "ImageOutputPrice"))
 	addRequestUSD(firstExisting(pricing, "per_request_price", "perRequestPrice", "PerRequestPrice"))
 	return out
+}
+
+func appendBillingQuery(endpoint string, request ports.ReadBillingInput) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	values := u.Query()
+	startedAt := request.StartedAt.UTC().Format(time.RFC3339)
+	endedAt := request.EndedAt.UTC().Format(time.RFC3339)
+	values.Set("started_at", startedAt)
+	values.Set("ended_at", endedAt)
+	values.Set("from", startedAt)
+	values.Set("to", endedAt)
+	u.RawQuery = values.Encode()
+	return u.String()
+}
+
+func appendQueryValues(endpoint string, pairs map[string]string) string {
+	if len(pairs) == 0 {
+		return endpoint
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	values := u.Query()
+	for key, value := range pairs {
+		values.Set(key, value)
+	}
+	u.RawQuery = values.Encode()
+	return u.String()
+}
+
+func parseSub2APIBillingLines(data []byte) []ports.ProviderBillLine {
+	values, err := unwrapDataArray(data)
+	if err != nil {
+		return nil
+	}
+	lines := make([]ports.ProviderBillLine, 0, len(values))
+	for _, value := range values {
+		raw, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		line, ok := parseSub2APIBillingLine(raw)
+		if ok {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func parseSub2APIBillingLine(raw map[string]any) (ports.ProviderBillLine, bool) {
+	model := firstNonEmpty(
+		stringFromAny(raw["model"]),
+		stringFromAny(raw["requested_model"]),
+		stringFromAny(raw["requestedModel"]),
+		stringFromAny(raw["upstream_model"]),
+		stringFromAny(raw["upstreamModel"]),
+		stringFromAny(raw["billing_model"]),
+		stringFromAny(raw["billingModel"]),
+	)
+	startedAt, ok := firstTimeValue(raw, "started_at", "startedAt", "created_at", "createdAt", "timestamp", "time")
+	if model == "" || !ok {
+		return ports.ProviderBillLine{}, false
+	}
+	endedAt, hasEndedAt := firstTimeValue(raw, "ended_at", "endedAt", "completed_at", "completedAt", "finished_at", "finishedAt")
+	var endedAtPtr *time.Time
+	if hasEndedAt {
+		endedAtUTC := endedAt.UTC()
+		endedAtPtr = &endedAtUTC
+	}
+	return ports.ProviderBillLine{
+		ExternalBillID: firstNonEmpty(
+			stringFromAny(raw["external_bill_id"]),
+			stringFromAny(raw["externalBillId"]),
+			stringFromAny(raw["bill_id"]),
+			stringFromAny(raw["billId"]),
+			stringFromAny(raw["billing_id"]),
+			stringFromAny(raw["billingId"]),
+			stringFromAny(raw["id"]),
+			idStringFromAny(raw["id"]),
+		),
+		ExternalRequestID: firstNonEmpty(
+			stringFromAny(raw["external_request_id"]),
+			stringFromAny(raw["externalRequestId"]),
+			stringFromAny(raw["request_id"]),
+			stringFromAny(raw["requestId"]),
+			stringFromAny(raw["upstream_request_id"]),
+			stringFromAny(raw["upstreamRequestId"]),
+		),
+		APIKeyName: firstNonEmpty(
+			stringFromAny(raw["api_key_name"]),
+			stringFromAny(raw["apiKeyName"]),
+			stringFromAny(raw["key_name"]),
+			stringFromAny(raw["keyName"]),
+			stringFromAny(raw["token_name"]),
+			stringFromAny(raw["tokenName"]),
+		),
+		Model:           model,
+		Endpoint:        firstNonEmpty(stringFromAny(raw["endpoint"]), stringFromAny(raw["path"]), stringFromAny(raw["inbound_endpoint"]), stringFromAny(raw["upstream_endpoint"])),
+		RequestType:     firstNonEmpty(stringFromAny(raw["request_type"]), stringFromAny(raw["requestType"]), stringFromAny(raw["type"])),
+		BillingMode:     firstNonEmpty(stringFromAny(raw["billing_mode"]), stringFromAny(raw["billingMode"]), stringFromAny(raw["billing_type"]), stringFromAny(raw["billingType"]), "token"),
+		ReasoningEffort: firstNonEmpty(stringFromAny(raw["reasoning_effort"]), stringFromAny(raw["reasoningEffort"]), stringFromAny(raw["service_tier"]), stringFromAny(raw["serviceTier"])),
+		Currency:        firstNonEmpty(stringFromAny(raw["currency"]), stringFromAny(raw["Currency"]), "USD"),
+		CostCents: firstCostCentsValue(raw,
+			"cost_cents", "costCents", "amount_cents", "amountCents", "fee_cents", "feeCents",
+			"cost", "amount", "fee", "actual_cost", "actualCost", "total_cost", "totalCost",
+		),
+		InputTokens:     firstInt64Value(raw, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens"),
+		OutputTokens:    firstInt64Value(raw, "output_tokens", "outputTokens", "completion_tokens", "completionTokens"),
+		CacheReadTokens: firstInt64Value(raw, "cache_read_tokens", "cacheReadTokens", "cached_tokens", "cachedTokens"),
+		TotalTokens:     firstInt64Value(raw, "total_tokens", "totalTokens", "tokens"),
+		FirstTokenMS:    firstInt64Value(raw, "first_token_ms", "firstTokenMs", "first_token_latency_ms", "firstTokenLatencyMs"),
+		DurationMS:      firstInt64Value(raw, "duration_ms", "durationMs", "total_latency_ms", "totalLatencyMs", "latency_ms", "latencyMs"),
+		UserAgent:       firstNonEmpty(stringFromAny(raw["user_agent"]), stringFromAny(raw["userAgent"])),
+		StartedAt:       startedAt.UTC(),
+		EndedAt:         endedAtPtr,
+		RawPayload:      sanitizeBillingPayload(raw),
+	}, true
+}
+
+func firstInt64Value(in map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		value, exists := in[key]
+		if !exists || value == nil {
+			continue
+		}
+		if n, ok := int64Value(value); ok {
+			return n
+		}
+		if n, ok := numericStringToInt64(value); ok {
+			return n
+		}
+	}
+	return 0
+}
+
+func idStringFromAny(value any) string {
+	n := int64FromAny(value)
+	if n <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(n, 10)
+}
+
+func firstCostCentsValue(in map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		value, exists := in[key]
+		if !exists || value == nil {
+			continue
+		}
+		switch key {
+		case "cost_cents", "costCents", "amount_cents", "amountCents", "fee_cents", "feeCents":
+			if n, ok := int64Value(value); ok {
+				return n
+			}
+			if n, ok := numericStringToInt64(value); ok {
+				return n
+			}
+		default:
+			if n, ok := currencyAmountToCents(value); ok {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func int64Value(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(math.Round(v)), true
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return n, true
+		}
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return int64(math.Round(f)), true
+	default:
+		return 0, false
+	}
+}
+
+func numericStringToInt64(value any) (int64, bool) {
+	s := stringFromAny(value)
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err == nil {
+		return n, true
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int64(math.Round(f)), true
+}
+
+func currencyAmountToCents(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v * 100), true
+	case int64:
+		return v * 100, true
+	case float64:
+		return int64(math.Round(v * 100)), true
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return int64(math.Round(f * 100)), true
+	case string:
+		s := strings.TrimSpace(v)
+		s = strings.TrimLeft(s, "$¥￥€£ ")
+		s = strings.ReplaceAll(s, ",", "")
+		if s == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, false
+		}
+		return int64(math.Round(f * 100)), true
+	default:
+		return 0, false
+	}
+}
+
+func firstTimeValue(in map[string]any, keys ...string) (time.Time, bool) {
+	for _, key := range keys {
+		value, exists := in[key]
+		if !exists || value == nil {
+			continue
+		}
+		if t, ok := timeFromAny(value); ok {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func timeFromAny(value any) (time.Time, bool) {
+	switch v := value.(type) {
+	case time.Time:
+		return v, !v.IsZero()
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return time.Time{}, false
+		}
+		for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+			t, err := time.Parse(layout, s)
+			if err == nil {
+				return t, true
+			}
+		}
+		return time.Time{}, false
+	case int64:
+		return unixTimeFromNumber(v)
+	case int:
+		return unixTimeFromNumber(int64(v))
+	case float64:
+		return unixTimeFromNumber(int64(v))
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return time.Time{}, false
+		}
+		return unixTimeFromNumber(n)
+	default:
+		return time.Time{}, false
+	}
+}
+
+func unixTimeFromNumber(value int64) (time.Time, bool) {
+	if value <= 0 {
+		return time.Time{}, false
+	}
+	if value > 1_000_000_000_000 {
+		return time.UnixMilli(value).UTC(), true
+	}
+	return time.Unix(value, 0).UTC(), true
+}
+
+func sanitizeBillingPayload(raw map[string]any) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(raw))
+	for key, value := range raw {
+		if isSensitivePayloadKey(key) {
+			continue
+		}
+		out[key] = sanitizeBillingValue(value)
+	}
+	return out
+}
+
+func sanitizeBillingValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return sanitizeBillingPayload(v)
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, sanitizeBillingValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func isSensitivePayloadKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+	switch normalized {
+	case "authorization", "cookie", "set_cookie", "password", "secret", "token", "access_token", "refresh_token", "csrf_token", "xsrf_token", "api_key", "apikey", "key":
+		return true
+	default:
+		return strings.Contains(normalized, "authorization") ||
+			strings.Contains(normalized, "cookie") ||
+			strings.Contains(normalized, "password") ||
+			strings.Contains(normalized, "secret") ||
+			strings.Contains(normalized, "access_token") ||
+			strings.Contains(normalized, "refresh_token")
+	}
 }
 
 func directMicrosFromAny(value any) (int64, bool) {

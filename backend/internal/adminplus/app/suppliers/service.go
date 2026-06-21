@@ -120,6 +120,13 @@ type SiteMatchResult struct {
 	Reason    string                      `json:"reason,omitempty"`
 }
 
+type EnsureFromSiteCandidateResult struct {
+	Supplier    *adminplusdomain.Supplier `json:"supplier"`
+	Created     bool                      `json:"created"`
+	Matched     bool                      `json:"matched"`
+	MatchStatus string                    `json:"match_status,omitempty"`
+}
+
 type Repository interface {
 	Create(ctx context.Context, supplier *adminplusdomain.Supplier) (*adminplusdomain.Supplier, error)
 	Get(ctx context.Context, id int64) (*adminplusdomain.Supplier, error)
@@ -219,6 +226,7 @@ func (s *Service) CreateFromSiteCandidate(ctx context.Context, in CreateFromSite
 	if in.SourceHost != "" && !sameHost(parsed.Host, in.SourceHost) {
 		return nil, badRequest("SUPPLIER_SITE_HOST_MISMATCH", "supplier candidate host does not match current site")
 	}
+	siteOrigin := parsed.Scheme + "://" + parsed.Host
 	existing, err := s.List(ctx, SupplierFilter{})
 	if err != nil {
 		return nil, err
@@ -241,16 +249,66 @@ func (s *Service) CreateFromSiteCandidate(ctx context.Context, in CreateFromSite
 	}
 	return s.Create(ctx, CreateSupplierInput{
 		Name:                name,
-		Kind:                adminplusdomain.SupplierKindBrowserOnly,
-		Type:                adminplusdomain.SupplierTypeBrowserOnly,
+		Kind:                adminplusdomain.SupplierKindRelay,
+		Type:                adminplusdomain.SupplierTypeSub2API,
 		RuntimeStatus:       adminplusdomain.SupplierRuntimeStatusMonitorOnly,
 		HealthStatus:        adminplusdomain.SupplierHealthStatusNormal,
-		DashboardURL:        dashboardURL,
+		DashboardURL:        siteOrigin,
 		APIBaseURL:          apiBaseURL,
 		Notes:               "created from Chrome extension site candidate",
 		BrowserLoginEnabled: true,
 		BalanceCurrency:     "CNY",
 	})
+}
+
+func (s *Service) EnsureFromSiteCandidate(ctx context.Context, in CreateFromSiteCandidateInput) (*EnsureFromSiteCandidateResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("supplier service is not configured")
+	}
+	match, err := s.MatchSite(ctx, SiteMatchInput{
+		URL:    firstNonEmpty(in.SourceURL, in.DashboardURL),
+		Origin: in.DashboardURL,
+		Host:   in.SourceHost,
+	})
+	if err == nil && len(match.Suppliers) == 1 {
+		return &EnsureFromSiteCandidateResult{
+			Supplier:    match.Suppliers[0],
+			Matched:     true,
+			MatchStatus: match.Status,
+		}, nil
+	}
+	if err == nil && len(match.Suppliers) > 1 {
+		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_SITE_AMBIGUOUS", "multiple suppliers match current site")
+	}
+	if err != nil && infraerrors.Code(err) != http.StatusBadRequest {
+		return nil, err
+	}
+	created, err := s.CreateFromSiteCandidate(ctx, in)
+	if err != nil {
+		if infraerrors.Reason(err) != "SUPPLIER_SITE_ALREADY_EXISTS" {
+			return nil, err
+		}
+		match, matchErr := s.MatchSite(ctx, SiteMatchInput{
+			URL:    firstNonEmpty(in.SourceURL, in.DashboardURL),
+			Origin: in.DashboardURL,
+			Host:   in.SourceHost,
+		})
+		if matchErr != nil {
+			return nil, matchErr
+		}
+		if len(match.Suppliers) == 1 {
+			return &EnsureFromSiteCandidateResult{
+				Supplier:    match.Suppliers[0],
+				Matched:     true,
+				MatchStatus: match.Status,
+			}, nil
+		}
+		return nil, err
+	}
+	return &EnsureFromSiteCandidateResult{
+		Supplier: created,
+		Created:  true,
+	}, nil
 }
 
 func (s *Service) MatchSite(ctx context.Context, in SiteMatchInput) (*SiteMatchResult, error) {
@@ -270,8 +328,18 @@ func (s *Service) MatchSite(ctx context.Context, in SiteMatchInput) (*SiteMatchR
 		if supplier == nil {
 			continue
 		}
-		if supplierURLHostMatches(supplier.DashboardURL, host) || supplierURLHostMatches(supplier.APIBaseURL, host) {
+		if supplierURLExactHostMatches(supplier.DashboardURL, host) || supplierURLExactHostMatches(supplier.APIBaseURL, host) {
 			matches = append(matches, supplier)
+		}
+	}
+	if len(matches) == 0 {
+		for _, supplier := range suppliers {
+			if supplier == nil {
+				continue
+			}
+			if supplierURLHostMatches(supplier.DashboardURL, host) || supplierURLHostMatches(supplier.APIBaseURL, host) {
+				matches = append(matches, supplier)
+			}
 		}
 	}
 	status := "unknown"
@@ -742,6 +810,14 @@ func supplierURLHostMatches(raw string, host string) bool {
 		return false
 	}
 	return sameHost(u.Host, host)
+}
+
+func supplierURLExactHostMatches(raw string, host string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(u.Host), strings.TrimSpace(host))
 }
 
 func sameHost(left string, right string) bool {

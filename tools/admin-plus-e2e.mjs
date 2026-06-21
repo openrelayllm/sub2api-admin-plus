@@ -56,12 +56,12 @@ async function main() {
     const rateEvent = await exerciseRateMonitoring(activeSupplier.id)
     const balanceEvent = await exerciseBalanceMonitoring(activeSupplier.id)
     const healthEvent = await exerciseHealthMonitoring(activeSupplier.id, supplierAccount.id)
-    const promotionEvent = await exercisePromotionMonitoring(activeSupplier.id)
+    const announcementEvent = await exerciseAnnouncementMonitoring(activeSupplier.id)
     const reconciliation = await exerciseBillingAndReconciliation(activeSupplier.id, localAccountID)
     await exerciseScheduler(activeSupplier.id)
     await exerciseExtensionTasks(activeSupplier.id)
     const candidateSupplier = await createCandidateSupplier()
-    await exerciseActionRecommendations(activeSupplier, candidateSupplier, balanceEvent, promotionEvent, healthEvent, reconciliation.summary)
+    await exerciseActionRecommendations(activeSupplier, candidateSupplier, balanceEvent, announcementEvent, healthEvent, reconciliation.summary)
     await verifyAllListEndpoints(activeSupplier.id)
     await deleteSupplierAccount(activeSupplier.id, supplierAccount.id)
 
@@ -509,26 +509,26 @@ async function exerciseHealthMonitoring(supplierID, supplierAccountID) {
   return result.events.find((item) => item.type === 'request_error') || result.events[0]
 }
 
-async function exercisePromotionMonitoring(supplierID) {
+async function exerciseAnnouncementMonitoring(supplierID) {
   const bonus = 20
-  const event = await api('POST', '/api/v1/admin-plus/promotions', {
+  const event = await api('POST', '/api/v1/admin-plus/announcements', {
     supplier_id: supplierID,
     source: 'chrome',
     type: 'recharge_bonus',
     title: `${runID} recharge bonus`,
-    description: 'E2E promotion for zero-balance monitor-only supplier.',
+    description: 'E2E announcement for zero-balance monitor-only supplier.',
     currency: 'CNY',
     min_recharge_cents: 10000,
     bonus_percent: bonus,
     runtime_status: 'monitor_only',
     balance_cents: 0
   }, { expected: 201 })
-  assert(event.recommendation === 'recharge_to_unlock', 'zero-balance promotion should recommend recharge_to_unlock')
-  assert(event.switch_eligible === false, 'zero-balance promotion should not be switch eligible')
+  assert(event.recommendation === 'recharge_to_unlock', 'zero-balance announcement should recommend recharge_to_unlock')
+  assert(event.switch_eligible === false, 'zero-balance announcement should not be switch eligible')
 
-  const ack = await api('PATCH', `/api/v1/admin-plus/promotions/${event.id}/ack`)
-  assert(ack.status === 'acknowledged', 'promotion event should be acknowledged')
-  log('promotion monitoring verified')
+  const ack = await api('PATCH', `/api/v1/admin-plus/announcements/${event.id}/ack`)
+  assert(ack.status === 'acknowledged', 'announcement event should be acknowledged')
+  log('announcement monitoring verified')
   return event
 }
 
@@ -589,76 +589,122 @@ async function exerciseBillingAndReconciliation(supplierID, localAccountID) {
 }
 
 async function exerciseExtensionTasks(supplierID) {
-  const externalRequestID = `${runID}-extension-req`
-  const startedAt = new Date().toISOString()
-  const endedAt = new Date(Date.now() + 1200).toISOString()
-  const task = await api('POST', '/api/v1/admin-plus/extension/tasks', {
-    supplier_id: supplierID,
-    type: 'export_bills',
-    priority: 50,
-    max_attempts: 3,
-    payload: { run_id: runID, target: 'daily_bill' }
-  }, { expected: 201 })
-  assert(task.status === 'pending', 'extension task should start pending')
+  const supplierServer = await startTestSub2APISupplierServer()
+  try {
+    const supplier = await api('POST', '/api/v1/admin-plus/suppliers', {
+      name: `${runID}-session-supplier`,
+      kind: 'relay',
+      type: 'sub2api',
+      runtime_status: 'active',
+      health_status: 'normal',
+      dashboard_url: supplierServer.url,
+      api_base_url: supplierServer.url,
+      contact: 'session-ops@example.com',
+      notes: `session upload e2e for ${runID}`,
+      browser_login_enabled: true,
+      browser_login_username: `${runID}-session@supplier.example.com`,
+      browser_login_password: 'e2e-session-password',
+      browser_login_token: 'e2e-session-token',
+      balance_cents: 123400,
+      balance_currency: 'USD'
+    }, { expected: 201 })
+    assert(supplier.id > 0, 'session supplier should be created')
 
-  const deviceID = `${runID}-chrome`
-  const claimed = await api('POST', '/api/v1/admin-plus/extension/tasks/claim', {
-    device_id: deviceID,
-    types: ['export_bills'],
-    lease_ttl_seconds: 60
-  })
-  assert(claimed.id === task.id, 'extension claim should return created task')
-  assert(claimed.lease_token, 'extension claim should return lease token')
+    const deviceID = `${runID}-chrome-session`
+    const task = await api('POST', '/api/v1/admin-plus/extension/session/capture-task', {
+      supplier_id: supplier.id,
+      device_id: deviceID,
+      lease_ttl_seconds: 60,
+      payload: {
+        source_url: `${supplierServer.url}/dashboard`,
+        source_host: new URL(supplierServer.url).host,
+        run_id: runID
+      }
+    }, { expected: 201 })
+    assert(task.type === 'capture_supplier_session', 'capture task should use session task type')
+    assert(task.status === 'claimed', 'capture task should be leased immediately')
+    assert(task.lease_token, 'capture task should return lease token')
 
-  const heartbeat = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/heartbeat`, {
-    device_id: deviceID,
-    lease_token: claimed.lease_token,
-    lease_ttl_seconds: 60
-  })
-  assert(heartbeat.status === 'running', 'extension heartbeat should mark task running')
+    const deniedCredential = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/browser-credential`, {
+      device_id: deviceID,
+      lease_token: 'bad-token'
+    }, { expected: 409, allowError: true })
+    assert(deniedCredential.reason === 'EXTENSION_TASK_LEASE_MISMATCH', 'browser credential should require valid capture lease')
 
-  const deniedCredential = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/browser-credential`, {
-    device_id: deviceID,
-    lease_token: 'bad-token'
-  }, { expected: 409, allowError: true })
-  assert(deniedCredential.reason === 'EXTENSION_TASK_LEASE_MISMATCH', 'browser credential should require valid lease')
+    const credential = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/browser-credential`, {
+      device_id: deviceID,
+      lease_token: task.lease_token
+    })
+    assert(credential.supplier_id === supplier.id, 'browser credential should belong to capture supplier')
+    assert(credential.dashboard_url === supplierServer.url, 'browser credential should include supplier dashboard url')
+    assert(credential.username === `${runID}-session@supplier.example.com`, 'browser credential should return configured username')
+    assert(credential.password === 'e2e-session-password', 'browser credential should return configured password')
+    assert(credential.token === 'e2e-session-token', 'browser credential should return configured token')
 
-  const credential = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/browser-credential`, {
-    device_id: deviceID,
-    lease_token: claimed.lease_token
-  })
-  assert(credential.supplier_id === supplierID, 'browser credential should belong to task supplier')
-  assert(credential.dashboard_url === 'https://supplier.example.com', 'browser credential should include dashboard url')
-  assert(credential.username === `${runID}@supplier.example.com`, 'browser credential should return configured username')
-  assert(credential.password === 'e2e-test-only-password', 'browser credential should return configured password')
-  assert(credential.token === 'e2e-test-only-token', 'browser credential should return configured token')
+    const heartbeat = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/heartbeat`, {
+      device_id: deviceID,
+      lease_token: task.lease_token,
+      lease_ttl_seconds: 60
+    })
+    assert(heartbeat.status === 'running', 'capture heartbeat should mark task running')
 
-  const completed = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/complete`, {
-    device_id: deviceID,
-    lease_token: claimed.lease_token,
-    result: {
-      source: 'chrome',
-      run_id: runID,
-      lines: [{
-        external_bill_id: `${runID}-extension-bill`,
-        external_request_id: externalRequestID,
-        model: `${runID}-extension-model`,
-        currency: 'USD',
-        cost_cents: 77,
-        input_tokens: 321,
-        output_tokens: 123,
-        started_at: startedAt,
-        ended_at: endedAt,
-        raw_payload: { run_id: runID, source: 'extension-task' }
-      }]
-    }
-  })
-  assert(completed.status === 'succeeded', 'extension complete should mark task succeeded')
-  assert(completed.result?.ingest?.bill_lines === 1, 'extension complete should ingest bill lines')
+    const completed = await api('POST', `/api/v1/admin-plus/extension/tasks/${task.id}/complete`, {
+      device_id: deviceID,
+      lease_token: task.lease_token,
+      result: {
+        source: 'chrome',
+        run_id: runID,
+        captured_at: new Date().toISOString(),
+        session_bundle: {
+          supplier_id: supplier.id,
+          origin: supplierServer.url,
+          url: `${supplierServer.url}/dashboard`,
+          captured_at: new Date().toISOString(),
+          tokens: {
+            access_token: 'e2e-browser-access-token',
+            csrf_token: 'e2e-csrf-token'
+          },
+          required_headers: {
+            cookie: 'sid=e2e-browser-cookie',
+            origin: supplierServer.url,
+            referer: `${supplierServer.url}/dashboard`
+          },
+          context: {
+            api_base_url: supplierServer.url,
+            user_id: `${runID}-supplier-user`
+          }
+        }
+      }
+    })
+    assert(completed.status === 'succeeded', 'capture complete should mark task succeeded')
+    assert(completed.result?.ingest?.session_captured === true, 'capture complete should ingest supplier session')
+    assert(completed.result?.session_summary?.has_access_token === true, 'capture complete should keep only session summary')
+    assert(!JSON.stringify(completed).includes('e2e-browser-access-token'), 'complete response should not expose access token')
+    assert(!JSON.stringify(completed).includes('e2e-browser-cookie'), 'complete response should not expose cookie')
 
-  const bills = await api('GET', `/api/v1/admin-plus/billing/lines?supplier_id=${supplierID}&limit=100`)
-  assert(bills.items.some((item) => item.external_request_id === externalRequestID), 'extension task completion should create supplier bill line')
-  log('extension task lifecycle and result ingest verified')
+    const session = await api('GET', `/api/v1/admin-plus/suppliers/${supplier.id}/session`)
+    assert(session.has_encrypted_bundle === true, 'captured session should be encrypted at rest')
+    assert(session.source_extension_task_id === task.id, 'captured session should retain source task id')
+    assert(session.session_summary?.has_access_token === true, 'session summary should report token presence')
+    assert(!JSON.stringify(session).includes('e2e-browser-access-token'), 'session get should not expose access token')
+    assert(!JSON.stringify(session).includes('e2e-browser-cookie'), 'session get should not expose cookie')
+
+    const probed = await api('POST', `/api/v1/admin-plus/suppliers/${supplier.id}/session/probe`, {
+      low_balance_threshold_cents: 2000
+    })
+    assert(probed.probe?.system_type === 'sub2api', 'session probe should use Sub2API provider adapter')
+    assert(probed.probe?.balance_cents === 1234, 'session probe should read supplier profile balance')
+    assert(probed.balance_snapshot?.balance_cents === 1234, 'session probe should record balance snapshot from uploaded session')
+    assert(supplierServer.requests.some((request) => request.path === '/api/v1/user/profile'), 'session probe should call supplier profile endpoint')
+    const profileRequest = supplierServer.requests.find((request) => request.path === '/api/v1/user/profile')
+    assert(profileRequest.authorization === 'Bearer e2e-browser-access-token', 'session probe should send uploaded bearer token')
+    assert(profileRequest.cookie === 'sid=e2e-browser-cookie', 'session probe should send uploaded cookie')
+    assert(!JSON.stringify(probed).includes('e2e-browser-access-token'), 'session probe response should not expose access token')
+    assert(!JSON.stringify(probed).includes('e2e-browser-cookie'), 'session probe response should not expose cookie')
+    log('capture supplier session upload E2E verified')
+  } finally {
+    await supplierServer.close()
+  }
 }
 
 async function exerciseScheduler(supplierID) {
@@ -668,11 +714,12 @@ async function exerciseScheduler(supplierID) {
   const first = await api('POST', '/api/v1/admin-plus/scheduler/run', {
     mode: 'e2e',
     supplier_id: supplierID,
-    task_types: ['fetch_rates', 'fetch_balance', 'fetch_promotions'],
+    task_types: ['capture_supplier_session'],
     window_minutes: 10
   })
-  assert(first.created_count === 3, 'scheduler should create one task for each requested collection type')
+  assert(first.created_count === 1, 'scheduler should create one capture session task')
   assert(first.items.every((item) => item.schedule_key), 'scheduler items should include schedule keys')
+  assert(first.items.every((item) => item.action === 'extension_task'), 'scheduler should keep only session capture in extension queue')
 
   const queued = await api('GET', `/api/v1/admin-plus/extension/tasks?supplier_id=${supplierID}&limit=100`)
   for (const item of first.items) {
@@ -682,16 +729,16 @@ async function exerciseScheduler(supplierID) {
   const second = await api('POST', '/api/v1/admin-plus/scheduler/run', {
     mode: 'e2e',
     supplier_id: supplierID,
-    task_types: ['fetch_rates', 'fetch_balance', 'fetch_promotions'],
+    task_types: ['capture_supplier_session'],
     window_minutes: 10
   })
   assert(second.created_count === 0, 'scheduler should not duplicate tasks in the same window')
-  assert(second.skipped_count === 3, 'scheduler should report skipped duplicates')
+  assert(second.skipped_count === 1, 'scheduler should report skipped duplicate capture task')
   assert(second.items.every((item) => item.reason === 'duplicate'), 'scheduler duplicate skips should explain the reason')
-  log('scheduler task generation verified')
+  log('scheduler capture-session task generation verified')
 }
 
-async function exerciseActionRecommendations(supplier, candidateSupplier, balanceEvent, promotionEvent, healthEvent, reconciliationSummary) {
+async function exerciseActionRecommendations(supplier, candidateSupplier, balanceEvent, announcementEvent, healthEvent, reconciliationSummary) {
   const generated = await api('POST', '/api/v1/admin-plus/actions/generate', {
     suppliers: [{
       supplier_id: supplier.id,
@@ -711,7 +758,7 @@ async function exerciseActionRecommendations(supplier, candidateSupplier, balanc
       effective_cost_cents: 80
     }],
     balance_events: [balanceEvent],
-    promotion_events: [promotionEvent],
+    announcement_events: [announcementEvent],
     health_events: [healthEvent],
     reconciliation: reconciliationSummary,
     min_profit_margin: 0.6
@@ -744,7 +791,7 @@ async function verifyAllListEndpoints(supplierID) {
     `/api/v1/admin-plus/balances/events?supplier_id=${supplierID}`,
     `/api/v1/admin-plus/health/samples?supplier_id=${supplierID}`,
     `/api/v1/admin-plus/health/events?supplier_id=${supplierID}`,
-    `/api/v1/admin-plus/promotions?supplier_id=${supplierID}`,
+    `/api/v1/admin-plus/announcements?supplier_id=${supplierID}`,
     `/api/v1/admin-plus/extension/tasks?supplier_id=${supplierID}`,
     `/api/v1/admin-plus/billing/lines?supplier_id=${supplierID}`,
     `/api/v1/admin-plus/actions/recommendations?limit=20`
@@ -898,6 +945,51 @@ function startTestOpenAIResponsesServer() {
   })
 }
 
+function startTestSub2APISupplierServer() {
+  const requests = []
+  const server = createServer(async (req, res) => {
+    requests.push({
+      method: req.method,
+      path: new URL(req.url, 'http://127.0.0.1').pathname,
+      authorization: req.headers.authorization || '',
+      cookie: req.headers.cookie || '',
+      origin: req.headers.origin || '',
+      referer: req.headers.referer || ''
+    })
+    if (req.method === 'GET' && req.url === '/api/v1/user/profile') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        data: {
+          id: 42,
+          email: `${runID}-supplier-user@example.com`,
+          username: `${runID}-supplier-user`,
+          role: 'user',
+          status: 'active',
+          balance: 12.34,
+          concurrency: 5,
+          allowed_groups: [1, 2]
+        }
+      }))
+      return
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'not found' }))
+  })
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      resolve({
+        url: `http://127.0.0.1:${address.port}`,
+        requests,
+        close: () => new Promise((done) => server.close(() => done()))
+      })
+    })
+  })
+}
+
 function cleanupE2EFixturesSafely() {
   try {
     cleanupE2EFixtures()
@@ -935,6 +1027,10 @@ function cleanupE2EFixtures() {
        OR payload::text LIKE '%${escapedRunID}%'
        OR result::text LIKE '%${escapedRunID}%';
 
+    DELETE FROM admin_plus_supplier_browser_sessions
+    WHERE supplier_id IN (SELECT id FROM admin_plus_suppliers WHERE name LIKE '${escapedRunID}%')
+       OR session_summary::text LIKE '%${escapedRunID}%';
+
     DELETE FROM admin_plus_health_events
     WHERE supplier_id IN (SELECT id FROM admin_plus_suppliers WHERE name LIKE '${escapedRunID}%')
        OR model LIKE '${escapedRunID}%';
@@ -944,7 +1040,7 @@ function cleanupE2EFixtures() {
        OR model LIKE '${escapedRunID}%'
        OR raw_payload::text LIKE '%${escapedRunID}%';
 
-    DELETE FROM admin_plus_promotion_events
+    DELETE FROM admin_plus_announcement_events
     WHERE supplier_id IN (SELECT id FROM admin_plus_suppliers WHERE name LIKE '${escapedRunID}%')
        OR title LIKE '%${escapedRunID}%'
        OR description LIKE '%${escapedRunID}%'

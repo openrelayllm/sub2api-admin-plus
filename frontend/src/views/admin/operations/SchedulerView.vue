@@ -48,8 +48,8 @@
         <form class="card p-5" @submit.prevent="submitRun">
           <div class="flex items-start justify-between gap-3">
             <div>
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">调度生成</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">生成后端采集任务；会话上报由插件在供应商页面一键触发。</p>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">执行调度</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">默认只让插件上报会话；业务同步在后端完成。</p>
             </div>
             <span class="badge badge-gray">{{ status?.queue || 'extension' }}</span>
           </div>
@@ -71,9 +71,9 @@
             </label>
 
             <div>
-              <span class="input-label">后端采集任务</span>
+              <span class="input-label">任务类型</span>
               <div class="mt-2 grid gap-2">
-                <label v-for="option in scheduledTaskTypeOptions" :key="option.value" class="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-700">
+                <label v-for="option in taskTypeOptions" :key="option.value" class="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-700">
                   <span>
                     <span class="block text-gray-700 dark:text-gray-200">{{ option.label }}</span>
                     <span class="text-xs text-gray-500 dark:text-dark-400">{{ option.description }}</span>
@@ -87,7 +87,7 @@
               {{ diagnosing ? '预检中...' : '预检供应商' }}
             </button>
             <button type="submit" class="btn btn-primary w-full" :disabled="running || form.task_types.length === 0">
-              {{ running ? '生成中...' : '生成采集任务' }}
+              {{ running ? '执行中...' : '执行调度' }}
             </button>
           </div>
         </form>
@@ -95,7 +95,7 @@
         <div class="card overflow-hidden">
           <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
             <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ lastRun ? '生成结果' : '预检结果' }}</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ lastRun ? '执行结果' : '预检结果' }}</h2>
               <span class="text-xs text-gray-500 dark:text-dark-400">{{ runTimeLabel || diagnosisTimeLabel }}</span>
             </div>
           </div>
@@ -105,25 +105,27 @@
                 <tr>
                   <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">供应商</th>
                   <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">任务</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">动作</th>
                   <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">状态</th>
                   <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">任务 ID</th>
                   <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">幂等键</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">原因</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">结果</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
                 <tr v-if="visibleRunItems.length === 0">
-                  <td colspan="6" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无预检结果</td>
+                  <td colspan="7" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无预检结果</td>
                 </tr>
                 <tr v-for="item in visibleRunItems" :key="`${item.supplier_id}-${item.task_type}-${item.schedule_key}-${item.reason}`">
                   <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">{{ item.supplier_name || supplierName(item.supplier_id) }}</td>
                   <td class="px-4 py-4"><span class="badge badge-gray">{{ taskTypeLabel(item.task_type) }}</span></td>
+                  <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ actionLabel(item.action) }}</td>
                   <td class="px-4 py-4">
                     <span class="badge" :class="runItemClass(item)">{{ runItemStatus(item) }}</span>
                   </td>
                   <td class="px-4 py-4 font-mono text-xs text-gray-500 dark:text-dark-400">{{ item.task_id || '-' }}</td>
                   <td class="px-4 py-4 font-mono text-xs text-gray-500 dark:text-dark-400">{{ item.schedule_key || '-' }}</td>
-                  <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ reasonLabel(item.reason) }}</td>
+                  <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ runItemResult(item) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -136,7 +138,7 @@
           <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">采集任务记录</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">包含插件一键会话上报和后端调度生成的浏览器兜底任务。</p>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">只展示需要插件执行的会话上报和兼容兜底任务。</p>
             </div>
             <div class="grid gap-2 sm:grid-cols-3">
               <select v-model.number="taskFilters.supplier_id" class="input h-9 py-1 text-sm" @change="resetTaskPagination">
@@ -153,7 +155,7 @@
               </select>
               <select v-model="taskFilters.type" class="input h-9 py-1 text-sm" @change="resetTaskPagination">
                 <option value="">全部类型</option>
-                <option v-for="option in allTaskTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                <option v-for="option in taskTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
               </select>
             </div>
           </div>
@@ -271,6 +273,7 @@ import {
   type ExtensionManifestInfo,
   type ExtensionTask,
   type ExtensionTaskType,
+  type ScheduledTask,
   type SchedulerRun,
   type SchedulerStatus,
   type Supplier
@@ -298,22 +301,22 @@ const taskPagination = reactive({
   pages: 0
 })
 
-const scheduledTaskTypeOptions: Array<{ value: ExtensionTaskType; label: string; description: string }> = [
-  { value: 'fetch_rates', label: '费率采集', description: '使用后端适配器或浏览器兜底采集供应商费率' },
-  { value: 'fetch_groups', label: '分组采集', description: '采集分组、倍率和私有标记' },
-  { value: 'fetch_balance', label: '余额采集', description: '采集余额和可切换状态' },
-  { value: 'fetch_promotions', label: '优惠采集', description: '采集充值赠送、折扣和活动' },
-  { value: 'fetch_health', label: '健康采集', description: '采集延迟、错误和并发容量' },
-  { value: 'export_bills', label: '账单采集', description: '采集账单明细用于成本对账' }
+const compatTaskTypeOptions: Array<{ value: ExtensionTaskType; label: string; description: string }> = [
+  { value: 'fetch_rates', label: '费率同步', description: '后端使用已保存会话读取费率' },
+  { value: 'fetch_groups', label: '分组同步', description: '后端使用已保存会话读取分组' },
+  { value: 'fetch_balance', label: '余额同步', description: '后端使用已保存会话读取余额' },
+  { value: 'fetch_announcements', label: '公告同步', description: '后端使用已保存会话读取供应商公告、通知和充值页' },
+  { value: 'fetch_health', label: '健康探测', description: '后端使用本地 Sub2API 账号执行 OpenAI-compatible 探测' },
+  { value: 'export_bills', label: '账单同步', description: '后端使用已保存会话读取账单' }
 ]
 
-const sessionTaskTypeOption = { value: 'capture_supplier_session' as ExtensionTaskType, label: '会话上报' }
-const allTaskTypeOptions = computed(() => [sessionTaskTypeOption, ...scheduledTaskTypeOptions])
+const sessionTaskTypeOption = { value: 'capture_supplier_session' as ExtensionTaskType, label: '会话上报', description: '插件只采集并上报供应商浏览器会话' }
+const taskTypeOptions = computed(() => [sessionTaskTypeOption, ...compatTaskTypeOptions])
 
 const form = reactive({
   supplier_id: 0,
   window_minutes: 10,
-  task_types: ['fetch_rates', 'fetch_groups', 'fetch_balance', 'fetch_promotions', 'fetch_health', 'export_bills'] as ExtensionTaskType[]
+  task_types: ['capture_supplier_session'] as ExtensionTaskType[]
 })
 
 const taskFilters = reactive({
@@ -342,7 +345,7 @@ function supplierName(id: number): string {
 }
 
 function taskTypeLabel(value: ExtensionTaskType): string {
-  return allTaskTypeOptions.value.find((option) => option.value === value)?.label || value
+  return taskTypeOptions.value.find((option) => option.value === value)?.label || value
 }
 
 function reasonLabel(reason?: string): string {
@@ -352,23 +355,48 @@ function reasonLabel(reason?: string): string {
     supplier_disabled: '供应商已停用',
     supplier_paused: '供应商已暂停',
     credential_invalid: '凭据失效',
+    supplier_url_missing: '缺少后台或 API 地址',
     browser_login_disabled: '未启用 Chrome 登录',
     dashboard_url_missing: '缺少后台地址',
     browser_login_credential_missing: '缺少登录账号或 Token',
-    not_switch_eligible: '无可用余额或不可切换'
+    not_switch_eligible: '无可用余额或不可切换',
+    group_syncer_missing: '分组同步未配置',
+    rate_syncer_missing: '费率同步未配置',
+    balance_syncer_missing: '余额同步未配置',
+    announcement_syncer_missing: '公告同步未配置',
+    health_syncer_missing: '健康探测未配置',
+    billing_syncer_missing: '账单同步未配置',
+    direct_sync_not_supported: '不支持后端直连'
   }[reason] || reason
 }
 
-function runItemStatus(item: { created: boolean; reason?: string }): string {
-  if (item.created) return '已创建'
-  if (item.reason) return '已跳过'
-  return '可生成'
+function actionLabel(action?: ScheduledTask['action']): string {
+  return {
+    direct_sync: '后端同步',
+    extension_task: '插件任务',
+    compat_task: '兼容兜底'
+  }[action || 'compat_task']
 }
 
-function runItemClass(item: { created: boolean; reason?: string }): string {
+function runItemStatus(item: ScheduledTask): string {
+  if (item.synced) return '已同步'
+  if (item.created) return '已创建'
+  if (item.reason) return '已跳过'
+  return item.action === 'direct_sync' ? '可同步' : '可创建'
+}
+
+function runItemClass(item: ScheduledTask): string {
+  if (item.synced) return 'badge-success'
   if (item.created) return 'badge-success'
   if (item.reason) return 'badge-warning'
   return 'badge-success'
+}
+
+function runItemResult(item: ScheduledTask): string {
+  if (item.reason) return reasonLabel(item.reason)
+  if (item.synced) return `同步 ${item.total || 0} 条`
+  if (item.created) return '已写入插件队列'
+  return item.action === 'direct_sync' ? '预检通过' : '可写入插件队列'
 }
 
 function taskStatusLabel(statusValue: ExtensionTask['status']): string {
@@ -498,10 +526,11 @@ async function submitRun() {
       task_types: form.task_types,
       window_minutes: Number(form.window_minutes || 10)
     })
-    appStore.showSuccess(`已创建 ${lastRun.value.created_count} 个任务，跳过 ${lastRun.value.skipped_count} 个`)
+    const syncedCount = lastRun.value.items.filter((item) => item.synced).length
+    appStore.showSuccess(`已同步 ${syncedCount} 项，创建 ${lastRun.value.created_count} 个插件任务，跳过 ${lastRun.value.skipped_count} 项`)
     await Promise.all([runDiagnosis(), loadTasks()])
   } catch (error) {
-    appStore.showError((error as { message?: string }).message || '生成采集任务失败')
+    appStore.showError((error as { message?: string }).message || '执行调度失败')
   } finally {
     running.value = false
   }

@@ -5,7 +5,13 @@ import (
 	"testing"
 	"time"
 
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
+	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
+	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
+	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
+	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/stretchr/testify/require"
@@ -34,32 +40,94 @@ func TestServiceRunCreatesDurableExtensionTasksAndDeduplicates(t *testing.T) {
 
 	first, err := service.Run(context.Background(), RunInput{
 		Mode:      "manual",
-		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchRates, adminplusdomain.ExtensionTaskTypeFetchHealth},
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCaptureSession},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 2, first.CreatedCount)
+	require.Equal(t, 1, first.CreatedCount)
 	require.Equal(t, 0, first.SkippedCount)
-	require.Len(t, first.Items, 2)
+	require.Len(t, first.Items, 1)
 	require.NotEmpty(t, first.Items[0].ScheduleKey)
 
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
 	require.NoError(t, err)
-	require.Len(t, tasks, 2)
+	require.Len(t, tasks, 1)
 	require.Contains(t, tasks[0].Payload, "schedule_key")
 
 	second, err := service.Run(context.Background(), RunInput{
 		Mode:      "manual",
-		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchRates, adminplusdomain.ExtensionTaskTypeFetchHealth},
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCaptureSession},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 0, second.CreatedCount)
-	require.Equal(t, 2, second.SkippedCount)
-	require.Len(t, second.Items, 2)
+	require.Equal(t, 1, second.SkippedCount)
+	require.Len(t, second.Items, 1)
 	for _, item := range second.Items {
 		require.False(t, item.Created)
 		require.Equal(t, "duplicate", item.Reason)
 		require.NotZero(t, item.TaskID)
 	}
+}
+
+func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	groupSyncer := &stubGroupSyncer{total: 2}
+	rateSyncer := &stubRateSyncer{total: 3}
+	balanceSyncer := &stubBalanceSyncer{total: 1}
+	announcementSyncer := &stubAnnouncementSyncer{total: 5}
+	healthSyncer := &stubHealthSyncer{total: 1}
+	billingSyncer := &stubBillingSyncer{total: 4}
+	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, billingSyncer)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+
+	supplier := createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:            "relay-a",
+		Kind:            adminplusdomain.SupplierKindRelay,
+		Type:            adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:   adminplusdomain.SupplierRuntimeStatusActive,
+		HealthStatus:    adminplusdomain.SupplierHealthStatusNormal,
+		DashboardURL:    "https://relay-a.example.com",
+		BalanceCents:    500_00,
+		BalanceCurrency: "CNY",
+	})
+
+	run, err := service.Run(context.Background(), RunInput{
+		Mode: "manual",
+		TaskTypes: []adminplusdomain.ExtensionTaskType{
+			adminplusdomain.ExtensionTaskTypeFetchGroups,
+			adminplusdomain.ExtensionTaskTypeFetchRates,
+			adminplusdomain.ExtensionTaskTypeFetchBalance,
+			adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+			adminplusdomain.ExtensionTaskTypeFetchHealth,
+			adminplusdomain.ExtensionTaskTypeExportBills,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, run.CreatedCount)
+	require.Equal(t, 6, run.EligibleCount)
+	require.Equal(t, 0, run.SkippedCount)
+	require.Len(t, run.Items, 6)
+	for _, item := range run.Items {
+		require.Equal(t, actionDirectSync, item.Action)
+		require.True(t, item.Synced)
+		require.NotZero(t, item.Total)
+		require.Zero(t, item.TaskID)
+		require.Empty(t, item.Reason)
+	}
+	require.Equal(t, 1, groupSyncer.calls)
+	require.Equal(t, 1, rateSyncer.calls)
+	require.Equal(t, 1, balanceSyncer.calls)
+	require.Equal(t, 1, announcementSyncer.calls)
+	require.Equal(t, 1, healthSyncer.calls)
+	require.Equal(t, 1, billingSyncer.calls)
+	require.Equal(t, time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC), billingSyncer.startedAt)
+	require.Equal(t, time.Date(2026, 6, 21, 0, 0, 0, 0, time.UTC), billingSyncer.endedAt)
+
+	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
+	require.NoError(t, err)
+	require.Empty(t, tasks)
 }
 
 func TestServiceRunDryRunExplainsEligibleTasksWithoutWritingQueue(t *testing.T) {
@@ -96,6 +164,7 @@ func TestServiceRunDryRunExplainsEligibleTasksWithoutWritingQueue(t *testing.T) 
 	require.Equal(t, 0, run.SkippedCount)
 	require.Len(t, run.Items, 1)
 	require.Equal(t, adminplusdomain.ExtensionTaskTypeFetchGroups, run.Items[0].TaskType)
+	require.Equal(t, actionDirectSync, run.Items[0].Action)
 	require.NotEmpty(t, run.Items[0].ScheduleKey)
 
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
@@ -103,7 +172,7 @@ func TestServiceRunDryRunExplainsEligibleTasksWithoutWritingQueue(t *testing.T) 
 	require.Empty(t, tasks)
 }
 
-func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
+func TestServiceRunDefaultsToCaptureSessionTask(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	service := NewService(supplierService, extensionService)
@@ -112,12 +181,56 @@ func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
 	}
 
 	supplier := createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
-		Name:                 "promotion-only",
+		Name:                 "relay-a",
+		Kind:                 adminplusdomain.SupplierKindRelay,
+		Type:                 adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:        adminplusdomain.SupplierRuntimeStatusActive,
+		HealthStatus:         adminplusdomain.SupplierHealthStatusNormal,
+		DashboardURL:         "https://relay-a.example.com",
+		BrowserLoginEnabled:  true,
+		BrowserLoginUsername: "ops@example.com",
+		BalanceCents:         500_00,
+		BalanceCurrency:      "CNY",
+	})
+
+	run, err := service.Run(context.Background(), RunInput{Mode: "manual"})
+
+	require.NoError(t, err)
+	require.Equal(t, []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCaptureSession}, run.TaskTypes)
+	require.Equal(t, 1, run.CreatedCount)
+	require.Len(t, run.Items, 1)
+	require.Equal(t, adminplusdomain.ExtensionTaskTypeCaptureSession, run.Items[0].TaskType)
+
+	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, adminplusdomain.ExtensionTaskTypeCaptureSession, tasks[0].Type)
+}
+
+func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	service := NewServiceWithDependencies(
+		supplierService,
+		extensionService,
+		&stubGroupSyncer{total: 1},
+		&stubRateSyncer{total: 1},
+		&stubBalanceSyncer{total: 1},
+		&stubAnnouncementSyncer{total: 1},
+		&stubHealthSyncer{total: 1},
+		nil,
+	)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+
+	supplier := createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:                 "announcement-only",
 		Kind:                 adminplusdomain.SupplierKindRelay,
 		Type:                 adminplusdomain.SupplierTypeSub2API,
 		RuntimeStatus:        adminplusdomain.SupplierRuntimeStatusMonitorOnly,
 		HealthStatus:         adminplusdomain.SupplierHealthStatusNormal,
-		DashboardURL:         "https://promotion-only.example.com",
+		DashboardURL:         "https://announcement-only.example.com",
 		BrowserLoginEnabled:  true,
 		BrowserLoginUsername: "ops@example.com",
 		BalanceCents:         0,
@@ -130,36 +243,39 @@ func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
 			adminplusdomain.ExtensionTaskTypeFetchRates,
 			adminplusdomain.ExtensionTaskTypeFetchGroups,
 			adminplusdomain.ExtensionTaskTypeFetchBalance,
-			adminplusdomain.ExtensionTaskTypeFetchPromotions,
+			adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 			adminplusdomain.ExtensionTaskTypeFetchHealth,
 			adminplusdomain.ExtensionTaskTypeExportBills,
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 4, run.CreatedCount)
+	require.Equal(t, 0, run.CreatedCount)
+	require.Equal(t, 4, run.EligibleCount)
 	require.Equal(t, 2, run.SkippedCount)
 
 	reasons := make(map[adminplusdomain.ExtensionTaskType]string)
 	for _, item := range run.Items {
 		reasons[item.TaskType] = item.Reason
 	}
-	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchRates])
 	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchGroups])
+	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchRates])
 	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchBalance])
-	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchPromotions])
+	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchAnnouncements])
 	require.Equal(t, "not_switch_eligible", reasons[adminplusdomain.ExtensionTaskTypeFetchHealth])
 	require.Equal(t, "not_switch_eligible", reasons[adminplusdomain.ExtensionTaskTypeExportBills])
+	for _, item := range run.Items {
+		if item.TaskType == adminplusdomain.ExtensionTaskTypeFetchGroups || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchRates || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchBalance || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchAnnouncements {
+			require.Equal(t, actionDirectSync, item.Action)
+			require.True(t, item.Synced)
+		}
+	}
 
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
 	require.NoError(t, err)
-	require.Len(t, tasks, 4)
-	for _, task := range tasks {
-		require.NotEqual(t, adminplusdomain.ExtensionTaskTypeFetchHealth, task.Type)
-		require.NotEqual(t, adminplusdomain.ExtensionTaskTypeExportBills, task.Type)
-	}
+	require.Empty(t, tasks)
 }
 
-func TestServiceRunSkipsSupplierWithoutBrowserCredential(t *testing.T) {
+func TestServiceRunSkipsExtensionTaskWithoutBrowserCredential(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	service := NewService(supplierService, extensionService)
@@ -182,12 +298,80 @@ func TestServiceRunSkipsSupplierWithoutBrowserCredential(t *testing.T) {
 
 	run, err := service.Run(context.Background(), RunInput{
 		Mode:      "manual",
-		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchRates},
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCaptureSession},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 0, run.CreatedCount)
 	require.Equal(t, 1, run.SkippedCount)
 	require.Equal(t, "browser_login_disabled", run.Items[0].Reason)
+}
+
+type stubGroupSyncer struct {
+	calls int
+	total int
+}
+
+func (s *stubGroupSyncer) Sync(_ context.Context, supplierID int64) (*suppliergroupsapp.SyncResult, error) {
+	s.calls++
+	return &suppliergroupsapp.SyncResult{SupplierID: supplierID, Total: s.total}, nil
+}
+
+type stubRateSyncer struct {
+	calls int
+	total int
+}
+
+func (s *stubRateSyncer) SyncFromSession(_ context.Context, in ratesapp.SyncFromSessionInput) (*ratesapp.SyncFromSessionResult, error) {
+	s.calls++
+	return &ratesapp.SyncFromSessionResult{SupplierID: in.SupplierID, Total: s.total}, nil
+}
+
+type stubBalanceSyncer struct {
+	calls int
+	total int
+}
+
+func (s *stubBalanceSyncer) SyncFromSession(_ context.Context, in balancesapp.SyncFromSessionInput) (*balancesapp.SyncFromSessionResult, error) {
+	s.calls++
+	result := &balancesapp.SyncFromSessionResult{SupplierID: in.SupplierID}
+	if s.total > 0 {
+		result.Snapshot = &adminplusdomain.BalanceSnapshot{SupplierID: in.SupplierID}
+	}
+	return result, nil
+}
+
+type stubAnnouncementSyncer struct {
+	calls int
+	total int
+}
+
+func (s *stubAnnouncementSyncer) SyncFromSession(_ context.Context, in announcementsapp.SyncFromSessionInput) (*announcementsapp.SyncFromSessionResult, error) {
+	s.calls++
+	return &announcementsapp.SyncFromSessionResult{SupplierID: in.SupplierID, Total: s.total}, nil
+}
+
+type stubHealthSyncer struct {
+	calls int
+	total int
+}
+
+func (s *stubHealthSyncer) SyncFromSession(_ context.Context, in healthapp.SyncFromSessionInput) (*healthapp.SyncFromSessionResult, error) {
+	s.calls++
+	return &healthapp.SyncFromSessionResult{SupplierID: in.SupplierID, Total: s.total}, nil
+}
+
+type stubBillingSyncer struct {
+	calls     int
+	total     int
+	startedAt time.Time
+	endedAt   time.Time
+}
+
+func (s *stubBillingSyncer) SyncFromSession(_ context.Context, in billingapp.SyncFromSessionInput) (*billingapp.SyncFromSessionResult, error) {
+	s.calls++
+	s.startedAt = in.StartedAt
+	s.endedAt = in.EndedAt
+	return &billingapp.SyncFromSessionResult{SupplierID: in.SupplierID, Total: s.total}, nil
 }
 
 func createSchedulerSupplier(t *testing.T, service *suppliersapp.Service, in suppliersapp.CreateSupplierInput) *adminplusdomain.Supplier {

@@ -1,4 +1,4 @@
-package promotions
+package announcements
 
 import (
 	"context"
@@ -13,32 +13,32 @@ import (
 type MemoryRepository struct {
 	mu          sync.Mutex
 	nextEventID int64
-	events      []*adminplusdomain.PromotionEvent
+	events      []*adminplusdomain.AnnouncementEvent
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{nextEventID: 1}
 }
 
-func (r *MemoryRepository) CreateEvent(_ context.Context, event *adminplusdomain.PromotionEvent) (*adminplusdomain.PromotionEvent, error) {
+func (r *MemoryRepository) CreateEvent(_ context.Context, event *adminplusdomain.AnnouncementEvent) (*adminplusdomain.AnnouncementEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	cp := cloneMemoryPromotionEvent(event)
+	cp := cloneMemoryAnnouncementEvent(event)
 	cp.ID = r.nextEventID
 	r.nextEventID++
 	if cp.CreatedAt.IsZero() {
 		cp.CreatedAt = cp.CapturedAt
 	}
 	r.events = append(r.events, cp)
-	return cloneMemoryPromotionEvent(cp), nil
+	return cloneMemoryAnnouncementEvent(cp), nil
 }
 
-func (r *MemoryRepository) ListEvents(_ context.Context, filter EventFilter) ([]*adminplusdomain.PromotionEvent, error) {
+func (r *MemoryRepository) ListEvents(_ context.Context, filter EventFilter) ([]*adminplusdomain.AnnouncementEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	items := make([]*adminplusdomain.PromotionEvent, 0, len(r.events))
+	items := make([]*adminplusdomain.AnnouncementEvent, 0, len(r.events))
 	for _, item := range r.events {
 		if filter.SupplierID > 0 && item.SupplierID != filter.SupplierID {
 			continue
@@ -49,7 +49,7 @@ func (r *MemoryRepository) ListEvents(_ context.Context, filter EventFilter) ([]
 		if filter.Recommendation != "" && item.Recommendation != filter.Recommendation {
 			continue
 		}
-		items = append(items, cloneMemoryPromotionEvent(item))
+		items = append(items, cloneMemoryAnnouncementEvent(item))
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
@@ -63,20 +63,20 @@ func (r *MemoryRepository) ListEvents(_ context.Context, filter EventFilter) ([]
 	return items, nil
 }
 
-func (r *MemoryRepository) UpdateEventStatus(_ context.Context, id int64, status adminplusdomain.PromotionStatus) (*adminplusdomain.PromotionEvent, error) {
+func (r *MemoryRepository) UpdateEventStatus(_ context.Context, id int64, status adminplusdomain.AnnouncementStatus) (*adminplusdomain.AnnouncementEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	for _, event := range r.events {
 		if event.ID == id {
 			event.Status = status
-			return cloneMemoryPromotionEvent(event), nil
+			return cloneMemoryAnnouncementEvent(event), nil
 		}
 	}
-	return nil, infraerrors.New(http.StatusNotFound, "PROMOTION_EVENT_NOT_FOUND", "promotion event not found")
+	return nil, infraerrors.New(http.StatusNotFound, "ANNOUNCEMENT_EVENT_NOT_FOUND", "announcement event not found")
 }
 
-func cloneMemoryPromotionEvent(in *adminplusdomain.PromotionEvent) *adminplusdomain.PromotionEvent {
+func cloneMemoryAnnouncementEvent(in *adminplusdomain.AnnouncementEvent) *adminplusdomain.AnnouncementEvent {
 	if in == nil {
 		return nil
 	}

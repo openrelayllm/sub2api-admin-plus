@@ -9,7 +9,13 @@ import (
 	"sync"
 	"time"
 
+	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
+	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	billingapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/billing"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
+	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
+	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
+	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 )
@@ -18,6 +24,10 @@ const (
 	defaultWindowMinutes = 10
 	dailyBucketLayout    = "20060102"
 	windowBucketLayout   = "200601021504"
+
+	actionDirectSync    = "direct_sync"
+	actionExtensionTask = "extension_task"
+	actionCompatTask    = "compat_task"
 )
 
 type RunInput struct {
@@ -30,9 +40,39 @@ type RunInput struct {
 }
 
 type Service struct {
-	supplierService  *suppliersapp.Service
-	extensionService *extensionapp.Service
-	now              func() time.Time
+	supplierService    *suppliersapp.Service
+	extensionService   *extensionapp.Service
+	groupSyncer        GroupSyncer
+	rateSyncer         RateSyncer
+	balanceSyncer      BalanceSyncer
+	announcementSyncer AnnouncementSyncer
+	healthSyncer       HealthSyncer
+	billingSyncer      BillingSyncer
+	now                func() time.Time
+}
+
+type GroupSyncer interface {
+	Sync(ctx context.Context, supplierID int64) (*suppliergroupsapp.SyncResult, error)
+}
+
+type RateSyncer interface {
+	SyncFromSession(ctx context.Context, in ratesapp.SyncFromSessionInput) (*ratesapp.SyncFromSessionResult, error)
+}
+
+type BalanceSyncer interface {
+	SyncFromSession(ctx context.Context, in balancesapp.SyncFromSessionInput) (*balancesapp.SyncFromSessionResult, error)
+}
+
+type AnnouncementSyncer interface {
+	SyncFromSession(ctx context.Context, in announcementsapp.SyncFromSessionInput) (*announcementsapp.SyncFromSessionResult, error)
+}
+
+type HealthSyncer interface {
+	SyncFromSession(ctx context.Context, in healthapp.SyncFromSessionInput) (*healthapp.SyncFromSessionResult, error)
+}
+
+type BillingSyncer interface {
+	SyncFromSession(ctx context.Context, in billingapp.SyncFromSessionInput) (*billingapp.SyncFromSessionResult, error)
 }
 
 func NewService(supplierService *suppliersapp.Service, extensionService *extensionapp.Service) *Service {
@@ -41,6 +81,26 @@ func NewService(supplierService *suppliersapp.Service, extensionService *extensi
 		extensionService: extensionService,
 		now:              time.Now,
 	}
+}
+
+func NewServiceWithDependencies(
+	supplierService *suppliersapp.Service,
+	extensionService *extensionapp.Service,
+	groupSyncer GroupSyncer,
+	rateSyncer RateSyncer,
+	balanceSyncer BalanceSyncer,
+	announcementSyncer AnnouncementSyncer,
+	healthSyncer HealthSyncer,
+	billingSyncer BillingSyncer,
+) *Service {
+	service := NewService(supplierService, extensionService)
+	service.groupSyncer = groupSyncer
+	service.rateSyncer = rateSyncer
+	service.balanceSyncer = balanceSyncer
+	service.announcementSyncer = announcementSyncer
+	service.healthSyncer = healthSyncer
+	service.billingSyncer = billingSyncer
+	return service
 }
 
 func (s *Service) Run(ctx context.Context, in RunInput) (*adminplusdomain.SchedulerRun, error) {
@@ -82,6 +142,8 @@ func (s *Service) Run(ctx context.Context, in RunInput) (*adminplusdomain.Schedu
 			item := s.scheduleSupplierTask(ctx, supplier, taskType, mode, windowMinutes, in.Now, in.DryRun)
 			if item.Created {
 				run.CreatedCount++
+			} else if item.Synced {
+				run.EligibleCount++
 			} else if item.Reason == "" {
 				run.EligibleCount++
 			} else {
@@ -106,6 +168,7 @@ func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusd
 		SupplierID:   supplier.ID,
 		SupplierName: supplier.Name,
 		TaskType:     taskType,
+		Action:       actionForTaskType(taskType),
 	}
 	if reason := ineligibleReason(supplier, taskType); reason != "" {
 		item.Reason = reason
@@ -114,6 +177,10 @@ func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusd
 	bucket := scheduleBucket(taskType, now, windowMinutes)
 	item.ScheduleKey = fmt.Sprintf("scheduler:%s:supplier:%d:%s", taskType, supplier.ID, bucket)
 	if dryRun {
+		return item
+	}
+	if item.Action == actionDirectSync {
+		s.syncSupplierTask(ctx, supplier, taskType, now, &item)
 		return item
 	}
 	task, created, err := s.extensionService.CreateTaskIfAbsent(ctx, extensionapp.CreateTaskInput{
@@ -149,15 +216,102 @@ func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusd
 	return item
 }
 
+func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, now time.Time, item *adminplusdomain.ScheduledTask) {
+	switch taskType {
+	case adminplusdomain.ExtensionTaskTypeFetchGroups:
+		if s.groupSyncer == nil {
+			item.Reason = "group_syncer_missing"
+			return
+		}
+		result, err := s.groupSyncer.Sync(ctx, supplier.ID)
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil {
+			item.Total = result.Total
+		}
+	case adminplusdomain.ExtensionTaskTypeFetchRates:
+		if s.rateSyncer == nil {
+			item.Reason = "rate_syncer_missing"
+			return
+		}
+		result, err := s.rateSyncer.SyncFromSession(ctx, ratesapp.SyncFromSessionInput{SupplierID: supplier.ID})
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil {
+			item.Total = result.Total
+		}
+	case adminplusdomain.ExtensionTaskTypeFetchBalance:
+		if s.balanceSyncer == nil {
+			item.Reason = "balance_syncer_missing"
+			return
+		}
+		result, err := s.balanceSyncer.SyncFromSession(ctx, balancesapp.SyncFromSessionInput{SupplierID: supplier.ID})
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil && result.Snapshot != nil {
+			item.Total = 1
+		}
+	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
+		if s.announcementSyncer == nil {
+			item.Reason = "announcement_syncer_missing"
+			return
+		}
+		result, err := s.announcementSyncer.SyncFromSession(ctx, announcementsapp.SyncFromSessionInput{SupplierID: supplier.ID})
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil {
+			item.Total = result.Total
+		}
+	case adminplusdomain.ExtensionTaskTypeFetchHealth:
+		if s.healthSyncer == nil {
+			item.Reason = "health_syncer_missing"
+			return
+		}
+		result, err := s.healthSyncer.SyncFromSession(ctx, healthapp.SyncFromSessionInput{SupplierID: supplier.ID})
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil {
+			item.Total = result.Total
+		}
+	case adminplusdomain.ExtensionTaskTypeExportBills:
+		if s.billingSyncer == nil {
+			item.Reason = "billing_syncer_missing"
+			return
+		}
+		startedAt, endedAt := billingWindow(now)
+		result, err := s.billingSyncer.SyncFromSession(ctx, billingapp.SyncFromSessionInput{
+			SupplierID: supplier.ID,
+			StartedAt:  startedAt,
+			EndedAt:    endedAt,
+		})
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil {
+			item.Total = result.Total
+		}
+	default:
+		item.Reason = "direct_sync_not_supported"
+		return
+	}
+	item.Synced = true
+}
+
 func normalizeTaskTypes(input []adminplusdomain.ExtensionTaskType) []adminplusdomain.ExtensionTaskType {
 	if len(input) == 0 {
 		return []adminplusdomain.ExtensionTaskType{
-			adminplusdomain.ExtensionTaskTypeFetchRates,
-			adminplusdomain.ExtensionTaskTypeFetchGroups,
-			adminplusdomain.ExtensionTaskTypeFetchBalance,
-			adminplusdomain.ExtensionTaskTypeFetchPromotions,
-			adminplusdomain.ExtensionTaskTypeFetchHealth,
-			adminplusdomain.ExtensionTaskTypeExportBills,
+			adminplusdomain.ExtensionTaskTypeCaptureSession,
 		}
 	}
 	out := make([]adminplusdomain.ExtensionTaskType, 0, len(input))
@@ -185,14 +339,19 @@ func ineligibleReason(supplier *adminplusdomain.Supplier, taskType adminplusdoma
 	if supplier.HealthStatus == adminplusdomain.SupplierHealthStatusCredentialInvalid {
 		return "credential_invalid"
 	}
-	if !supplier.Credential.BrowserLoginEnabled {
-		return "browser_login_disabled"
+	if actionForTaskType(taskType) == actionDirectSync && supplier.DashboardURL == "" && supplier.APIBaseURL == "" {
+		return "supplier_url_missing"
 	}
-	if supplier.DashboardURL == "" {
+	if actionForTaskType(taskType) != actionDirectSync && supplier.DashboardURL == "" {
 		return "dashboard_url_missing"
 	}
-	if !supplier.Credential.BrowserLoginUsernameConfigured && !supplier.Credential.BrowserLoginTokenConfigured {
-		return "browser_login_credential_missing"
+	if actionForTaskType(taskType) != actionDirectSync {
+		if !supplier.Credential.BrowserLoginEnabled {
+			return "browser_login_disabled"
+		}
+		if !supplier.Credential.BrowserLoginUsernameConfigured && !supplier.Credential.BrowserLoginTokenConfigured {
+			return "browser_login_credential_missing"
+		}
 	}
 	switch taskType {
 	case adminplusdomain.ExtensionTaskTypeFetchHealth, adminplusdomain.ExtensionTaskTypeExportBills:
@@ -201,6 +360,27 @@ func ineligibleReason(supplier *adminplusdomain.Supplier, taskType adminplusdoma
 		}
 	}
 	return ""
+}
+
+func actionForTaskType(taskType adminplusdomain.ExtensionTaskType) string {
+	switch taskType {
+	case adminplusdomain.ExtensionTaskTypeFetchGroups,
+		adminplusdomain.ExtensionTaskTypeFetchRates,
+		adminplusdomain.ExtensionTaskTypeFetchBalance,
+		adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+		adminplusdomain.ExtensionTaskTypeFetchHealth,
+		adminplusdomain.ExtensionTaskTypeExportBills:
+		return actionDirectSync
+	case adminplusdomain.ExtensionTaskTypeCaptureSession:
+		return actionExtensionTask
+	default:
+		return actionCompatTask
+	}
+}
+
+func billingWindow(now time.Time) (time.Time, time.Time) {
+	startedAt := now.UTC().Truncate(24 * time.Hour)
+	return startedAt, startedAt.Add(24 * time.Hour)
 }
 
 func scheduleBucket(taskType adminplusdomain.ExtensionTaskType, now time.Time, windowMinutes int) string {
@@ -213,13 +393,15 @@ func scheduleBucket(taskType adminplusdomain.ExtensionTaskType, now time.Time, w
 
 func taskPriority(taskType adminplusdomain.ExtensionTaskType) int {
 	switch taskType {
+	case adminplusdomain.ExtensionTaskTypeCaptureSession:
+		return 95
 	case adminplusdomain.ExtensionTaskTypeFetchGroups:
 		return 85
 	case adminplusdomain.ExtensionTaskTypeFetchBalance:
 		return 90
 	case adminplusdomain.ExtensionTaskTypeFetchRates:
 		return 80
-	case adminplusdomain.ExtensionTaskTypeFetchPromotions:
+	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
 		return 70
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return 60

@@ -119,13 +119,13 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/admin/operations/promotions',
-    name: 'AdminPlusPromotions',
-    component: () => import('@/views/admin/operations/PromotionsView.vue'),
+    path: '/admin/operations/announcements',
+    name: 'AdminPlusAnnouncements',
+    component: () => import('@/views/admin/operations/AnnouncementsView.vue'),
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
-      title: '优惠监控'
+      title: '公告监控'
     }
   },
   {

@@ -120,7 +120,7 @@ func TestServiceFailTaskRetriesUntilMaxAttempts(t *testing.T) {
 	svc.newToken = func() (string, error) { return "lease-token", nil }
 	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
 		SupplierID:  1,
-		Type:        adminplusdomain.ExtensionTaskTypeFetchPromotions,
+		Type:        adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 		MaxAttempts: 2,
 	})
 	require.NoError(t, err)

@@ -18,8 +18,15 @@ export class AdminPlusClient {
       method: 'POST',
       body: {
         device_id: deviceID,
-        supplier_id: supplierID,
+        ...(supplierID ? { supplier_id: supplierID } : {}),
         lease_ttl_seconds: 300,
+        url: payload.source_url || '',
+        host: payload.source_host || '',
+        origin: payload.source_origin || '',
+        dashboard_url: payload.dashboard_url || '',
+        api_base_url: payload.api_base_url || '',
+        auto_create_supplier: payload.auto_create_supplier,
+        page_context: payload.page_context || {},
         payload
       }
     })

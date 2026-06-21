@@ -353,7 +353,8 @@ func (r *SQLRepository) ListAccounts(ctx context.Context, supplierID int64) ([]*
 			asa.balance_threshold_cents, asa.balance_cents, asa.balance_currency, asa.has_usable_balance,
 			asa.runtime_status, asa.health_status, asa.created_at, asa.updated_at,
 			COALESCE(sg.id, 0), COALESCE(sg.external_group_id, ''), COALESCE(sg.name, ''),
-			COALESCE(sg.provider_family, ''), COALESCE(sg.effective_rate_multiplier, 0)
+			COALESCE(sg.provider_family, ''), COALESCE(sg.effective_rate_multiplier, 0),
+			COALESCE(sk.name, ''), COALESCE(sk.external_key_id, ''), COALESCE(sk.key_last4, '')
 		FROM admin_plus_supplier_accounts asa
 		LEFT JOIN admin_plus_supplier_keys sk ON sk.id = asa.supplier_key_id
 		LEFT JOIN admin_plus_supplier_groups sg ON sg.id = sk.supplier_group_id
@@ -713,6 +714,9 @@ func scanSupplierAccountWithGroup(scanner supplierScanner) (*adminplusdomain.Sup
 		&account.SupplierGroupName,
 		&account.SupplierGroupProvider,
 		&account.SupplierGroupRate,
+		&account.SupplierKeyName,
+		&account.SupplierKeyExternalID,
+		&account.SupplierKeyLast4,
 	)
 	if err == sql.ErrNoRows {
 		return nil, err

@@ -3,10 +3,6 @@ package ports
 import (
 	"context"
 	"time"
-
-	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
-	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
-	promotionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/promotions"
 )
 
 var _ ProviderAdapter = (*stubProviderAdapter)(nil)
@@ -21,17 +17,17 @@ func (s *stubProviderAdapter) FetchRateCatalog(_ context.Context, _ FetchContext
 	return nil, nil
 }
 
-func (s *stubProviderAdapter) FetchBalance(_ context.Context, _ FetchContext) (*balancesapp.RecordSnapshotInput, error) {
-	return &balancesapp.RecordSnapshotInput{SupplierID: 1}, nil
+func (s *stubProviderAdapter) FetchBalance(_ context.Context, _ FetchContext) (*ProviderBalanceSnapshotInput, error) {
+	return &ProviderBalanceSnapshotInput{SupplierID: 1}, nil
 }
 
-func (s *stubProviderAdapter) FetchPromotions(_ context.Context, _ FetchContext) ([]promotionsapp.RecordPromotionInput, error) {
+func (s *stubProviderAdapter) FetchAnnouncements(_ context.Context, _ FetchContext) ([]ProviderAnnouncement, error) {
 	return nil, nil
 }
 
-func (s *stubProviderAdapter) FetchHealthSample(_ context.Context, _ FetchContext) (*healthapp.RecordSampleInput, error) {
+func (s *stubProviderAdapter) FetchHealthSample(_ context.Context, _ FetchContext) (*ProviderHealthSampleInput, error) {
 	capturedAt := time.Now()
-	return &healthapp.RecordSampleInput{SupplierID: 1, CapturedAt: &capturedAt}, nil
+	return &ProviderHealthSampleInput{SupplierID: 1, CapturedAt: &capturedAt}, nil
 }
 
 func (s *stubProviderAdapter) ExportBills(_ context.Context, _ BillExportRequest) (*BillExportResult, error) {
