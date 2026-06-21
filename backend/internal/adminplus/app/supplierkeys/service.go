@@ -752,10 +752,6 @@ func validLocalPlatform(platform string) bool {
 	}
 }
 
-func (s *Service) ensureLocalAccountStateForAccount(ctx context.Context, localAccount *service.Account, localGroupID int64, baseURL string, key *adminplusdomain.SupplierKey, group *adminplusdomain.SupplierGroup) (bool, *service.Account, error) {
-	return s.ensureLocalAccountStateForGroups(ctx, localAccount, []int64{localGroupID}, baseURL, key, group)
-}
-
 func (s *Service) ensureLocalAccountGatewayReady(ctx context.Context) error {
 	finder, ok := s.sub2apiGateway.(Sub2APIAccountFinder)
 	if !ok {
@@ -1254,15 +1250,6 @@ func trimLimit(value string, limit int) string {
 		return value
 	}
 	return value[:limit]
-}
-
-func trimRunes(value string, limit int) string {
-	value = strings.TrimSpace(value)
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }
 
 func cloneMap(in map[string]any) map[string]any {
