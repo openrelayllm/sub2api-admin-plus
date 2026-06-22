@@ -18,14 +18,6 @@ assert.equal(rates.result.entries[0].price_item, 'input')
 assert.equal(rates.result.entries[0].unit, '1m_tokens')
 assert.equal(rates.result.entries[0].price_micros, 150000)
 
-const balance = parser.collectBalance({
-  url,
-  text: '账户信息\n可用余额：￥123.45\n到期时间：2026-12-31'
-})
-assert.equal(balance.ok, true)
-assert.equal(balance.result.balance_cents, 12345)
-assert.equal(balance.result.currency, 'CNY')
-
 const groups = parser.collectGroups({
   url,
   groupOptions: [

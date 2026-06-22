@@ -61,21 +61,6 @@
     })
   }
 
-  function collectBalance(snapshot) {
-    const balance = findLabeledAmount(snapshot.text || '', ['balance', '余额', '剩余', '可用'])
-    if (!balance) {
-      return fail('BALANCE_NOT_FOUND', 'no supported balance value was found')
-    }
-    return ok({
-      source: 'chrome',
-      captured_at: nowISO(),
-      runtime_status: 'monitor_only',
-      balance_cents: Math.round(balance.amount * 100),
-      currency: balance.currency,
-      raw_payload: { url: snapshot.url, evidence: balance.evidence }
-    })
-  }
-
   function collectPromotions(snapshot) {
     const text = snapshot.text || ''
     const keywords = ['优惠', '折扣', '赠送', 'bonus', 'discount', 'promotion', 'recharge']
@@ -250,8 +235,6 @@
         return collectRates(snapshot)
       case 'fetch_groups':
         return collectGroups(snapshot)
-      case 'fetch_balance':
-        return collectBalance(snapshot)
       case 'fetch_promotions':
         return collectPromotions(snapshot)
       case 'export_bills':
@@ -473,7 +456,6 @@
     collectByTask,
     collectRates,
     collectGroups,
-    collectBalance,
     collectPromotions,
     collectBills,
     collectHealth,

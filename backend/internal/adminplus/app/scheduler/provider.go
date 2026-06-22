@@ -3,6 +3,7 @@ package scheduler
 import (
 	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
@@ -17,6 +18,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(AnnouncementSyncer), new(*announcementsapp.Service)),
 	wire.Bind(new(HealthSyncer), new(*healthapp.Service)),
 	wire.Bind(new(UsageCostSyncer), new(*usagecostsapp.Service)),
+	wire.Bind(new(ChannelChecker), new(*channelchecksapp.Service)),
 	NewServiceWithDependencies,
 	ProvideWorker,
 )

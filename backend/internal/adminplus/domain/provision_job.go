@@ -10,6 +10,7 @@ const (
 	SupplierProvisionJobTypeProvisionAllGroupKeys SupplierProvisionJobType = "provision_all_group_keys"
 	SupplierProvisionJobTypeRepairBinding         SupplierProvisionJobType = "repair_binding"
 	SupplierProvisionJobTypeSyncSupplierCosts     SupplierProvisionJobType = "sync_supplier_costs"
+	SupplierProvisionJobTypeCheckSupplierChannels SupplierProvisionJobType = "check_supplier_channels"
 )
 
 type SupplierProvisionStatus string
@@ -38,6 +39,7 @@ const (
 	SupplierProvisionStepProvisionAllGroupKeys    SupplierProvisionStepType = "provision_all_group_keys"
 	SupplierProvisionStepRepairBinding            SupplierProvisionStepType = "repair_binding"
 	SupplierProvisionStepSyncSupplierCosts        SupplierProvisionStepType = "sync_supplier_costs"
+	SupplierProvisionStepCheckSupplierChannels    SupplierProvisionStepType = "check_supplier_channels"
 )
 
 type SupplierProvisionJob struct {

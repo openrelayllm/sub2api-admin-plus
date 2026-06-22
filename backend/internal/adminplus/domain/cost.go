@@ -81,3 +81,26 @@ type SupplierCostSnapshot struct {
 	CapturedAt                  time.Time `json:"captured_at"`
 	CreatedAt                   time.Time `json:"created_at"`
 }
+
+type SupplierCostLedgerOverview struct {
+	GeneratedAt time.Time                        `json:"generated_at"`
+	Items       []SupplierCostLedgerOverviewItem `json:"items"`
+}
+
+type SupplierCostLedgerOverviewItem struct {
+	Currency                    string     `json:"currency"`
+	SupplierCount               int        `json:"supplier_count"`
+	SnapshotCount               int        `json:"snapshot_count"`
+	ActualBalanceAvailableCount int        `json:"actual_balance_available_count"`
+	CompletedFundingAmountCents int64      `json:"completed_funding_amount_cents"`
+	CompletedFundingCashCents   int64      `json:"completed_funding_cash_cents"`
+	EntitlementAmountCents      int64      `json:"entitlement_amount_cents"`
+	RechargeTotalCents          int64      `json:"recharge_total_cents"`
+	UsageCostCents              int64      `json:"usage_cost_cents"`
+	RefundAmountCents           int64      `json:"refund_amount_cents"`
+	AdjustmentAmountCents       int64      `json:"adjustment_amount_cents"`
+	ExpectedBalanceCents        int64      `json:"expected_balance_cents"`
+	ActualBalanceCents          *int64     `json:"actual_balance_cents,omitempty"`
+	BalanceDeltaCents           *int64     `json:"balance_delta_cents,omitempty"`
+	LatestCapturedAt            *time.Time `json:"latest_captured_at,omitempty"`
+}

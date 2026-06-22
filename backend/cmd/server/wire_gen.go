@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
@@ -206,12 +207,6 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	usageCostService := usagecosts.NewServiceWithDependencies(usageCostSQLRepository, sessionsService, router)
 	costsSQLRepository := costs.NewSQLRepository(db)
 	costsService := costs.NewServiceWithDependencies(costsSQLRepository, sessionsService, router, router, usageCostService, balancesService)
-	provisionjobsSQLRepository := provisionjobs.NewSQLRepository(db)
-	streamPublisher := provisionjobs.NewStreamPublisher(redisClient)
-	provisionjobsService := provisionjobs.NewServiceWithCostSyncer(provisionjobsSQLRepository, streamPublisher, suppliergroupsService, supplierkeysService, costsService)
-	supplierGroupHandler := adminplus.NewSupplierGroupHandlerWithProvisionJobs(suppliergroupsService, provisionjobsService)
-	supplierKeyHandler := adminplus.NewSupplierKeyHandlerWithProvisionJobs(supplierkeysService, provisionjobsService)
-	provisionJobHandler := adminplus.NewProvisionJobHandler(provisionjobsService)
 	announcementsSQLRepository := announcements.NewSQLRepository(db)
 	announcementsFeishuNotifier := announcements.NewFeishuNotifierFromEnv(notificationsSQLRepository)
 	announcementsService := announcements.NewServiceWithDependencies(announcementsSQLRepository, announcementsFeishuNotifier, sessionsService, router)
@@ -220,16 +215,25 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	healthFeishuNotifier := health.NewFeishuNotifierFromEnv(notificationsSQLRepository)
 	healthService := health.NewServiceWithNotifier(healthSQLRepository, healthFeishuNotifier)
 	healthHandler := adminplus.NewHealthHandler(healthService)
+	channelchecksSQLRepository := channelchecks.NewSQLRepository(db)
+	channelchecksService := channelchecks.NewServiceWithBindingEnsurer(channelchecksSQLRepository, suppliersService, sessionsService, healthService, supplierkeysService)
+	provisionjobsSQLRepository := provisionjobs.NewSQLRepository(db)
+	streamPublisher := provisionjobs.NewStreamPublisher(redisClient)
+	provisionjobsService := provisionjobs.NewServiceWithDependencies(provisionjobsSQLRepository, streamPublisher, suppliergroupsService, supplierkeysService, costsService, channelchecksService)
+	supplierGroupHandler := adminplus.NewSupplierGroupHandlerWithProvisionJobs(suppliergroupsService, provisionjobsService)
+	supplierKeyHandler := adminplus.NewSupplierKeyHandlerWithProvisionJobs(supplierkeysService, provisionjobsService)
+	provisionJobHandler := adminplus.NewProvisionJobHandler(provisionjobsService)
 	notificationHandler := adminplus.NewNotificationHandler(notificationsSQLRepository)
 	usageCostHandler := adminplus.NewUsageCostHandler(usageCostService)
 	costHandler := adminplus.NewCostHandlerWithProvisionJobs(costsService, provisionjobsService)
+	channelCheckHandler := adminplus.NewChannelCheckHandlerWithProvisionJobs(channelchecksService, provisionjobsService)
 	extensionSQLRepository := extension.NewSQLRepository(db)
 	sessionCipher := extension.UseSessionCipher(secretEncryptor)
 	ingestProcessor := extension.NewIngestProcessorWithCipher(ratesService, balancesService, announcementsService, healthService, usageCostService, sessionsService, sessionCipher)
 	extensionService := extension.NewServiceWithDependencies(extensionSQLRepository, ingestProcessor, suppliersService)
 	extensionHandler := adminplus.NewExtensionHandler(extensionService, suppliersService)
 	sessionHandler := adminplus.NewSessionHandler(sessionsService, balancesService)
-	schedulerService := scheduler.NewServiceWithDependencies(suppliersService, extensionService, suppliergroupsService, ratesService, balancesService, announcementsService, healthService, usageCostService)
+	schedulerService := scheduler.NewServiceWithDependencies(suppliersService, extensionService, suppliergroupsService, ratesService, balancesService, announcementsService, healthService, usageCostService, channelchecksService)
 	schedulerHandler := adminplus.NewSchedulerHandler(schedulerService)
 	actionsSQLRepository := actions.NewSQLRepository(db)
 	actionsService := actions.NewService(actionsSQLRepository)
@@ -243,7 +247,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	tlsFingerprintProfileService := service.NewTLSFingerprintProfileService(tlsFingerprintProfileRepository, tlsFingerprintProfileCache)
 	accountTestService := service.NewAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService)
 	sub2APIHandler := adminplus.NewSub2APIHandlerWithAccountTest(sub2apiService, accountTestService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, announcementHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, extensionHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, announcementHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, extensionHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)

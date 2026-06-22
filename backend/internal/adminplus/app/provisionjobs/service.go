@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/supplierkeys"
@@ -113,12 +114,17 @@ type CostSyncer interface {
 	Sync(ctx context.Context, in costs.SyncInput) (*costs.SyncResult, error)
 }
 
+type ChannelChecker interface {
+	Check(ctx context.Context, in channelchecks.CheckInput) (*channelchecks.CheckResult, error)
+}
+
 type Service struct {
 	repo           Repository
 	publisher      RedisPublisher
 	groupSyncer    GroupSyncer
 	keyProvisioner KeyProvisioner
 	costSyncer     CostSyncer
+	channelChecker ChannelChecker
 	now            func() time.Time
 }
 
@@ -135,6 +141,12 @@ func NewService(repo Repository, publisher RedisPublisher, groupSyncer GroupSync
 func NewServiceWithCostSyncer(repo Repository, publisher RedisPublisher, groupSyncer GroupSyncer, keyProvisioner KeyProvisioner, costSyncer CostSyncer) *Service {
 	service := NewService(repo, publisher, groupSyncer, keyProvisioner)
 	service.costSyncer = costSyncer
+	return service
+}
+
+func NewServiceWithDependencies(repo Repository, publisher RedisPublisher, groupSyncer GroupSyncer, keyProvisioner KeyProvisioner, costSyncer CostSyncer, channelChecker ChannelChecker) *Service {
+	service := NewServiceWithCostSyncer(repo, publisher, groupSyncer, keyProvisioner, costSyncer)
+	service.channelChecker = channelChecker
 	return service
 }
 
@@ -417,6 +429,16 @@ func (s *Service) executeJobPayload(ctx context.Context, job *adminplusdomain.Su
 			return nil, err
 		}
 		return costSyncResultSnapshot(result), nil
+	case adminplusdomain.SupplierProvisionJobTypeCheckSupplierChannels:
+		if s.channelChecker == nil {
+			return nil, internalError("supplier channel checker is not configured")
+		}
+		input := channelCheckInputFromSnapshot(job.SupplierID, job.RequestSnapshot)
+		result, err := s.channelChecker.Check(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		return channelCheckResultSnapshot(result), nil
 	default:
 		return nil, badRequest("SUPPLIER_PROVISION_JOB_TYPE_UNSUPPORTED", "unsupported supplier provision job type")
 	}
@@ -567,7 +589,7 @@ func normalizeSubmitInput(in SubmitInput) (SubmitInput, error) {
 		return SubmitInput{}, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
 	}
 	switch in.JobType {
-	case adminplusdomain.SupplierProvisionJobTypeSyncGroups, adminplusdomain.SupplierProvisionJobTypeProvisionAllGroupKeys, adminplusdomain.SupplierProvisionJobTypeSyncSupplierCosts:
+	case adminplusdomain.SupplierProvisionJobTypeSyncGroups, adminplusdomain.SupplierProvisionJobTypeProvisionAllGroupKeys, adminplusdomain.SupplierProvisionJobTypeSyncSupplierCosts, adminplusdomain.SupplierProvisionJobTypeCheckSupplierChannels:
 	case adminplusdomain.SupplierProvisionJobTypeProvisionGroupKey:
 		if in.SupplierGroupID <= 0 {
 			return SubmitInput{}, badRequest("SUPPLIER_GROUP_ID_INVALID", "invalid supplier group id")
@@ -607,6 +629,8 @@ func stepTypeForJob(jobType adminplusdomain.SupplierProvisionJobType) adminplusd
 		return adminplusdomain.SupplierProvisionStepRepairBinding
 	case adminplusdomain.SupplierProvisionJobTypeSyncSupplierCosts:
 		return adminplusdomain.SupplierProvisionStepSyncSupplierCosts
+	case adminplusdomain.SupplierProvisionJobTypeCheckSupplierChannels:
+		return adminplusdomain.SupplierProvisionStepCheckSupplierChannels
 	default:
 		return adminplusdomain.SupplierProvisionStepEnsureThirdPartyKey
 	}
@@ -620,6 +644,8 @@ func eventTypeForJob(jobType adminplusdomain.SupplierProvisionJobType) string {
 		return "supplier.keys.provision_all.requested"
 	case adminplusdomain.SupplierProvisionJobTypeSyncSupplierCosts:
 		return "supplier.costs.sync.requested"
+	case adminplusdomain.SupplierProvisionJobTypeCheckSupplierChannels:
+		return "supplier.channels.check.requested"
 	default:
 		return "supplier.key.provision.requested"
 	}

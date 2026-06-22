@@ -61,6 +61,10 @@
               <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />
               <span class="hidden md:inline">刷新</span>
             </button>
+            <button type="button" class="btn btn-secondary px-2 md:px-3" :disabled="scheduleListLoading" title="查看和操作供应商本地调度账号" @click="openScheduleListDialog">
+              <Icon name="server" size="sm" :class="{ 'animate-spin': scheduleListLoading }" />
+              <span class="hidden md:inline">调度列表</span>
+            </button>
             <div class="relative">
               <button type="button" class="btn btn-secondary px-2 md:px-3" title="更多操作" @click="moreMenuOpen = !moreMenuOpen">
                 <Icon name="more" size="sm" class="md:mr-1.5" />
@@ -84,6 +88,12 @@
                       <Icon name="sync" size="sm" :class="{ 'animate-spin': bulkBalanceRefreshing }" />
                     </span>
                     <span>{{ bulkBalanceRefreshing ? '更新额度中...' : '批量更新额度' }}</span>
+                  </button>
+                  <button class="menu-item" :disabled="selectedCount === 0 || bulkChannelChecksSyncing" @click="syncSelectedChannelChecks">
+                    <span class="menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
+                      <Icon name="beaker" size="sm" :class="{ 'animate-spin': bulkChannelChecksSyncing }" />
+                    </span>
+                    <span>{{ bulkChannelChecksSyncing ? '提交检测中...' : '批量检测渠道' }}</span>
                   </button>
                   <button class="menu-item text-red-600 dark:text-red-300" :disabled="selectedCount === 0" @click="openBulkDeleteDialog">
                     <span class="menu-icon bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300">
@@ -124,6 +134,10 @@
             <button type="button" class="btn btn-secondary btn-sm" :disabled="bulkBalanceRefreshing" @click="refreshSelectedBalances">
               <Icon name="sync" size="xs" :class="{ 'animate-spin': bulkBalanceRefreshing }" />
               {{ bulkBalanceRefreshing ? '更新中' : '批量更新额度' }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="bulkChannelChecksSyncing" @click="syncSelectedChannelChecks">
+              <Icon name="beaker" size="xs" :class="{ 'animate-spin': bulkChannelChecksSyncing }" />
+              {{ bulkChannelChecksSyncing ? '提交中' : '批量检测渠道' }}
             </button>
             <button type="button" class="btn btn-danger btn-sm" @click="openBulkDeleteDialog">批量删除</button>
           </div>
@@ -205,17 +219,87 @@
             </div>
           </template>
 
-          <template #cell-balance="{ row }">
-            <div class="min-w-[170px] text-right">
-              <div class="text-base font-semibold" :class="supplierBalanceAmountClass(row)">
-                {{ formatMoney(row.balance_cents, row.balance_currency) }}
-              </div>
-              <div class="mt-1 flex justify-end">
-                <span class="badge" :class="supplierBalanceBadgeClass(row)">
-                  {{ supplierBalanceLabel(row) }}
-                </span>
-              </div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ formatDateTime(row.balance_updated_at) }}</div>
+          <template #cell-best_channel="{ row }">
+            <div class="min-w-[230px]">
+              <template v-if="supplierBestChannel(row.id)">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="badge shrink-0" :class="channelProbeStatusClass(supplierBestChannel(row.id)?.probe_status)">
+                    {{ channelProbeStatusLabel(supplierBestChannel(row.id)?.probe_status) }}
+                  </span>
+                  <span class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100" :title="supplierBestChannel(row.id)?.group_name">
+                    {{ supplierBestChannel(row.id)?.group_name || '-' }}
+                  </span>
+                </div>
+                <div class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
+                  <span>{{ formatMultiplier(supplierBestChannel(row.id)?.effective_rate_multiplier) }}</span>
+                  <span>首 {{ formatLatency(supplierBestChannel(row.id)?.first_token_ms) }}</span>
+                  <span>总 {{ formatLatency(supplierBestChannel(row.id)?.duration_ms) }}</span>
+                </div>
+                <div class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
+                  <span :class="supplierBestChannel(row.id)?.local_account_schedulable ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-300'">
+                    {{ supplierBestChannel(row.id)?.local_account_schedulable ? '已入调度' : '未入调度' }}
+                  </span>
+                  <span>{{ formatDateTime(supplierBestChannel(row.id)?.captured_at) }}</span>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    title="打开供应商分组，补齐 Key/账号或查看绑定"
+                    @click="openGroupsDialog(row)"
+                  >
+                    <Icon name="database" size="xs" />
+                    分组
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="rowChannelCheckSupplierID === row.id"
+                    title="使用 GPT-5.4 Mini 检测最低倍率候选渠道，失败时自动暂停本地调度"
+                    @click="syncSupplierChannelFromRow(row)"
+                  >
+                    <Icon name="beaker" size="xs" :class="{ 'animate-spin': rowChannelCheckSupplierID === row.id }" />
+                    {{ rowChannelCheckSupplierID === row.id ? '提交中' : '检测' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="isBestChannelSchedulingRunning(row.id)"
+                    :title="bestChannelActionTitle(row)"
+                    @click="openBestChannelScheduleDialog(row)"
+                  >
+                    <Icon :name="bestChannelActionIcon(row)" size="xs" :class="{ 'animate-spin': isBestChannelSchedulingRunning(row.id) }" />
+                    {{ bestChannelActionLabel(row) }}
+                  </button>
+                </div>
+              </template>
+              <template v-else>
+                <div class="flex flex-col gap-1">
+                  <span class="badge badge-gray w-fit">未检测</span>
+                  <span class="text-xs text-gray-500 dark:text-dark-400">同步分组后可直接检测</span>
+                  <div class="mt-1 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      title="打开供应商分组，先补齐 Key/账号或确认绑定"
+                      @click="openGroupsDialog(row)"
+                    >
+                      <Icon name="database" size="xs" />
+                      分组
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      :disabled="rowChannelCheckSupplierID === row.id"
+                      title="提交异步渠道检测任务"
+                      @click="syncSupplierChannelFromRow(row)"
+                    >
+                      <Icon name="beaker" size="xs" :class="{ 'animate-spin': rowChannelCheckSupplierID === row.id }" />
+                      {{ rowChannelCheckSupplierID === row.id ? '提交中' : '一键检测' }}
+                    </button>
+                  </div>
+                </div>
+              </template>
             </div>
           </template>
 
@@ -837,6 +921,10 @@
               <Icon name="sync" size="sm" :class="{ 'animate-spin': groupsSyncing }" />
               同步分组
             </button>
+            <button type="button" class="btn btn-secondary" :disabled="channelChecksSyncing || !groupsSupplier || activeProvisionJobRunning" @click="syncCurrentChannelChecks">
+              <Icon name="beaker" size="sm" :class="{ 'animate-spin': channelChecksSyncing }" />
+              检测渠道
+            </button>
             <button type="button" class="btn btn-primary" :disabled="keysEnsuring || !canSubmitEnsureKeys" @click="ensureCurrentKeys">
               <Icon name="key" size="sm" :class="{ 'animate-spin': keysEnsuring }" />
               补齐 Key/账号
@@ -883,6 +971,10 @@
 
         <div v-if="provisionJobError" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
           {{ provisionJobError }}
+        </div>
+
+        <div v-if="channelCheckError" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+          {{ channelCheckError }}
         </div>
 
         <DataTable
@@ -962,8 +1054,32 @@
             </div>
           </template>
 
+          <template #cell-channel_check="{ row }">
+            <div class="min-w-[190px]">
+              <template v-if="groupChannelCheck(row.id)">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="badge" :class="channelProbeStatusClass(groupChannelCheck(row.id)?.probe_status)">
+                    {{ channelProbeStatusLabel(groupChannelCheck(row.id)?.probe_status) }}
+                  </span>
+                  <span class="badge" :class="groupChannelCheck(row.id)?.local_account_schedulable ? 'badge-success' : 'badge-warning'">
+                    {{ groupChannelCheck(row.id)?.local_account_schedulable ? '调度中' : '已暂停' }}
+                  </span>
+                </div>
+                <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                  首 {{ formatLatency(groupChannelCheck(row.id)?.first_token_ms) }} · 总 {{ formatLatency(groupChannelCheck(row.id)?.duration_ms) }}
+                </div>
+                <div class="mt-1 max-w-[220px] truncate text-xs text-gray-500 dark:text-dark-400" :title="groupChannelCheck(row.id)?.error_message || ''">
+                  {{ groupChannelCheck(row.id)?.error_message || formatDateTime(groupChannelCheck(row.id)?.captured_at) }}
+                </div>
+              </template>
+              <template v-else>
+                <span class="badge badge-gray">未检测</span>
+              </template>
+            </div>
+          </template>
+
           <template #cell-group_actions="{ row }">
-            <div class="flex min-w-[190px] justify-end gap-2">
+            <div class="flex min-w-[330px] justify-end gap-2">
               <button
                 v-if="groupAction(row).kind === 'provision'"
                 type="button"
@@ -985,6 +1101,26 @@
               >
                 <Icon :name="groupAction(row).icon" size="sm" />
                 {{ groupAction(row).label }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="isChannelCheckActionRunning(`probe:${row.id}`)"
+                title="使用 GPT-5.4 Mini 真实复测该渠道，失败时自动暂停本地调度"
+                @click="probeGroupChannel(row)"
+              >
+                <Icon name="beaker" size="sm" :class="{ 'animate-spin': isChannelCheckActionRunning(`probe:${row.id}`) }" />
+                复测
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="isChannelCheckActionRunning(`schedule:${row.id}`)"
+                :title="groupScheduleActionTitle(row)"
+                @click="handleGroupScheduleAction(row)"
+              >
+                <Icon :name="groupScheduleActionIcon(row)" size="sm" :class="{ 'animate-spin': isChannelCheckActionRunning(`schedule:${row.id}`) }" />
+                {{ groupScheduleActionLabel(row) }}
               </button>
             </div>
           </template>
@@ -1133,6 +1269,275 @@
       </template>
     </BaseDialog>
 
+    <BaseDialog
+      :show="channelScheduleDialogOpen"
+      :title="channelScheduleSupplier ? `加入调度 - ${channelScheduleSupplier.name}` : '加入调度'"
+      width="normal"
+      @close="closeBestChannelScheduleDialog"
+    >
+      <div class="space-y-4">
+        <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">供应商</div>
+              <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ channelScheduleSupplier?.name || '-' }}</div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">分组</div>
+              <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ channelScheduleSnapshot?.group_name || '-' }}</div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">检测状态</div>
+              <div class="mt-1">
+                <span class="badge" :class="channelProbeStatusClass(channelScheduleSnapshot?.probe_status)">
+                  {{ channelProbeStatusLabel(channelScheduleSnapshot?.probe_status) }}
+                </span>
+                <span class="ml-2 text-xs text-gray-500 dark:text-dark-400">
+                  首 {{ formatLatency(channelScheduleSnapshot?.first_token_ms) }} · 总 {{ formatLatency(channelScheduleSnapshot?.duration_ms) }}
+                </span>
+              </div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">倍率</div>
+              <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ formatMultiplier(channelScheduleSnapshot?.effective_rate_multiplier) }}</div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">本地账号</div>
+              <div class="mt-1">
+                <span class="badge" :class="channelHasLocalBinding(channelScheduleSnapshot) ? 'badge-success' : 'badge-warning'">
+                  {{ channelHasLocalBinding(channelScheduleSnapshot) ? `已绑定 #${channelScheduleSnapshot?.local_sub2api_account_id}` : '未绑定' }}
+                </span>
+              </div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 dark:text-dark-400">调度状态</div>
+              <div class="mt-1">
+                <span class="badge" :class="channelScheduleSnapshot?.local_account_schedulable ? 'badge-success' : 'badge-gray'">
+                  {{ channelScheduleSnapshot?.local_account_schedulable ? '调度中' : '未调度' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <div
+            v-for="step in channelScheduleSteps"
+            :key="step.key"
+            class="flex gap-3 rounded-lg border p-3"
+            :class="channelScheduleStepClass(step.status)"
+          >
+            <div class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full" :class="channelScheduleStepIconClass(step.status)">
+              <Icon :name="channelScheduleStepIconName(step)" size="sm" />
+            </div>
+            <div class="min-w-0">
+              <div class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ step.label }}</div>
+              <div class="mt-0.5 text-xs leading-5 text-gray-600 dark:text-dark-300">{{ step.description }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="channelScheduleSnapshot?.error_message" class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700 dark:border-dark-700 dark:bg-dark-900/40 dark:text-dark-200">
+          {{ channelScheduleSnapshot.error_message }}
+        </div>
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn btn-secondary" @click="closeBestChannelScheduleDialog">关闭</button>
+        <button type="button" class="btn btn-secondary" :disabled="!channelScheduleSupplier" @click="openChannelScheduleGroups">
+          <Icon name="database" size="sm" />
+          分组详情
+        </button>
+        <button
+          type="button"
+          class="btn btn-primary"
+          :disabled="channelScheduleSubmitting || !channelScheduleSupplier"
+          @click="confirmChannelSchedulePrimaryAction"
+        >
+          <Icon :name="channelSchedulePrimaryIcon" size="sm" :class="{ 'animate-spin': channelScheduleSubmitting }" />
+          {{ channelSchedulePrimaryLabel }}
+        </button>
+      </template>
+    </BaseDialog>
+
+    <BaseDialog
+      :show="scheduleListDialogOpen"
+      title="调度列表"
+      width="full"
+      @close="closeScheduleListDialog"
+    >
+      <div class="space-y-4">
+        <div class="grid gap-3 md:grid-cols-4">
+          <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
+            <div class="text-xs text-gray-500 dark:text-dark-400">绑定账号</div>
+            <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-gray-100">{{ scheduleListStats.total }}</div>
+          </div>
+          <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/20">
+            <div class="text-xs text-emerald-700 dark:text-emerald-300">调度中</div>
+            <div class="mt-1 text-xl font-semibold text-emerald-800 dark:text-emerald-100">{{ scheduleListStats.scheduled }}</div>
+          </div>
+          <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+            <div class="text-xs text-amber-700 dark:text-amber-300">已暂停</div>
+            <div class="mt-1 text-xl font-semibold text-amber-800 dark:text-amber-100">{{ scheduleListStats.paused }}</div>
+          </div>
+          <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/20">
+            <div class="text-xs text-rose-700 dark:text-rose-300">异常/未检测</div>
+            <div class="mt-1 text-xl font-semibold text-rose-800 dark:text-rose-100">{{ scheduleListStats.risky }}</div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="block min-w-[240px] flex-1">
+            <span class="input-label">搜索</span>
+            <div class="relative">
+              <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input v-model.trim="scheduleListFilters.q" class="input pl-9" placeholder="供应商、账号、分组、渠道" />
+            </div>
+          </label>
+          <label class="block w-44">
+            <span class="input-label">调度状态</span>
+            <select v-model="scheduleListFilters.status" class="input">
+              <option value="">全部</option>
+              <option value="scheduled">调度中</option>
+              <option value="paused">已暂停</option>
+              <option value="risky">异常/未检测</option>
+              <option value="untested">未检测</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-secondary" :disabled="scheduleListLoading" @click="loadScheduleList">
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': scheduleListLoading }" />
+            刷新
+          </button>
+        </div>
+
+        <div v-if="scheduleListError" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+          {{ scheduleListError }}
+        </div>
+
+        <DataTable
+          :columns="scheduleListColumns"
+          :data="filteredScheduleRows"
+          :loading="scheduleListLoading"
+          row-key="key"
+          default-sort-key="supplier_name"
+          default-sort-order="asc"
+          :estimate-row-height="76"
+          :sticky-first-column="false"
+          :sticky-actions-column="false"
+        >
+          <template #cell-name="{ row }">
+            <div class="min-w-[260px] max-w-[360px]">
+              <div class="flex min-w-0 items-center gap-2">
+                <span class="truncate font-medium text-gray-900 dark:text-white" :title="row.local_account_name">{{ row.local_account_name }}</span>
+                <span class="badge badge-gray">#{{ row.local_account_id }}</span>
+              </div>
+              <div v-if="shouldShowScheduleSupplierName(row)" class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
+                <span>{{ row.supplier_name }}</span>
+              </div>
+            </div>
+          </template>
+
+          <template #cell-status="{ row }">
+            <div class="flex min-w-[132px] flex-col gap-1.5">
+              <div class="flex flex-wrap gap-1.5">
+                <span class="badge w-fit" :class="runtimeClass(row.runtime_status)">{{ runtimeLabel(row.runtime_status) }}</span>
+                <span class="badge w-fit" :class="healthClass(row.health_status)">{{ healthLabel(row.health_status) }}</span>
+              </div>
+              <span v-if="row.local_account_status !== 'active'" class="text-xs font-medium text-red-600 dark:text-red-300">账号非 active</span>
+            </div>
+          </template>
+
+          <template #cell-schedulable="{ row }">
+            <div class="min-w-[92px]">
+              <button
+                type="button"
+                class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-dark-800"
+                :class="[row.schedulable ? 'bg-primary-500 hover:bg-primary-600' : 'bg-gray-200 hover:bg-gray-300 dark:bg-dark-600 dark:hover:bg-dark-500']"
+                :disabled="scheduleListActionKey === row.key || !row.supplier_group_id"
+                :title="row.schedulable ? '暂停调度' : '校验绑定并加入调度'"
+                @click="toggleScheduleRow(row)"
+              >
+                <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
+              </button>
+              <div class="mt-1 text-xs" :class="row.schedulable ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-dark-400'">
+                {{ row.schedulable ? '参与调度' : '未入调度' }}
+              </div>
+            </div>
+          </template>
+
+          <template #cell-group="{ row }">
+            <div class="min-w-[240px] max-w-[320px]">
+              <GroupBadge
+                :name="row.group_name || '未同步分组'"
+                :platform="groupPlatformFromProvider(row.provider_family)"
+                :rate-multiplier="row.effective_rate_multiplier || row.supplier_group_rate || 1"
+              />
+              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
+                <span>{{ providerLabel(row.provider_family) }}</span>
+                <span v-if="row.external_group_id" class="font-mono">#{{ row.external_group_id }}</span>
+              </div>
+            </div>
+          </template>
+
+          <template #cell-probe="{ row }">
+            <div class="min-w-[190px] max-w-[260px]">
+              <span class="badge" :class="channelProbeStatusClass(row.probe_status)">{{ channelProbeStatusLabel(row.probe_status) }}</span>
+              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                首 {{ formatLatency(row.first_token_ms) }} · 总 {{ formatLatency(row.duration_ms) }}
+              </div>
+              <div class="mt-1 max-w-[180px] truncate text-xs text-gray-400" :title="row.error_message || ''">
+                {{ row.error_message || formatDateTime(row.captured_at) }}
+              </div>
+            </div>
+          </template>
+
+          <template #cell-actions="{ row }">
+            <div class="flex min-w-[116px] items-center justify-end gap-1">
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm h-8 w-8 px-0"
+                :disabled="scheduleListActionKey === row.key || !row.supplier_group_id"
+                title="重新检测该渠道"
+                @click="probeScheduleRow(row)"
+              >
+                <Icon name="beaker" size="xs" :class="{ 'animate-spin': scheduleListActionKey === row.key }" />
+                <span class="sr-only">复测</span>
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm h-8 w-8 px-0"
+                :disabled="scheduleListActionKey === row.key || !row.supplier_group_id"
+                :title="row.schedulable ? '暂停该本地账号调度' : '校验绑定并加入调度'"
+                @click="toggleScheduleRow(row)"
+              >
+                <Icon :name="row.schedulable ? 'ban' : 'play'" size="xs" :class="{ 'animate-spin': scheduleListActionKey === row.key }" />
+                <span class="sr-only">{{ row.schedulable ? '暂停' : '加入' }}</span>
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm h-8 w-8 px-0" title="打开供应商分组" @click="openScheduleRowGroups(row)">
+                <Icon name="database" size="xs" />
+                <span class="sr-only">分组</span>
+              </button>
+            </div>
+          </template>
+
+          <template #empty>
+            <EmptyState
+              title="暂无调度账号"
+              description="请先在供应商分组中补齐 Key/账号，或同步供应商分组后重新检测渠道。"
+            />
+          </template>
+        </DataTable>
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn btn-secondary" @click="closeScheduleListDialog">关闭</button>
+        <button type="button" class="btn btn-secondary" :disabled="scheduleListLoading" @click="loadScheduleList">
+          <Icon name="refresh" size="sm" :class="{ 'animate-spin': scheduleListLoading }" />
+          刷新
+        </button>
+      </template>
+    </BaseDialog>
+
     <BaseDialog :show="repairDialogOpen" :title="repairKey ? `修复绑定 - ${repairKey.name}` : '修复绑定'" width="normal" @close="closeRepairDialog">
       <form id="supplier-key-repair-form" class="space-y-5" @submit.prevent="submitRepairBinding">
         <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
@@ -1250,26 +1655,36 @@ import { supplierGroupAction } from './supplierProvisionPresentation'
 import {
   createSupplier,
   deleteSupplier,
+  enableSupplierChannelScheduling,
   ensureSupplierKeys,
   getSupplierProvisionJob,
   getSupplierCurrentBalance,
   getSupplierSession,
+  listSupplierBestChannelChecks,
+  listSupplierChannelChecks,
   listSupplierChannelMonitors,
   listLocalSub2APIAccounts,
+  listSupplierAccounts,
   listSupplierCostSnapshots,
   listSupplierKeys,
   listSupplierGroups,
   listSuppliers,
   loginSupplierSession,
+  pauseSupplierChannelScheduling,
+  probeSupplierChannel,
   probeSupplierSession,
   provisionSupplierKey,
   repairSupplierKeyBinding,
+  syncSupplierChannelChecks,
   syncSupplierGroups,
   updateSupplier,
   updateSupplierStatus,
   type LocalSub2APIAccount,
   type Supplier,
+  type SupplierAccount,
   type SupplierBrowserSession,
+  type SupplierChannelCheckSnapshot,
+  type SupplierChannelProbeStatus,
   type SupplierChannelMonitorView,
   type SupplierCostSnapshot,
   type SupplierCurrentBalance,
@@ -1309,17 +1724,21 @@ const channelStatusDialogOpen = ref(false)
 const groupsDialogOpen = ref(false)
 const provisionDialogOpen = ref(false)
 const repairDialogOpen = ref(false)
+const channelScheduleDialogOpen = ref(false)
+const scheduleListDialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
 const moreMenuOpen = ref(false)
 const bulkStatusMode = ref(false)
 const bulkDeleteMode = ref(false)
 const bulkBalanceRefreshing = ref(false)
+const bulkChannelChecksSyncing = ref(false)
 const editingSupplier = ref<Supplier | null>(null)
 const sessionSupplier = ref<Supplier | null>(null)
 const channelStatusSupplier = ref<Supplier | null>(null)
 const groupsSupplier = ref<Supplier | null>(null)
 const provisionGroup = ref<SupplierGroup | null>(null)
 const repairKey = ref<SupplierKey | null>(null)
+const channelScheduleSupplier = ref<Supplier | null>(null)
 const deletingSupplier = ref<Supplier | null>(null)
 const rowActionsMenuSupplier = ref<Supplier | null>(null)
 const rowActionsMenuStyle = ref<Record<string, string>>({})
@@ -1327,6 +1746,8 @@ const suppliers = ref<Supplier[]>([])
 const supplierGroups = ref<SupplierGroup[]>([])
 const supplierKeys = ref<SupplierKey[]>([])
 const supplierCostSnapshots = ref<Record<number, SupplierCostSnapshot | undefined>>({})
+const supplierBestChannels = ref<Record<number, SupplierChannelCheckSnapshot | undefined>>({})
+const supplierChannelChecks = ref<Record<number, SupplierChannelCheckSnapshot | undefined>>({})
 const activeProvisionJob = ref<SupplierProvisionJob | null>(null)
 const localAccounts = ref<LocalSub2APIAccount[]>([])
 const channelMonitorItems = ref<SupplierChannelMonitorView[]>([])
@@ -1341,6 +1762,10 @@ const channelStatusLoading = ref(false)
 const groupsLoading = ref(false)
 const groupsSyncing = ref(false)
 const keysEnsuring = ref(false)
+const channelChecksSyncing = ref(false)
+const channelScheduleSubmitting = ref(false)
+const scheduleListLoading = ref(false)
+const scheduleListActionKey = ref('')
 const repairAccountsLoading = ref(false)
 const sessionLoadError = ref('')
 const channelStatusError = ref('')
@@ -1348,6 +1773,43 @@ const channelMonitorCapturedAt = ref('')
 const channelMonitorOrigin = ref('')
 const channelMonitorAPIBaseURL = ref('')
 type ChannelStatusWindow = 'pulse' | '7d' | '15d' | '30d'
+type ChannelScheduleStepStatus = 'done' | 'pending' | 'warning'
+type ChannelScheduleStepIcon = 'beaker' | 'key' | 'link' | 'play' | 'check' | 'clock' | 'exclamationTriangle'
+type ScheduleListStatusFilter = '' | 'scheduled' | 'paused' | 'risky' | 'untested'
+
+interface ChannelScheduleStep {
+  key: string
+  label: string
+  description: string
+  status: ChannelScheduleStepStatus
+  icon: ChannelScheduleStepIcon
+}
+
+interface ScheduleListRow {
+  key: string
+  name: string
+  supplier_id: number
+  supplier_name: string
+  supplier_type: SupplierType
+  binding_id: number
+  supplier_group_id?: number
+  local_account_id: number
+  local_account_name: string
+  local_account_status: string
+  runtime_status: SupplierRuntimeStatus
+  health_status: SupplierHealthStatus
+  schedulable: boolean
+  group_name: string
+  provider_family: string
+  external_group_id: string
+  supplier_group_rate: number
+  effective_rate_multiplier: number
+  probe_status: SupplierChannelProbeStatus
+  first_token_ms: number
+  duration_ms: number
+  error_message: string
+  captured_at: string
+}
 
 const channelStatusWindow = ref<ChannelStatusWindow>('7d')
 const channelStatusAutoRefresh = ref(true)
@@ -1355,9 +1817,13 @@ const channelStatusCountdown = ref(16)
 const groupsError = ref('')
 const provisionError = ref('')
 const provisionJobError = ref('')
+const channelCheckError = ref('')
+const scheduleListError = ref('')
 const repairError = ref('')
 const lastProbe = ref<SupplierSessionProbeResult | null>(null)
 const rowLoginSupplierID = ref<number | null>(null)
+const rowChannelCheckSupplierID = ref<number | null>(null)
+const channelCheckActionKey = ref('')
 let provisionJobTimer: ReturnType<typeof window.setTimeout> | undefined
 let channelStatusAutoRefreshTimer: ReturnType<typeof window.setInterval> | undefined
 
@@ -1446,10 +1912,20 @@ const repairForm = reactive({
   balance_currency: 'USD'
 })
 
+const scheduleListFilters = reactive({
+  q: '',
+  status: '' as ScheduleListStatusFilter
+})
+
+const scheduleListSuppliers = ref<Supplier[]>([])
+const scheduleListBindings = ref<SupplierAccount[]>([])
+const scheduleListLocalAccounts = ref<Record<number, LocalSub2APIAccount | undefined>>({})
+const scheduleListChannelChecks = ref<Record<string, SupplierChannelCheckSnapshot | undefined>>({})
+
 const columns: Column[] = [
   { key: 'select', label: '', class: 'w-10' },
   { key: 'name', label: '供应商', sortable: true },
-  { key: 'balance', label: '余额', class: 'text-right' },
+  { key: 'best_channel', label: '有效低倍率渠道' },
   { key: 'cost', label: '成本概览', class: 'text-right' },
   { key: 'status', label: '状态' },
   { key: 'kind_type', label: '归类 / 类型' },
@@ -1465,9 +1941,19 @@ const groupColumns: Column[] = [
   { key: 'rate', label: '倍率', class: 'text-right' },
   { key: 'limits', label: '限制' },
   { key: 'account', label: 'Key / 本地账号' },
+  { key: 'channel_check', label: '检测' },
   { key: 'status', label: '状态' },
   { key: 'last_seen_at', label: '最后同步', sortable: true },
   { key: 'group_actions', label: '操作', class: 'text-right' }
+]
+
+const scheduleListColumns: Column[] = [
+  { key: 'name', label: '账号', sortable: true, class: 'min-w-[280px]' },
+  { key: 'status', label: '状态', class: 'min-w-[132px]' },
+  { key: 'schedulable', label: '调度', sortable: true, class: 'w-28' },
+  { key: 'group', label: '渠道分组', class: 'min-w-[260px]' },
+  { key: 'probe', label: '检测结果', class: 'min-w-[210px]' },
+  { key: 'actions', label: '操作', class: 'w-[132px] text-right' }
 ]
 
 const filteredSuppliers = computed(() => suppliers.value)
@@ -1488,6 +1974,83 @@ const {
 
 const selectedRows = computed(() => suppliers.value.filter((item) => selectedIds.value.includes(item.id)))
 
+const scheduleListRows = computed<ScheduleListRow[]>(() => {
+  const suppliersByID = new Map(scheduleListSuppliers.value.map((supplier) => [supplier.id, supplier]))
+  const rows: ScheduleListRow[] = []
+  for (const binding of scheduleListBindings.value) {
+    const supplier = suppliersByID.get(binding.supplier_id)
+    if (!supplier) continue
+    const localAccount = scheduleListLocalAccounts.value[binding.local_sub2api_account_id]
+    const check = scheduleListChannelChecks.value[scheduleChannelKey(binding.supplier_id, binding.supplier_group_id)]
+    const providerFamily = firstNonEmptyString(check?.provider_family, binding.supplier_group_provider, binding.rate_profile)
+    const groupName = firstNonEmptyString(check?.group_name, binding.supplier_group_name, binding.rate_profile, '未同步分组')
+    const schedulable = Boolean(localAccount?.schedulable ?? check?.local_account_schedulable ?? false)
+    const localAccountName = firstNonEmptyString(binding.local_account_name, localAccount?.name, `账号 #${binding.local_sub2api_account_id}`)
+    rows.push({
+      key: `${binding.supplier_id}:${binding.id}`,
+      name: localAccountName,
+      supplier_id: binding.supplier_id,
+      supplier_name: supplier.name,
+      supplier_type: supplier.type,
+      binding_id: binding.id,
+      supplier_group_id: binding.supplier_group_id,
+      local_account_id: binding.local_sub2api_account_id,
+      local_account_name: localAccountName,
+      local_account_status: firstNonEmptyString(localAccount?.status, 'unknown'),
+      runtime_status: binding.runtime_status,
+      health_status: binding.health_status,
+      schedulable,
+      group_name: groupName,
+      provider_family: providerFamily,
+      external_group_id: firstNonEmptyString(check?.external_group_id, binding.supplier_external_group_id),
+      supplier_group_rate: binding.supplier_group_rate || 0,
+      effective_rate_multiplier: check?.effective_rate_multiplier || binding.supplier_group_rate || localAccount?.rate_multiplier || 1,
+      probe_status: check?.probe_status || 'untested',
+      first_token_ms: check?.first_token_ms || 0,
+      duration_ms: check?.duration_ms || 0,
+      error_message: check?.error_message || '',
+      captured_at: check?.captured_at || ''
+    })
+  }
+  return rows.sort((a, b) => {
+    if (a.schedulable !== b.schedulable) return a.schedulable ? -1 : 1
+    const supplierName = a.supplier_name.localeCompare(b.supplier_name)
+    if (supplierName !== 0) return supplierName
+    return a.local_account_id - b.local_account_id
+  })
+})
+
+const filteredScheduleRows = computed(() => {
+  const q = scheduleListFilters.q.toLowerCase()
+  return scheduleListRows.value.filter((row) => {
+    if (scheduleListFilters.status === 'scheduled' && !row.schedulable) return false
+    if (scheduleListFilters.status === 'paused' && row.schedulable) return false
+    if (scheduleListFilters.status === 'risky' && !scheduleRowRisky(row)) return false
+    if (scheduleListFilters.status === 'untested' && row.probe_status !== 'untested') return false
+    if (q) {
+      const haystack = [
+        row.supplier_name,
+        row.local_account_name,
+        row.group_name,
+        row.provider_family,
+        row.external_group_id
+      ].join(' ').toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
+    return true
+  })
+})
+
+const scheduleListStats = computed(() => {
+  const rows = scheduleListRows.value
+  return {
+    total: rows.length,
+    scheduled: rows.filter((row) => row.schedulable).length,
+    paused: rows.filter((row) => !row.schedulable).length,
+    risky: rows.filter((row) => scheduleRowRisky(row)).length
+  }
+})
+
 const currentSession = computed(() => {
   const supplierID = sessionSupplier.value?.id
   return supplierID ? sessionStore[supplierID] : undefined
@@ -1496,6 +2059,98 @@ const currentSession = computed(() => {
 const currentBalanceValue = computed(() => {
   const supplierID = sessionSupplier.value?.id
   return supplierID ? currentBalanceStore[supplierID] : undefined
+})
+
+const channelScheduleSnapshot = computed(() => {
+  const supplierID = channelScheduleSupplier.value?.id
+  return supplierID ? supplierBestChannel(supplierID) : undefined
+})
+
+const channelSchedulePrimaryLabel = computed(() => {
+  const supplier = channelScheduleSupplier.value
+  const snapshot = channelScheduleSnapshot.value
+  if (!supplier || !snapshot) return '一键检测'
+  if (!channelHasLocalBinding(snapshot)) return '开通账号并加入调度'
+  if (snapshot.local_account_schedulable) return '暂停调度'
+  if (!channelIsAvailable(snapshot)) return '复测通过后加入'
+  return '校验绑定并加入调度'
+})
+
+const channelSchedulePrimaryIcon = computed<'key' | 'ban' | 'beaker' | 'play'>(() => {
+  const snapshot = channelScheduleSnapshot.value
+  if (!snapshot) return 'beaker'
+  if (!channelHasLocalBinding(snapshot)) return 'key'
+  if (snapshot.local_account_schedulable) return 'ban'
+  if (!channelIsAvailable(snapshot)) return 'beaker'
+  return 'play'
+})
+
+const channelScheduleSteps = computed<ChannelScheduleStep[]>(() => {
+  const snapshot = channelScheduleSnapshot.value
+  if (!snapshot) {
+    return [
+      {
+        key: 'probe',
+        label: '渠道检测',
+        description: '先检测供应商渠道，选择最低且可用的倍率分组。',
+        status: 'pending',
+        icon: 'beaker'
+      },
+      {
+        key: 'local-account',
+        label: '本地账号',
+        description: '检测出可用渠道后再补齐供应商 Key 和本地 Sub2API 账号。',
+        status: 'pending',
+        icon: 'key'
+      },
+      {
+        key: 'local-group',
+        label: '本地分组绑定',
+        description: '加入调度时会校验账号是否已经绑定到本地 Sub2API 分组。',
+        status: 'pending',
+        icon: 'link'
+      }
+    ]
+  }
+
+  const available = channelIsAvailable(snapshot)
+  const hasLocalAccount = channelHasLocalBinding(snapshot)
+  return [
+    {
+      key: 'probe',
+      label: '渠道检测',
+      description: available
+        ? `检测通过，首 Token ${formatLatency(snapshot.first_token_ms)}，总耗时 ${formatLatency(snapshot.duration_ms)}。`
+        : snapshot.error_message || '需要复测通过后才会加入本地调度。',
+      status: available ? 'done' : 'warning',
+      icon: 'beaker'
+    },
+    {
+      key: 'local-account',
+      label: '本地账号',
+      description: hasLocalAccount
+        ? `已绑定本地账号 #${snapshot.local_sub2api_account_id}。`
+        : '会先开通供应商 Key，并创建或绑定本地 Sub2API 账号。',
+      status: hasLocalAccount ? 'done' : 'pending',
+      icon: 'key'
+    },
+    {
+      key: 'local-group',
+      label: '本地分组绑定',
+      description: hasLocalAccount
+        ? '加入调度时自动校验并补齐本地分组绑定。'
+        : '本地账号准备完成后自动绑定到对应调度分组。',
+      status: snapshot.local_account_schedulable ? 'done' : 'pending',
+      icon: 'link'
+    },
+    {
+      key: 'schedule',
+      label: '调度状态',
+      description: snapshot.local_account_schedulable ? '该账号已经参与本地 Sub2API 调度。' : '完成前置校验后可加入本地 Sub2API 调度。',
+      status: snapshot.local_account_schedulable ? 'done' : 'pending',
+      icon: 'play'
+    }
+  ]
 })
 
 const currentBalanceFailureMessage = computed(() => {
@@ -1567,6 +2222,7 @@ const groupWorkflowSteps = computed(() => {
   const hasSession = Boolean(currentGroupSession.value?.has_encrypted_bundle)
   const hasGroups = supplierGroups.value.length > 0
   const hasKeys = supplierKeys.value.length > 0
+  const hasChannelChecks = Object.keys(supplierChannelChecks.value).length > 0
   const job = activeProvisionJob.value
   return [
     {
@@ -1589,9 +2245,9 @@ const groupWorkflowSteps = computed(() => {
     },
     {
       key: 'verify',
-      label: '验证',
-      status: hasKeys ? 'succeeded' : 'queued',
-      caption: hasKeys ? '可查看绑定' : '待任务完成'
+      label: '检测',
+      status: job?.job_type === 'check_supplier_channels' ? job.status : (hasChannelChecks ? 'succeeded' : 'queued'),
+      caption: hasChannelChecks ? '已记录渠道快照' : (hasKeys ? '待检测' : '待账号绑定')
     }
   ] as Array<{ key: string; label: string; status: SupplierProvisionStatus; caption: string }>
 })
@@ -1719,6 +2375,12 @@ function formatMultiplier(value?: number | null): string {
   return `${value.toFixed(4).replace(/\.?0+$/, '')}x`
 }
 
+function formatLatency(value?: number | null): string {
+  if (typeof value !== 'number' || value <= 0) return '-'
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}s`
+  return `${Math.round(value)}ms`
+}
+
 function formatUSDLimit(value?: number | null): string {
   if (typeof value !== 'number') return '-'
   return new Intl.NumberFormat(undefined, {
@@ -1757,6 +2419,19 @@ function groupPlatform(value?: string): GroupPlatform {
   return 'antigravity'
 }
 
+function groupPlatformFromProvider(value?: string): GroupPlatform {
+  return groupPlatform(value)
+}
+
+function providerLabel(value?: string): string {
+  const provider = (value || 'mixed').toLowerCase()
+  if (provider.includes('anthropic') || provider.includes('claude')) return 'Anthropic / Claude'
+  if (provider.includes('gemini') || provider.includes('google')) return 'Gemini'
+  if (provider.includes('openai') || provider.includes('gpt')) return 'OpenAI'
+  if (provider.includes('image')) return 'Image'
+  return provider === 'mixed' ? '混合渠道' : value || '混合渠道'
+}
+
 function runtimeLabel(value: SupplierRuntimeStatus): string {
   return {
     monitor_only: '仅监控',
@@ -1788,26 +2463,133 @@ function healthClass(status: SupplierHealthStatus): string {
   return 'badge-danger'
 }
 
-function supplierBalanceAmountClass(supplier: Supplier): string {
-  if (supplier.balance_cents > 0 && isSwitchableRuntimeStatus(supplier.runtime_status)) return 'text-emerald-700 dark:text-emerald-300'
-  if (supplier.balance_cents <= 0) return 'text-red-600 dark:text-red-300'
-  return 'text-gray-900 dark:text-gray-100'
-}
-
-function supplierBalanceBadgeClass(supplier: Supplier): string {
-  if (supplier.balance_cents <= 0) return 'badge-danger'
-  if (isSwitchableRuntimeStatus(supplier.runtime_status)) return 'badge-success'
-  return 'badge-gray'
-}
-
-function supplierBalanceLabel(supplier: Supplier): string {
-  if (supplier.balance_cents <= 0) return '无余额'
-  if (isSwitchableRuntimeStatus(supplier.runtime_status)) return '可用余额'
-  return '仅监控余额'
-}
-
 function supplierCostSnapshot(supplierID: number): SupplierCostSnapshot | undefined {
   return supplierCostSnapshots.value[supplierID]
+}
+
+function supplierBestChannel(supplierID: number): SupplierChannelCheckSnapshot | undefined {
+  return supplierBestChannels.value[supplierID]
+}
+
+function groupChannelCheck(groupID: number): SupplierChannelCheckSnapshot | undefined {
+  return supplierChannelChecks.value[groupID]
+}
+
+function isChannelCheckActionRunning(key: string): boolean {
+  return channelCheckActionKey.value === key
+}
+
+function isBestChannelSchedulingRunning(supplierID: number): boolean {
+  return channelCheckActionKey.value === `best-schedule:${supplierID}`
+}
+
+function channelHasLocalBinding(snapshot?: SupplierChannelCheckSnapshot): boolean {
+  return Boolean(snapshot?.supplier_account_id && snapshot.local_sub2api_account_id)
+}
+
+function channelIsAvailable(snapshot?: SupplierChannelCheckSnapshot): boolean {
+  return snapshot?.probe_status === 'available'
+}
+
+function scheduleChannelKey(supplierID: number, supplierGroupID?: number): string {
+  return `${supplierID}:${supplierGroupID || 0}`
+}
+
+function firstNonEmptyString(...values: Array<string | number | null | undefined>): string {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim()
+    if (normalized) return normalized
+  }
+  return ''
+}
+
+function scheduleRowRisky(row: ScheduleListRow): boolean {
+  if (!row.local_account_id) return true
+  if (row.health_status !== 'normal') return true
+  if (row.local_account_status !== 'active') return true
+  return row.probe_status !== 'available'
+}
+
+function shouldShowScheduleSupplierName(row: ScheduleListRow): boolean {
+  const supplierName = row.supplier_name.trim().toLowerCase()
+  if (!supplierName) return false
+  return !row.local_account_name.trim().toLowerCase().includes(supplierName)
+}
+
+function channelScheduleStepClass(status: ChannelScheduleStepStatus): string {
+  if (status === 'done') return 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20'
+  if (status === 'warning') return 'border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20'
+  return 'border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-900/40'
+}
+
+function channelScheduleStepIconClass(status: ChannelScheduleStepStatus): string {
+  if (status === 'done') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200'
+  if (status === 'warning') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200'
+  return 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-300'
+}
+
+function channelScheduleStepIconName(step: ChannelScheduleStep): ChannelScheduleStepIcon {
+  if (step.status === 'done') return 'check'
+  if (step.status === 'warning') return 'exclamationTriangle'
+  if (step.status === 'pending') return 'clock'
+  return step.icon
+}
+
+function groupHasLocalBinding(group: SupplierGroup): boolean {
+  const check = groupChannelCheck(group.id)
+  if (channelHasLocalBinding(check)) return true
+  return Boolean(groupKey(group)?.local_sub2api_account_id)
+}
+
+function bestChannelActionLabel(supplier: Supplier): string {
+  const current = supplierBestChannel(supplier.id)
+  if (!current) return '一键检测'
+  if (!channelHasLocalBinding(current)) return '开通账号'
+  if (current.local_account_schedulable) return '暂停'
+  if (!channelIsAvailable(current)) return '复测'
+  return '校验加入'
+}
+
+function bestChannelActionIcon(supplier: Supplier): 'key' | 'ban' | 'beaker' | 'play' {
+  const current = supplierBestChannel(supplier.id)
+  if (!current) return 'beaker'
+  if (!channelHasLocalBinding(current)) return 'key'
+  if (current.local_account_schedulable) return 'ban'
+  if (!channelIsAvailable(current)) return 'beaker'
+  return 'play'
+}
+
+function bestChannelActionTitle(supplier: Supplier): string {
+  const current = supplierBestChannel(supplier.id)
+  if (!current) return '提交异步渠道检测任务'
+  if (!channelHasLocalBinding(current)) return '先为该供应商分组开通第三方 Key 和本地 Sub2API 账号'
+  if (current.local_account_schedulable) return '暂停该最佳渠道对应本地账号参与调度'
+  if (!channelIsAvailable(current)) return '该渠道当前不可用或未通过真实探测，请先复测'
+  return '校验本地分组绑定后，将该最佳渠道对应本地账号加入调度'
+}
+
+function groupScheduleActionLabel(group: SupplierGroup): string {
+  const check = groupChannelCheck(group.id)
+  if (!groupHasLocalBinding(group)) return '先开通'
+  if (check?.local_account_schedulable) return '暂停'
+  if (!channelIsAvailable(check)) return '复测'
+  return '校验加入'
+}
+
+function groupScheduleActionIcon(group: SupplierGroup): 'key' | 'ban' | 'beaker' | 'play' {
+  const check = groupChannelCheck(group.id)
+  if (!groupHasLocalBinding(group)) return 'key'
+  if (check?.local_account_schedulable) return 'ban'
+  if (!channelIsAvailable(check)) return 'beaker'
+  return 'play'
+}
+
+function groupScheduleActionTitle(group: SupplierGroup): string {
+  const check = groupChannelCheck(group.id)
+  if (!groupHasLocalBinding(group)) return '先开通第三方 Key 和本地 Sub2API 账号'
+  if (check?.local_account_schedulable) return '暂停该渠道对应本地账号参与调度'
+  if (!channelIsAvailable(check)) return '该渠道当前不可用或未通过真实探测，请先复测'
+  return '校验本地分组绑定后，将该渠道对应本地账号加入调度'
 }
 
 function costDeltaLabel(supplierID: number): string {
@@ -1891,7 +2673,26 @@ function provisionJobTypeLabel(type?: SupplierProvisionJobType): string {
   if (type === 'provision_group_key') return '开通单组 Key/账号'
   if (type === 'provision_all_group_keys') return '补齐全部 Key/账号'
   if (type === 'repair_binding') return '修复绑定'
+  if (type === 'check_supplier_channels') return '检测供应商渠道'
   return '供应商任务'
+}
+
+function channelProbeStatusLabel(status?: SupplierChannelProbeStatus): string {
+  if (status === 'available') return '可用'
+  if (status === 'slow_first_token') return '首 token 慢'
+  if (status === 'slow_total') return '总耗时慢'
+  if (status === 'request_error') return '请求失败'
+  if (status === 'remote_unavailable') return '远端异常'
+  if (status === 'no_local_account') return '未绑定账号'
+  if (status === 'probe_failed') return '检测失败'
+  return '未检测'
+}
+
+function channelProbeStatusClass(status?: SupplierChannelProbeStatus): string {
+  if (status === 'available') return 'badge-success'
+  if (status === 'slow_first_token' || status === 'slow_total' || status === 'remote_unavailable') return 'badge-warning'
+  if (status === 'request_error' || status === 'probe_failed') return 'badge-danger'
+  return 'badge-gray'
 }
 
 function provisionJobStatusLabel(status?: SupplierProvisionStatus): string {
@@ -2177,6 +2978,7 @@ async function loadSuppliers() {
     ])
     suppliers.value = result.items
     supplierCostSnapshots.value = Object.fromEntries(costResult.items.map((item) => [item.supplier_id, item]))
+    await loadBestChannelChecks(result.items.map((item) => item.id))
     pagination.total = result.total || 0
     pagination.pages = result.pages || 0
     pagination.page = result.page || pagination.page
@@ -2188,6 +2990,156 @@ async function loadSuppliers() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadBestChannelChecks(supplierIds: number[] = suppliers.value.map((item) => item.id)) {
+  if (supplierIds.length === 0) {
+    supplierBestChannels.value = {}
+    return
+  }
+  try {
+    const result = await listSupplierBestChannelChecks(supplierIds)
+    supplierBestChannels.value = Object.fromEntries(result.items.map((item) => [item.supplier_id, item])) as Record<number, SupplierChannelCheckSnapshot>
+  } catch {
+    supplierBestChannels.value = {}
+  }
+}
+
+function openScheduleListDialog() {
+  moreMenuOpen.value = false
+  scheduleListDialogOpen.value = true
+  void loadScheduleList()
+}
+
+function closeScheduleListDialog() {
+  if (scheduleListActionKey.value) return
+  scheduleListDialogOpen.value = false
+}
+
+async function loadScheduleList() {
+  if (scheduleListLoading.value) return
+  scheduleListLoading.value = true
+  scheduleListError.value = ''
+  try {
+    const supplierResult = await listSuppliers({ page: 1, page_size: 1000 })
+    const supplierItems = supplierResult.items || []
+    scheduleListSuppliers.value = supplierItems
+    if (supplierItems.length === 0) {
+      scheduleListBindings.value = []
+      scheduleListLocalAccounts.value = {}
+      scheduleListChannelChecks.value = {}
+      return
+    }
+
+    const [localResult, accountResults, channelResults] = await Promise.all([
+      listLocalSub2APIAccounts({ page: 1, page_size: 1000 }),
+      Promise.all(supplierItems.map((supplier) => listSupplierAccounts(supplier.id, { page: 1, page_size: 1000 }))),
+      Promise.all(supplierItems.map((supplier) => listSupplierChannelChecks(supplier.id, { page: 1, page_size: 300 })))
+    ])
+
+    scheduleListBindings.value = accountResults.flatMap((result) => result.items)
+    scheduleListLocalAccounts.value = Object.fromEntries(localResult.items.map((account) => [account.id, account]))
+
+    const nextChecks: Record<string, SupplierChannelCheckSnapshot | undefined> = {}
+    for (const result of channelResults) {
+      for (const snapshot of result.items) {
+        const key = scheduleChannelKey(snapshot.supplier_id, snapshot.supplier_group_id)
+        const existing = nextChecks[key]
+        if (!existing || Date.parse(snapshot.captured_at || '') > Date.parse(existing.captured_at || '')) {
+          nextChecks[key] = snapshot
+        }
+      }
+    }
+    scheduleListChannelChecks.value = nextChecks
+  } catch (error) {
+    scheduleListError.value = (error as { message?: string }).message || '加载调度列表失败'
+    appStore.showError(scheduleListError.value)
+  } finally {
+    scheduleListLoading.value = false
+  }
+}
+
+function upsertScheduleListSnapshots(items: SupplierChannelCheckSnapshot[]) {
+  if (items.length === 0) return
+  const next = { ...scheduleListChannelChecks.value }
+  for (const item of items) {
+    next[scheduleChannelKey(item.supplier_id, item.supplier_group_id)] = item
+  }
+  scheduleListChannelChecks.value = next
+}
+
+function updateScheduleListLocalAccount(row: ScheduleListRow, schedulable: boolean) {
+  const localAccount = scheduleListLocalAccounts.value[row.local_account_id]
+  if (!localAccount) return
+  scheduleListLocalAccounts.value = {
+    ...scheduleListLocalAccounts.value,
+    [row.local_account_id]: {
+      ...localAccount,
+      schedulable
+    }
+  }
+}
+
+async function toggleScheduleRow(row: ScheduleListRow) {
+  if (scheduleListActionKey.value) return
+  if (!row.supplier_group_id) {
+    appStore.showError('该账号缺少供应商分组，无法切换调度')
+    return
+  }
+  scheduleListActionKey.value = row.key
+  scheduleListError.value = ''
+  const nextSchedulable = !row.schedulable
+  try {
+    const snapshot = nextSchedulable
+      ? await enableSupplierChannelScheduling(row.supplier_id, row.supplier_group_id)
+      : await pauseSupplierChannelScheduling(row.supplier_id, row.supplier_group_id)
+    upsertScheduleListSnapshots([snapshot])
+    updateScheduleListLocalAccount(row, snapshot.local_account_schedulable)
+    mergeChannelCheckSnapshots([snapshot])
+    await loadBestChannelChecks([row.supplier_id])
+    appStore.showSuccess(nextSchedulable ? '已加入本地调度' : '已暂停本地调度')
+  } catch (error) {
+    scheduleListError.value = (error as { message?: string }).message || (nextSchedulable ? '加入调度失败' : '暂停调度失败')
+    appStore.showError(scheduleListError.value)
+  } finally {
+    scheduleListActionKey.value = ''
+  }
+}
+
+async function probeScheduleRow(row: ScheduleListRow) {
+  if (scheduleListActionKey.value) return
+  if (!row.supplier_group_id) {
+    appStore.showError('该账号缺少供应商分组，无法复测')
+    return
+  }
+  scheduleListActionKey.value = row.key
+  scheduleListError.value = ''
+  try {
+    const result = await probeSupplierChannel(row.supplier_id, {
+      supplier_group_id: row.supplier_group_id,
+      auto_pause_on_failure: true
+    })
+    upsertScheduleListSnapshots(result.items)
+    mergeChannelCheckSnapshots(result.items)
+    const current = result.items.find((item) => item.supplier_group_id === row.supplier_group_id)
+    if (current) {
+      updateScheduleListLocalAccount(row, current.local_account_schedulable)
+    }
+    await loadBestChannelChecks([row.supplier_id])
+    appStore.showSuccess('渠道复测完成')
+  } catch (error) {
+    scheduleListError.value = (error as { message?: string }).message || '渠道复测失败'
+    appStore.showError(scheduleListError.value)
+  } finally {
+    scheduleListActionKey.value = ''
+  }
+}
+
+function openScheduleRowGroups(row: ScheduleListRow) {
+  const supplier = scheduleListSuppliers.value.find((item) => item.id === row.supplier_id) || suppliers.value.find((item) => item.id === row.supplier_id)
+  if (!supplier) return
+  scheduleListDialogOpen.value = false
+  openGroupsDialog(supplier)
 }
 
 function openDeepLinkedDialog() {
@@ -2483,9 +3435,11 @@ function openGroupsDialog(supplier: Supplier) {
   groupsSupplier.value = supplier
   supplierGroups.value = []
   supplierKeys.value = []
+  supplierChannelChecks.value = {}
   activeProvisionJob.value = null
   groupsError.value = ''
   provisionJobError.value = ''
+  channelCheckError.value = ''
   groupPagination.page = 1
   groupFilters.q = ''
   groupFilters.status = ''
@@ -2598,7 +3552,8 @@ async function loadCurrentGroups() {
       listSupplierKeys(groupsSupplier.value.id, {
         page: 1,
         page_size: 1000
-      })
+      }),
+      loadCurrentChannelChecks()
     ])
     supplierGroups.value = result.items
     supplierKeys.value = keyResult.items
@@ -2611,6 +3566,395 @@ async function loadCurrentGroups() {
   } finally {
     groupsLoading.value = false
   }
+}
+
+async function loadCurrentChannelChecks() {
+  if (!groupsSupplier.value) return
+  try {
+    const result = await listSupplierChannelChecks(groupsSupplier.value.id, { page: 1, page_size: 500 })
+    const latestByGroup = new Map<number, SupplierChannelCheckSnapshot>()
+    for (const item of result.items) {
+      const existing = latestByGroup.get(item.supplier_group_id)
+      const itemTime = new Date(item.captured_at).getTime()
+      const existingTime = existing ? new Date(existing.captured_at).getTime() : 0
+      if (!existing || itemTime > existingTime || (itemTime === existingTime && item.id > existing.id)) {
+        latestByGroup.set(item.supplier_group_id, item)
+      }
+    }
+    supplierChannelChecks.value = Object.fromEntries(latestByGroup) as Record<number, SupplierChannelCheckSnapshot>
+  } catch {
+    supplierChannelChecks.value = {}
+  }
+}
+
+function mergeChannelCheckSnapshots(items: SupplierChannelCheckSnapshot[]) {
+  const next = { ...supplierChannelChecks.value }
+  for (const item of items) {
+    next[item.supplier_group_id] = item
+  }
+  supplierChannelChecks.value = next
+  const best = items.find((item) => item.recommended)
+  if (best) {
+    supplierBestChannels.value = {
+      ...supplierBestChannels.value,
+      [best.supplier_id]: best
+    }
+  }
+}
+
+async function syncCurrentChannelChecks() {
+  if (!groupsSupplier.value || channelChecksSyncing.value) return
+  channelChecksSyncing.value = true
+  channelCheckError.value = ''
+  provisionJobError.value = ''
+  try {
+    const job = await syncSupplierChannelChecks(groupsSupplier.value.id, {
+      candidate_limit: 3,
+      auto_pause_on_failure: true
+    })
+    appStore.showSuccess(`渠道检测任务已提交 #${job.job_id}`)
+    await watchProvisionJob(job.job_id)
+  } catch (error) {
+    channelCheckError.value = (error as { message?: string }).message || '渠道检测任务提交失败'
+    appStore.showError(channelCheckError.value)
+  } finally {
+    channelChecksSyncing.value = false
+  }
+}
+
+async function syncSupplierChannelFromRow(supplier: Supplier) {
+  if (rowChannelCheckSupplierID.value) return
+  rowChannelCheckSupplierID.value = supplier.id
+  try {
+    const job = await syncSupplierChannelChecks(supplier.id, {
+      candidate_limit: 3,
+      auto_pause_on_failure: true
+    })
+    appStore.showSuccess(`渠道检测任务已提交 #${job.job_id}`)
+    void refreshChannelCheckAfterJob(supplier.id, job.job_id)
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '渠道检测任务提交失败')
+  } finally {
+    rowChannelCheckSupplierID.value = null
+  }
+}
+
+async function syncSelectedChannelChecks() {
+  if (selectedCount.value === 0 || bulkChannelChecksSyncing.value) return
+  const targets = [...selectedRows.value]
+  if (targets.length === 0) {
+    appStore.showWarning('当前页没有可检测的已选供应商')
+    return
+  }
+
+  moreMenuOpen.value = false
+  bulkChannelChecksSyncing.value = true
+  let submitted = 0
+  let failed = 0
+  const jobs: Array<{ supplierID: number; jobID: number }> = []
+  const failures: string[] = []
+
+  try {
+    for (const supplier of targets) {
+      try {
+        const job = await syncSupplierChannelChecks(supplier.id, {
+          candidate_limit: 3,
+          auto_pause_on_failure: true
+        })
+        submitted++
+        jobs.push({ supplierID: supplier.id, jobID: job.job_id })
+      } catch (error) {
+        failed++
+        failures.push(`${supplier.name}: ${(error as { message?: string }).message || '提交失败'}`)
+      }
+    }
+
+    const failureText = failures.length > 0
+      ? `；${failures.slice(0, 3).join('；')}${failures.length > 3 ? ` 等 ${failures.length} 项` : ''}`
+      : ''
+
+    if (submitted > 0) {
+      appStore.showSuccess(`渠道检测任务已提交：成功 ${submitted}${failed > 0 ? `，失败 ${failed}${failureText}` : ''}`, failed > 0 ? 7000 : undefined)
+      void refreshChannelChecksAfterJobs(jobs)
+      return
+    }
+    appStore.showError(`渠道检测任务提交失败：失败 ${failed}${failureText}`, 8000)
+  } finally {
+    bulkChannelChecksSyncing.value = false
+  }
+}
+
+async function refreshChannelCheckAfterJob(supplierID: number, jobID: number) {
+  await waitProvisionJobTerminal(jobID)
+  await loadBestChannelChecks([supplierID])
+}
+
+async function refreshChannelChecksAfterJobs(jobs: Array<{ supplierID: number; jobID: number }>) {
+  if (jobs.length === 0) return
+  await Promise.allSettled(jobs.map((job) => waitProvisionJobTerminal(job.jobID)))
+  await loadBestChannelChecks(jobs.map((job) => job.supplierID))
+}
+
+async function waitProvisionJobTerminal(jobID: number) {
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    const job = await getSupplierProvisionJob(jobID)
+    if (isTerminalProvisionJobStatus(job.status)) {
+      return job
+    }
+    await sleep(2000)
+  }
+  return null
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function probeGroupChannel(group: SupplierGroup) {
+  if (!groupsSupplier.value || channelCheckActionKey.value) return
+  const actionKey = `probe:${group.id}`
+  channelCheckActionKey.value = actionKey
+  channelCheckError.value = ''
+  try {
+    const result = await probeSupplierChannel(groupsSupplier.value.id, {
+      supplier_group_id: group.id,
+      auto_pause_on_failure: true
+    })
+    mergeChannelCheckSnapshots(result.items)
+    await loadBestChannelChecks([groupsSupplier.value.id])
+    appStore.showSuccess('渠道复测完成')
+  } catch (error) {
+    channelCheckError.value = (error as { message?: string }).message || '渠道复测失败'
+    appStore.showError(channelCheckError.value)
+  } finally {
+    if (channelCheckActionKey.value === actionKey) {
+      channelCheckActionKey.value = ''
+    }
+  }
+}
+
+async function setGroupChannelScheduling(group: SupplierGroup, schedulable: boolean) {
+  if (!groupsSupplier.value || channelCheckActionKey.value) return
+  const actionKey = `schedule:${group.id}`
+  channelCheckActionKey.value = actionKey
+  channelCheckError.value = ''
+  try {
+    const snapshot = schedulable
+      ? await enableSupplierChannelScheduling(groupsSupplier.value.id, group.id)
+      : await pauseSupplierChannelScheduling(groupsSupplier.value.id, group.id)
+    mergeChannelCheckSnapshots([snapshot])
+    await loadBestChannelChecks([groupsSupplier.value.id])
+    appStore.showSuccess(schedulable ? '已加入本地调度' : '已暂停本地调度')
+  } catch (error) {
+    channelCheckError.value = (error as { message?: string }).message || (schedulable ? '加入调度失败' : '暂停调度失败')
+    appStore.showError(channelCheckError.value)
+  } finally {
+    if (channelCheckActionKey.value === actionKey) {
+      channelCheckActionKey.value = ''
+    }
+  }
+}
+
+async function handleGroupScheduleAction(group: SupplierGroup) {
+  const check = groupChannelCheck(group.id)
+  if (!groupHasLocalBinding(group)) {
+    openProvisionDialog(group)
+    return
+  }
+  if (check?.local_account_schedulable) {
+    await setGroupChannelScheduling(group, false)
+    return
+  }
+  if (!channelIsAvailable(check)) {
+    await probeGroupChannel(group)
+    return
+  }
+  await setGroupChannelScheduling(group, true)
+}
+
+function openBestChannelScheduleDialog(supplier: Supplier) {
+  channelScheduleSupplier.value = supplier
+  channelScheduleDialogOpen.value = true
+}
+
+function closeBestChannelScheduleDialog() {
+  if (channelScheduleSubmitting.value) return
+  channelScheduleDialogOpen.value = false
+  channelScheduleSupplier.value = null
+}
+
+function openChannelScheduleGroups() {
+  const supplier = channelScheduleSupplier.value
+  if (!supplier) return
+  channelScheduleDialogOpen.value = false
+  channelScheduleSupplier.value = null
+  openGroupsDialog(supplier)
+}
+
+async function setBestChannelScheduling(supplier: Supplier, schedulable: boolean) {
+  const current = supplierBestChannel(supplier.id)
+  if (!current) {
+    appStore.showError('请先完成渠道检测，再加入调度')
+    return
+  }
+  if (channelCheckActionKey.value) return
+
+  const actionKey = `best-schedule:${supplier.id}`
+  channelCheckActionKey.value = actionKey
+  try {
+    const snapshot = schedulable
+      ? await enableSupplierChannelScheduling(supplier.id, current.supplier_group_id)
+      : await pauseSupplierChannelScheduling(supplier.id, current.supplier_group_id)
+    supplierBestChannels.value = {
+      ...supplierBestChannels.value,
+      [supplier.id]: snapshot
+    }
+    if (groupsSupplier.value?.id === supplier.id) {
+      supplierChannelChecks.value = {
+        ...supplierChannelChecks.value,
+        [snapshot.supplier_group_id]: snapshot
+      }
+    }
+    appStore.showSuccess(schedulable ? '已加入本地调度' : '已暂停本地调度')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || (schedulable ? '加入调度失败' : '暂停调度失败'))
+  } finally {
+    if (channelCheckActionKey.value === actionKey) {
+      channelCheckActionKey.value = ''
+    }
+  }
+}
+
+async function confirmChannelSchedulePrimaryAction() {
+  const supplier = channelScheduleSupplier.value
+  if (!supplier || channelScheduleSubmitting.value) return
+  channelScheduleSubmitting.value = true
+  try {
+    await handleBestChannelScheduleAction(supplier)
+  } finally {
+    channelScheduleSubmitting.value = false
+  }
+}
+
+async function handleBestChannelScheduleAction(supplier: Supplier) {
+  const current = supplierBestChannel(supplier.id)
+  if (!current) {
+    await syncSupplierChannelFromRow(supplier)
+    return
+  }
+  if (!channelHasLocalBinding(current)) {
+    await quickProvisionBestChannel(supplier, current)
+    return
+  }
+  if (current.local_account_schedulable) {
+    await setBestChannelScheduling(supplier, false)
+    return
+  }
+  if (!channelIsAvailable(current)) {
+    await probeAndScheduleBestChannel(supplier, current)
+    return
+  }
+  await setBestChannelScheduling(supplier, true)
+}
+
+async function probeAndScheduleBestChannel(supplier: Supplier, snapshot: SupplierChannelCheckSnapshot) {
+  if (channelCheckActionKey.value) return
+  const actionKey = `best-schedule:${supplier.id}`
+  channelCheckActionKey.value = actionKey
+  try {
+    const result = await probeSupplierChannel(supplier.id, {
+      supplier_group_id: snapshot.supplier_group_id,
+      auto_pause_on_failure: false
+    })
+    mergeChannelCheckSnapshots(result.items)
+    const checked = result.items.find((item) => item.supplier_group_id === snapshot.supplier_group_id)
+    if (!channelIsAvailable(checked)) {
+      appStore.showWarning(checked?.error_message || '渠道复测未通过，暂未加入调度')
+      await loadBestChannelChecks([supplier.id])
+      return
+    }
+    const scheduled = await enableSupplierChannelScheduling(supplier.id, snapshot.supplier_group_id)
+    supplierBestChannels.value = {
+      ...supplierBestChannels.value,
+      [supplier.id]: scheduled
+    }
+    appStore.showSuccess('渠道复测通过，已加入本地调度')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '复测并加入调度失败')
+  } finally {
+    if (channelCheckActionKey.value === actionKey) {
+      channelCheckActionKey.value = ''
+    }
+  }
+}
+
+async function quickProvisionBestChannel(supplier: Supplier, snapshot: SupplierChannelCheckSnapshot) {
+  if (channelCheckActionKey.value) return
+  const baseURL = defaultProviderBaseURL(supplier)
+  if (!baseURL) {
+    appStore.showError('未配置供应商 API Base URL，无法开通本地账号')
+    return
+  }
+
+  const actionKey = `best-schedule:${supplier.id}`
+  channelCheckActionKey.value = actionKey
+  try {
+    const job = await provisionSupplierKey(supplier.id, {
+      supplier_group_id: snapshot.supplier_group_id,
+      name: defaultChannelProvisionName(supplier, snapshot),
+      quota_usd: 0,
+      expires_in_days: null,
+      local_account_platform: normalizeLocalPlatform(snapshot.provider_family),
+      local_account_name: defaultChannelProvisionName(supplier, snapshot),
+      local_account_base_url: baseURL,
+      local_account_concurrency: 2,
+      local_account_priority: 100,
+      local_account_rate_multiplier: Number(snapshot.effective_rate_multiplier || 1),
+      runtime_status: 'monitor_only',
+      health_status: 'normal',
+      balance_threshold_cents: 0,
+      balance_cents: Math.max(0, supplier.balance_cents || 0),
+      balance_currency: supplier.balance_currency || 'USD'
+    })
+    appStore.showSuccess(`账号开通任务已提交 #${job.job_id}`)
+    const finished = await waitProvisionJobTerminal(job.job_id)
+    if (!finished || !isSuccessfulProvisionJobStatus(finished.status)) {
+      appStore.showError(finished?.error_message || '账号开通未完成，暂未加入调度')
+      return
+    }
+    const probe = await probeSupplierChannel(supplier.id, {
+      supplier_group_id: snapshot.supplier_group_id,
+      auto_pause_on_failure: false
+    })
+    mergeChannelCheckSnapshots(probe.items)
+    const checked = probe.items.find((item) => item.supplier_group_id === snapshot.supplier_group_id)
+    if (!channelIsAvailable(checked)) {
+      appStore.showWarning(checked?.error_message || '渠道复测未通过，暂未加入调度')
+      await loadBestChannelChecks([supplier.id])
+      return
+    }
+    const scheduled = await enableSupplierChannelScheduling(supplier.id, snapshot.supplier_group_id)
+    supplierBestChannels.value = {
+      ...supplierBestChannels.value,
+      [supplier.id]: scheduled
+    }
+    appStore.showSuccess('已开通账号并加入本地调度')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '开通账号并加入调度失败')
+  } finally {
+    if (channelCheckActionKey.value === actionKey) {
+      channelCheckActionKey.value = ''
+    }
+  }
+}
+
+function defaultChannelProvisionName(supplier: Supplier, snapshot: SupplierChannelCheckSnapshot): string {
+  return [supplier.name, snapshot.group_name].filter(Boolean).join('-') || `supplier-channel-${snapshot.supplier_group_id}`
+}
+
+function isSuccessfulProvisionJobStatus(status?: SupplierProvisionStatus): boolean {
+  return status === 'succeeded' || status === 'partial_succeeded'
 }
 
 function openProvisionDialog(group: SupplierGroup) {

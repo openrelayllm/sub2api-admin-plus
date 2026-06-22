@@ -555,7 +555,7 @@ async function captureSupplierSession(supplierID, autoCreate) {
     const partial = Boolean(ingest.balance_probe_error)
     await recordCaptureResult(
       partial ? 'partial' : 'succeeded',
-      partial ? '会话已保存，余额读取失败' : '上报成功',
+      partial ? '会话已保存，后台余额同步失败' : '上报成功',
       completed,
       supplier,
       identification.activeTab,

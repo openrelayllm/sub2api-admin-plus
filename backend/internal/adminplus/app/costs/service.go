@@ -2,6 +2,7 @@ package costs
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ type Repository interface {
 	DeleteLedgerEntryForSource(ctx context.Context, supplierID int64, providerType string, entryType string, sourceType string, sourceID int64) error
 	RefreshSnapshot(ctx context.Context, supplierID int64, currency string, capturedAt time.Time) (*adminplusdomain.SupplierCostSnapshot, error)
 	ListSnapshots(ctx context.Context, filter SummaryFilter) ([]*adminplusdomain.SupplierCostSnapshot, error)
+	GetLedgerOverview(ctx context.Context) (*adminplusdomain.SupplierCostLedgerOverview, error)
 	ListFundingTransactions(ctx context.Context, filter TransactionFilter) ([]*adminplusdomain.SupplierFundingTransaction, error)
 	ListEntitlementTransactions(ctx context.Context, filter TransactionFilter) ([]*adminplusdomain.SupplierEntitlementTransaction, error)
 	ListLedgerEntries(ctx context.Context, filter LedgerFilter) ([]*adminplusdomain.SupplierCostLedgerEntry, error)
@@ -282,6 +284,13 @@ func (s *Service) ListSnapshots(ctx context.Context, filter SummaryFilter) ([]*a
 	}
 	filter.Limit = normalizeLimit(filter.Limit)
 	return s.repo.ListSnapshots(ctx, filter)
+}
+
+func (s *Service) GetLedgerOverview(ctx context.Context) (*adminplusdomain.SupplierCostLedgerOverview, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("cost service is not configured")
+	}
+	return s.repo.GetLedgerOverview(ctx)
 }
 
 func (s *Service) ListFundingTransactions(ctx context.Context, filter TransactionFilter) ([]*adminplusdomain.SupplierFundingTransaction, error) {
@@ -568,4 +577,63 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func buildLedgerOverview(snapshots []*adminplusdomain.SupplierCostSnapshot, generatedAt time.Time) *adminplusdomain.SupplierCostLedgerOverview {
+	itemsByCurrency := make(map[string]*adminplusdomain.SupplierCostLedgerOverviewItem)
+	suppliersByCurrency := make(map[string]map[int64]struct{})
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		currency := normalizeCurrency(snapshot.Currency)
+		item := itemsByCurrency[currency]
+		if item == nil {
+			item = &adminplusdomain.SupplierCostLedgerOverviewItem{Currency: currency}
+			itemsByCurrency[currency] = item
+			suppliersByCurrency[currency] = make(map[int64]struct{})
+		}
+		item.SnapshotCount++
+		suppliersByCurrency[currency][snapshot.SupplierID] = struct{}{}
+		item.CompletedFundingAmountCents += snapshot.CompletedFundingAmountCents
+		item.CompletedFundingCashCents += snapshot.CompletedFundingCashCents
+		item.EntitlementAmountCents += snapshot.EntitlementAmountCents
+		item.RechargeTotalCents += snapshot.CompletedFundingAmountCents + snapshot.EntitlementAmountCents
+		item.UsageCostCents += snapshot.UsageCostCents
+		item.RefundAmountCents += snapshot.RefundAmountCents
+		item.AdjustmentAmountCents += snapshot.AdjustmentAmountCents
+		item.ExpectedBalanceCents += snapshot.ExpectedBalanceCents
+		if snapshot.ActualBalanceCents != nil {
+			item.ActualBalanceAvailableCount++
+			item.ActualBalanceCents = addNullableInt64(item.ActualBalanceCents, *snapshot.ActualBalanceCents)
+		}
+		if snapshot.BalanceDeltaCents != nil {
+			item.BalanceDeltaCents = addNullableInt64(item.BalanceDeltaCents, *snapshot.BalanceDeltaCents)
+		}
+		if item.LatestCapturedAt == nil || snapshot.CapturedAt.After(*item.LatestCapturedAt) {
+			capturedAt := snapshot.CapturedAt.UTC()
+			item.LatestCapturedAt = &capturedAt
+		}
+	}
+	items := make([]adminplusdomain.SupplierCostLedgerOverviewItem, 0, len(itemsByCurrency))
+	for currency, item := range itemsByCurrency {
+		item.SupplierCount = len(suppliersByCurrency[currency])
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Currency < items[j].Currency
+	})
+	return &adminplusdomain.SupplierCostLedgerOverview{
+		GeneratedAt: generatedAt.UTC(),
+		Items:       items,
+	}
+}
+
+func addNullableInt64(current *int64, value int64) *int64 {
+	if current == nil {
+		out := value
+		return &out
+	}
+	*current += value
+	return current
 }

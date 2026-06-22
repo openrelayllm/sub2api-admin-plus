@@ -131,7 +131,7 @@
       organization_id: firstStorageValue(storage, ['organization_id', 'org_id', 'orgid']).value,
       project_id: firstStorageValue(storage, ['project_id', 'projectid']).value,
       account_id: firstStorageValue(storage, ['account_id', 'accountid']).value,
-      api_base_url: supplier?.api_base_url || `${location.origin}/api`
+      api_base_url: supplier?.api_base_url || location.origin
     }
   }
 

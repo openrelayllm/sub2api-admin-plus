@@ -234,6 +234,14 @@ h2 {
   font-size: 12px;
 }
 
+.result-detail {
+  margin-top: 6px;
+  color: #8a4b0f;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 .result.failed .result-meta {
   color: #b42318;
 }

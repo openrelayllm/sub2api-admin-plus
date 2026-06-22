@@ -3,6 +3,7 @@ package costs
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -204,6 +205,29 @@ func (r *MemoryRepository) ListSnapshots(_ context.Context, filter SummaryFilter
 	return limitSnapshots(items, filter.Limit), nil
 }
 
+func (r *MemoryRepository) GetLedgerOverview(_ context.Context) (*adminplusdomain.SupplierCostLedgerOverview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	latest := make(map[string]*adminplusdomain.SupplierCostSnapshot)
+	for _, snapshot := range r.snapshots {
+		if snapshot == nil {
+			continue
+		}
+		key := snapshotKey(snapshot.SupplierID, snapshot.Currency)
+		current := latest[key]
+		if current == nil || snapshot.CapturedAt.After(current.CapturedAt) || (snapshot.CapturedAt.Equal(current.CapturedAt) && snapshot.ID > current.ID) {
+			cp := cloneSnapshot(snapshot)
+			normalizeCostSnapshotDerivedAmounts(cp)
+			latest[key] = cp
+		}
+	}
+	items := make([]*adminplusdomain.SupplierCostSnapshot, 0, len(latest))
+	for _, snapshot := range latest {
+		items = append(items, snapshot)
+	}
+	return buildLedgerOverview(items, time.Now()), nil
+}
+
 func (r *MemoryRepository) ListFundingTransactions(_ context.Context, filter TransactionFilter) ([]*adminplusdomain.SupplierFundingTransaction, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -317,6 +341,10 @@ func cloneMap(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func snapshotKey(supplierID int64, currency string) string {
+	return normalizeCurrency(currency) + ":" + strconv.FormatInt(supplierID, 10)
 }
 
 func eventTime(item *adminplusdomain.SupplierFundingTransaction) time.Time {

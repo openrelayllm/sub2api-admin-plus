@@ -42,6 +42,58 @@
         </button>
       </section>
 
+      <section class="card overflow-hidden">
+        <div class="flex flex-col gap-2 border-b border-gray-100 px-5 py-4 dark:border-dark-700 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-base font-semibold text-gray-900 dark:text-white">总账统计</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">按币种汇总所有供应商最新成本快照，不跨币种折算。</p>
+          </div>
+          <div class="text-sm text-gray-500 dark:text-dark-400">
+            {{ ledgerOverview?.generated_at ? `生成时间 ${formatDateTime(ledgerOverview.generated_at)}` : '暂无总账快照' }}
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[1180px] divide-y divide-gray-200 dark:divide-dark-700">
+            <thead class="bg-gray-50 dark:bg-dark-800">
+              <tr>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">币种</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">供应商/快照</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值总额</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值订单</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">兑换充值</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">用量消耗</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实际余额/快照</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">余额差异</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">最近采集</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
+              <tr v-if="ledgerOverviewItems.length === 0">
+                <td colspan="9" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无总账统计</td>
+              </tr>
+              <tr v-for="item in ledgerOverviewItems" :key="item.currency">
+                <td class="px-4 py-4 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ item.currency }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">
+                  {{ item.supplier_count }} / {{ item.snapshot_count }}
+                </td>
+                <td class="px-4 py-4 text-right text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatMoney(item.recharge_total_cents, item.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.completed_funding_amount_cents, item.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.entitlement_amount_cents, item.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.usage_cost_cents, item.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">
+                  {{ item.actual_balance_cents === undefined || item.actual_balance_cents === null ? '-' : formatMoney(item.actual_balance_cents, item.currency) }}
+                  <span class="ml-1 text-xs text-gray-400 dark:text-dark-500">({{ item.actual_balance_available_count }})</span>
+                </td>
+                <td class="px-4 py-4 text-right text-sm font-medium" :class="deltaClass(item.balance_delta_cents)">
+                  {{ item.balance_delta_cents === undefined || item.balance_delta_cents === null ? '-' : formatMoney(item.balance_delta_cents, item.currency) }}
+                </td>
+                <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(item.latest_captured_at) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">充值总额</p>
@@ -235,6 +287,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import {
+  getSupplierCostLedgerOverview,
   getSupplierCostSummary,
   getSupplierProvisionJob,
   listSupplierCostLedger,
@@ -244,7 +297,9 @@ import {
   listSuppliers,
   syncSupplierCosts,
   type Supplier,
+  type SupplierCostLedgerOverview,
   type SupplierCostLedgerEntry,
+  type SupplierCostLedgerOverviewItem,
   type SupplierCostSnapshot,
   type SupplierEntitlementTransaction,
   type SupplierFundingTransaction,
@@ -264,6 +319,7 @@ const appStore = useAppStore()
 const loading = ref(false)
 const syncing = ref(false)
 const suppliers = ref<Supplier[]>([])
+const ledgerOverview = ref<SupplierCostLedgerOverview | null>(null)
 const snapshots = ref<SupplierCostSnapshot[]>([])
 const funding = ref<SupplierFundingTransaction[]>([])
 const entitlements = ref<SupplierEntitlementTransaction[]>([])
@@ -292,6 +348,7 @@ const currentSnapshot = computed(() => {
 const currentCurrency = computed(() => currentSnapshot.value?.currency || 'USD')
 const currentBalanceDelta = computed(() => supplierBalanceDeltaCents(currentSnapshot.value))
 const balanceDeltaClass = computed(() => deltaClass(currentBalanceDelta.value))
+const ledgerOverviewItems = computed<SupplierCostLedgerOverviewItem[]>(() => ledgerOverview.value?.items || [])
 const syncStatusLabel = computed(() => {
   if (activeSyncJob.value) return syncJobCaption(activeSyncJob.value)
   if (syncing.value) return '成本同步任务已提交'
@@ -412,12 +469,14 @@ function isTerminalSyncJobStatus(status: SupplierProvisionStatus): boolean {
 async function loadPage() {
   loading.value = true
   try {
-    const [supplierResult, snapshotResult] = await Promise.all([
+    const [supplierResult, snapshotResult, overviewResult] = await Promise.all([
       listSuppliers({ limit: 200 }),
-      listSupplierCostSnapshots({ page: 1, page_size: 200 })
+      listSupplierCostSnapshots({ page: 1, page_size: 200 }),
+      getSupplierCostLedgerOverview()
     ])
     suppliers.value = supplierResult.items
     snapshots.value = snapshotResult.items
+    ledgerOverview.value = overviewResult
     if (!selectedSupplierId.value && (snapshots.value[0] || suppliers.value[0])) {
       selectedSupplierId.value = snapshots.value[0]?.supplier_id || suppliers.value[0].id
       await loadSupplierDetails()
@@ -427,6 +486,10 @@ async function loadPage() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadLedgerOverview() {
+  ledgerOverview.value = await getSupplierCostLedgerOverview()
 }
 
 async function loadSupplierDetails() {
@@ -496,7 +559,7 @@ async function refreshSyncJob(jobID: number) {
       if (job.result_snapshot) {
         lastSync.value = job.result_snapshot as unknown as SupplierCostSyncResultSnapshot
       }
-      await loadSupplierDetails()
+      await Promise.all([loadSupplierDetails(), loadLedgerOverview()])
       if (job.status === 'succeeded' || job.status === 'partial_succeeded') {
         appStore.showSuccess('成本同步完成')
       } else if (job.error_message) {

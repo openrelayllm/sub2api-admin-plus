@@ -494,6 +494,8 @@ func buildSub2APIUserEndpointURL(apiBaseURL string, endpointPath string) (string
 	path := strings.TrimRight(u.Path, "/")
 	if strings.HasSuffix(path, "/api/v1") {
 		u.Path = path + endpointPath
+	} else if strings.HasSuffix(path, "/api") {
+		u.Path = path + "/v1" + endpointPath
 	} else {
 		u.Path = path + "/api/v1" + endpointPath
 	}

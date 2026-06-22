@@ -1,22 +1,24 @@
 # Release Notes
 
-## v0.9.7 - 2026-06-22
+## v0.9.8 - 2026-06-22
 
 ### 新增
 
-- New API provider adapter 新增 Key provisioning：通过 `/api/token/search` 幂等查找、`POST /api/token/` 创建、`POST /api/token/:id/key` 读取明文 Key。
-- `supplierkeys` 服务支持 New API 供应商执行“补齐 Key/账号”，可为每个 active group 创建或复用第三方 Key，并同步创建本地 Sub2API account。
-- New API profile capability 新增 `can_create_key`，前后端可据此识别供应商支持 Key 补齐。
-- New API 路线图文档补充用户 Key 管理接口、内存链路约束和验收标准。
+- 供应商新增 channel check 能力：按 active group 选择候选通道，读取远端 channel monitor，执行 OpenAI Responses 探测并保存检测快照。
+- 新增 channel check API：最佳通道列表、供应商历史检测、单 group 复测、异步批量检测，以及本地 Sub2API account 调度启停。
+- 供应商页新增最佳通道列、批量检测入口、group 级通道检测结果、快速补齐绑定并加入调度的操作流。
+- 成本对账新增总账概览，按币种聚合最新供应商快照，展示充值、权益、用量、退款、调整、预期余额和实际余额差异。
+- Scheduler 支持可选自动 channel check 任务，可通过 `ADMIN_PLUS_CHANNEL_CHECKS_SCHEDULER_ENABLED` 开启。
 
 ### 修复
 
-- Provider router 不再对 New API `CreateKey` 返回 capability missing，而是转发到 New API adapter。
-- New API Key 创建失败会映射为明确错误码，包括 session 失效、token 数量上限和额度参数错误。
-- New API token 响应快照会移除 `key`、`api_key`、`token`、`secret` 等敏感字段，避免明文凭据进入任务结果或日志口径。
+- Chrome 扩展不再从页面文本解析余额，避免与后端会话余额同步口径重复。
+- Sub2API 扩展采集的默认 `api_base_url` 改为站点 origin，避免自动追加 `/api` 导致供应商 API 根地址错误。
+- 扩展弹窗对后台余额同步失败展示脱敏诊断，隐藏 authorization、cookie、token、secret、password 等敏感片段。
+- 供应商会话 profile 兼容远端 API base URL，减少直登会话和本地账号绑定时的地址不一致。
 
 ### 发布
 
-- 更新版本号到 `0.9.7`。
+- 更新版本号到 `0.9.8`。
 - GitHub Release 继续只发布 Linux 产物：`linux_amd64`、`linux_arm64` 和 `checksums.txt`。
 - DockerHub 镜像继续由 GitHub Actions 发布，不依赖本地 Docker。

@@ -11,6 +11,7 @@ import (
 
 	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
@@ -48,6 +49,7 @@ type Service struct {
 	announcementSyncer AnnouncementSyncer
 	healthSyncer       HealthSyncer
 	usageCostSyncer    UsageCostSyncer
+	channelChecker     ChannelChecker
 	now                func() time.Time
 }
 
@@ -75,6 +77,10 @@ type UsageCostSyncer interface {
 	SyncFromSession(ctx context.Context, in usagecostsapp.SyncFromSessionInput) (*usagecostsapp.SyncFromSessionResult, error)
 }
 
+type ChannelChecker interface {
+	Check(ctx context.Context, in channelchecksapp.CheckInput) (*channelchecksapp.CheckResult, error)
+}
+
 func NewService(supplierService *suppliersapp.Service, extensionService *extensionapp.Service) *Service {
 	return &Service{
 		supplierService:  supplierService,
@@ -92,6 +98,7 @@ func NewServiceWithDependencies(
 	announcementSyncer AnnouncementSyncer,
 	healthSyncer HealthSyncer,
 	usageCostSyncer UsageCostSyncer,
+	channelChecker ChannelChecker,
 ) *Service {
 	service := NewService(supplierService, extensionService)
 	service.groupSyncer = groupSyncer
@@ -100,6 +107,7 @@ func NewServiceWithDependencies(
 	service.announcementSyncer = announcementSyncer
 	service.healthSyncer = healthSyncer
 	service.usageCostSyncer = usageCostSyncer
+	service.channelChecker = channelChecker
 	return service
 }
 
@@ -301,6 +309,22 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 		if result != nil {
 			item.Total = result.Total
 		}
+	case adminplusdomain.ExtensionTaskTypeCheckChannels:
+		if s.channelChecker == nil {
+			item.Reason = "channel_checker_missing"
+			return
+		}
+		result, err := s.channelChecker.Check(ctx, channelchecksapp.CheckInput{
+			SupplierID:         supplier.ID,
+			AutoPauseOnFailure: true,
+		})
+		if err != nil {
+			item.Reason = err.Error()
+			return
+		}
+		if result != nil {
+			item.Total = result.Total
+		}
 	default:
 		item.Reason = "direct_sync_not_supported"
 		return
@@ -310,9 +334,13 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 
 func normalizeTaskTypes(input []adminplusdomain.ExtensionTaskType) []adminplusdomain.ExtensionTaskType {
 	if len(input) == 0 {
-		return []adminplusdomain.ExtensionTaskType{
+		out := []adminplusdomain.ExtensionTaskType{
 			adminplusdomain.ExtensionTaskTypeFetchBalance,
 		}
+		if channelChecksSchedulerEnabled() {
+			out = append(out, adminplusdomain.ExtensionTaskTypeCheckChannels)
+		}
+		return out
 	}
 	out := make([]adminplusdomain.ExtensionTaskType, 0, len(input))
 	seen := make(map[adminplusdomain.ExtensionTaskType]struct{}, len(input))
@@ -354,7 +382,7 @@ func ineligibleReason(supplier *adminplusdomain.Supplier, taskType adminplusdoma
 		}
 	}
 	switch taskType {
-	case adminplusdomain.ExtensionTaskTypeFetchHealth, adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
+	case adminplusdomain.ExtensionTaskTypeFetchHealth, adminplusdomain.ExtensionTaskTypeFetchUsageCosts, adminplusdomain.ExtensionTaskTypeCheckChannels:
 		if !adminplusdomain.CanUseSupplierForSwitching(supplier.RuntimeStatus, supplier.BalanceCents) {
 			return "not_switch_eligible"
 		}
@@ -369,7 +397,8 @@ func actionForTaskType(taskType adminplusdomain.ExtensionTaskType) string {
 		adminplusdomain.ExtensionTaskTypeFetchBalance,
 		adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 		adminplusdomain.ExtensionTaskTypeFetchHealth,
-		adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
+		adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
+		adminplusdomain.ExtensionTaskTypeCheckChannels:
 		return actionDirectSync
 	case adminplusdomain.ExtensionTaskTypeCaptureSession:
 		return actionExtensionTask
@@ -405,6 +434,8 @@ func taskPriority(taskType adminplusdomain.ExtensionTaskType) int {
 		return 70
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return 60
+	case adminplusdomain.ExtensionTaskTypeCheckChannels:
+		return 55
 	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
 		return 40
 	default:
@@ -482,4 +513,9 @@ func schedulerInterval() time.Duration {
 		return 10 * time.Minute
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func channelChecksSchedulerEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_PLUS_CHANNEL_CHECKS_SCHEDULER_ENABLED")))
+	return value == "1" || value == "true" || value == "yes"
 }

@@ -337,6 +337,83 @@ func TestServiceSyncReconcilesEntitlementTypeCorrection(t *testing.T) {
 	require.Equal(t, float64(70), items[0].RawValue)
 }
 
+func TestServiceGetLedgerOverviewAggregatesLatestSnapshotsByCurrency(t *testing.T) {
+	repo := NewMemoryRepository()
+	older := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
+	latest := older.Add(time.Hour)
+	actualA := int64(4000)
+	deltaA := int64(-500)
+	actualB := int64(2500)
+	deltaB := int64(0)
+	repo.snapshots[1] = &adminplusdomain.SupplierCostSnapshot{
+		ID:                          1,
+		SupplierID:                  1,
+		Currency:                    "USD",
+		CompletedFundingAmountCents: 10000,
+		EntitlementAmountCents:      1000,
+		UsageCostCents:              100,
+		ExpectedBalanceCents:        10900,
+		CapturedAt:                  older,
+	}
+	repo.snapshots[2] = &adminplusdomain.SupplierCostSnapshot{
+		ID:                          2,
+		SupplierID:                  1,
+		Currency:                    "USD",
+		CompletedFundingAmountCents: 12000,
+		CompletedFundingCashCents:   11500,
+		EntitlementAmountCents:      3000,
+		UsageCostCents:              11000,
+		ExpectedBalanceCents:        4000,
+		ActualBalanceCents:          &actualA,
+		BalanceDeltaCents:           &deltaA,
+		CapturedAt:                  latest,
+	}
+	repo.snapshots[3] = &adminplusdomain.SupplierCostSnapshot{
+		ID:                          3,
+		SupplierID:                  2,
+		Currency:                    "USD",
+		CompletedFundingAmountCents: 5000,
+		EntitlementAmountCents:      0,
+		UsageCostCents:              2500,
+		ExpectedBalanceCents:        2500,
+		ActualBalanceCents:          &actualB,
+		BalanceDeltaCents:           &deltaB,
+		CapturedAt:                  older,
+	}
+	repo.snapshots[4] = &adminplusdomain.SupplierCostSnapshot{
+		ID:                          4,
+		SupplierID:                  3,
+		Currency:                    "CNY",
+		CompletedFundingAmountCents: 5000,
+		EntitlementAmountCents:      0,
+		UsageCostCents:              0,
+		ExpectedBalanceCents:        5000,
+		CapturedAt:                  latest,
+	}
+	svc := NewService(repo)
+
+	overview, err := svc.GetLedgerOverview(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, overview)
+	require.Len(t, overview.Items, 2)
+	require.Equal(t, "CNY", overview.Items[0].Currency)
+	require.Equal(t, int64(5000), overview.Items[0].RechargeTotalCents)
+	require.Nil(t, overview.Items[0].ActualBalanceCents)
+	require.Equal(t, "USD", overview.Items[1].Currency)
+	require.Equal(t, 2, overview.Items[1].SupplierCount)
+	require.Equal(t, 2, overview.Items[1].SnapshotCount)
+	require.Equal(t, 2, overview.Items[1].ActualBalanceAvailableCount)
+	require.Equal(t, int64(17000), overview.Items[1].CompletedFundingAmountCents)
+	require.Equal(t, int64(3000), overview.Items[1].EntitlementAmountCents)
+	require.Equal(t, int64(20000), overview.Items[1].RechargeTotalCents)
+	require.Equal(t, int64(13500), overview.Items[1].UsageCostCents)
+	require.NotNil(t, overview.Items[1].ActualBalanceCents)
+	require.Equal(t, int64(6500), *overview.Items[1].ActualBalanceCents)
+	require.NotNil(t, overview.Items[1].BalanceDeltaCents)
+	require.Equal(t, int64(0), *overview.Items[1].BalanceDeltaCents)
+}
+
 type stubCostSessionReader struct {
 	input      ports.SessionProbeInput
 	supplierID int64

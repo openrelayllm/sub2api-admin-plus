@@ -91,6 +91,14 @@ func (h *CostHandler) ListSupplierSummaries(c *gin.Context) {
 	response.Success(c, paginatedData(paged, total, page))
 }
 
+func (h *CostHandler) GetLedgerOverview(c *gin.Context) {
+	overview, err := h.service.GetLedgerOverview(c.Request.Context())
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, overview)
+}
+
 func (h *CostHandler) GetSupplierSummary(c *gin.Context) {
 	supplierID, ok := parseSupplierID(c)
 	if !ok {

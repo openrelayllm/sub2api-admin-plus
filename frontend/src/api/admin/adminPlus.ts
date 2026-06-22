@@ -21,7 +21,7 @@ export type SupplierHealthStatus = 'normal' | 'unavailable' | 'credential_invali
 export type SupplierGroupStatus = 'active' | 'missing' | 'disabled'
 export type SupplierKeyStatus = 'provisioning' | 'bound' | 'manual_secret_required' | 'failed' | 'disabled'
 export type SupplierSessionSource = 'direct_login' | 'browser_extension' | 'manual_import'
-export type SupplierProvisionJobType = 'sync_groups' | 'provision_group_key' | 'provision_all_group_keys' | 'repair_binding' | 'sync_supplier_costs'
+export type SupplierProvisionJobType = 'sync_groups' | 'provision_group_key' | 'provision_all_group_keys' | 'repair_binding' | 'sync_supplier_costs' | 'check_supplier_channels'
 export type SupplierProvisionStatus = 'queued' | 'running' | 'succeeded' | 'partial_succeeded' | 'retryable_failed' | 'manual_required' | 'dead' | 'cancelled'
 export type SupplierProvisionStepType =
   | 'ensure_supplier_session'
@@ -34,6 +34,7 @@ export type SupplierProvisionStepType =
   | 'provision_all_group_keys'
   | 'repair_binding'
   | 'sync_supplier_costs'
+  | 'check_supplier_channels'
 
 export interface SupplierCredentialStatus {
   postgres_configured: boolean
@@ -192,6 +193,67 @@ export interface SupplierChannelMonitorListResponse {
   api_base_url?: string
   items: SupplierChannelMonitorView[]
   captured_at: string
+}
+
+export type SupplierChannelProbeStatus =
+  | 'untested'
+  | 'available'
+  | 'slow_first_token'
+  | 'slow_total'
+  | 'request_error'
+  | 'remote_unavailable'
+  | 'no_local_account'
+  | 'probe_failed'
+
+export interface SupplierChannelCheckSnapshot {
+  id: number
+  supplier_id: number
+  supplier_group_id: number
+  supplier_key_id?: number
+  supplier_account_id?: number
+  local_sub2api_account_id?: number
+  external_group_id?: string
+  group_name: string
+  provider_family: string
+  channel_monitor_id?: number
+  channel_name?: string
+  channel_provider?: string
+  primary_model?: string
+  remote_status: string
+  probe_model: string
+  probe_status: SupplierChannelProbeStatus
+  recommended: boolean
+  effective_rate_multiplier: number
+  first_token_ms: number
+  duration_ms: number
+  status_code: number
+  error_class?: string
+  error_message?: string
+  local_account_schedulable: boolean
+  captured_at: string
+  created_at: string
+}
+
+export interface SupplierChannelCheckResult {
+  supplier_id: number
+  checked_at: string
+  total: number
+  best?: SupplierChannelCheckSnapshot
+  items: SupplierChannelCheckSnapshot[]
+}
+
+export interface ProbeSupplierChannelPayload {
+  supplier_group_id?: number
+  auto_pause_on_failure?: boolean
+  first_token_threshold_ms?: number
+  total_latency_threshold_ms?: number
+}
+
+export interface SyncSupplierChannelsPayload {
+  candidate_limit?: number
+  auto_pause_on_failure?: boolean
+  first_token_threshold_ms?: number
+  total_latency_threshold_ms?: number
 }
 
 export interface LoginSupplierSessionPayload {
@@ -651,6 +713,29 @@ export interface SupplierCostSnapshot {
   created_at: string
 }
 
+export interface SupplierCostLedgerOverviewItem {
+  currency: string
+  supplier_count: number
+  snapshot_count: number
+  actual_balance_available_count: number
+  completed_funding_amount_cents: number
+  completed_funding_cash_cents: number
+  entitlement_amount_cents: number
+  recharge_total_cents: number
+  usage_cost_cents: number
+  refund_amount_cents: number
+  adjustment_amount_cents: number
+  expected_balance_cents: number
+  actual_balance_cents?: number | null
+  balance_delta_cents?: number | null
+  latest_captured_at?: string | null
+}
+
+export interface SupplierCostLedgerOverview {
+  generated_at: string
+  items: SupplierCostLedgerOverviewItem[]
+}
+
 export interface SupplierFundingTransaction {
   id: number
   supplier_id: number
@@ -797,7 +882,7 @@ export interface LocalAccountUsageSummary {
 export interface ExtensionTask {
   id: number
   supplier_id: number
-  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_announcements' | 'fetch_usage_costs' | 'fetch_health' | 'capture_supplier_session'
+  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_announcements' | 'fetch_usage_costs' | 'fetch_health' | 'check_supplier_channels' | 'capture_supplier_session'
   schedule_key?: string
   status: 'pending' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   priority: number
@@ -956,6 +1041,43 @@ export async function probeSupplierSession(id: number, payload?: {
 
 export async function listSupplierChannelMonitors(id: number): Promise<SupplierChannelMonitorListResponse> {
   const { data } = await apiClient.get<SupplierChannelMonitorListResponse>(`/admin-plus/suppliers/${id}/channel-monitors`)
+  return data
+}
+
+export async function listSupplierBestChannelChecks(supplierIds?: number[]): Promise<AdminPlusListResponse<SupplierChannelCheckSnapshot>> {
+  const params = supplierIds && supplierIds.length > 0 ? { supplier_ids: supplierIds.join(',') } : undefined
+  const { data } = await apiClient.get<AdminPlusListResponse<SupplierChannelCheckSnapshot>>('/admin-plus/supplier-channel-checks/best', { params })
+  return data
+}
+
+export async function listSupplierChannelChecks(supplierId: number, params?: AdminPlusPaginationParams): Promise<AdminPlusListResponse<SupplierChannelCheckSnapshot>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<SupplierChannelCheckSnapshot>>(`/admin-plus/suppliers/${supplierId}/channel-checks`, { params })
+  return data
+}
+
+export async function probeSupplierChannel(supplierId: number, payload?: ProbeSupplierChannelPayload): Promise<SupplierChannelCheckResult> {
+  const { data } = await apiClient.post<SupplierChannelCheckResult>(`/admin-plus/suppliers/${supplierId}/channel-checks/probe`, payload || {})
+  return data
+}
+
+export async function syncSupplierChannelChecks(supplierId: number, payload?: SyncSupplierChannelsPayload): Promise<SubmitProvisionJobResponse> {
+  const { data } = await apiClient.post<SubmitProvisionJobResponse>(`/admin-plus/suppliers/${supplierId}/channel-checks/sync`, payload || {}, {
+    headers: { 'Idempotency-Key': createAdminPlusIdempotencyKey('supplier-channel-checks-sync') }
+  })
+  return data
+}
+
+export async function enableSupplierChannelScheduling(supplierId: number, supplierGroupId: number): Promise<SupplierChannelCheckSnapshot> {
+  const { data } = await apiClient.post<SupplierChannelCheckSnapshot>(`/admin-plus/suppliers/${supplierId}/channel-checks/scheduling/enable`, {
+    supplier_group_id: supplierGroupId
+  })
+  return data
+}
+
+export async function pauseSupplierChannelScheduling(supplierId: number, supplierGroupId: number): Promise<SupplierChannelCheckSnapshot> {
+  const { data } = await apiClient.post<SupplierChannelCheckSnapshot>(`/admin-plus/suppliers/${supplierId}/channel-checks/scheduling/pause`, {
+    supplier_group_id: supplierGroupId
+  })
   return data
 }
 
@@ -1159,6 +1281,11 @@ export async function listSupplierCostSnapshots(params?: { supplier_id?: number 
   return data
 }
 
+export async function getSupplierCostLedgerOverview(): Promise<SupplierCostLedgerOverview> {
+  const { data } = await apiClient.get<SupplierCostLedgerOverview>('/admin-plus/costs/ledger-overview')
+  return data
+}
+
 export async function getSupplierCostSummary(supplierId: number): Promise<{ items: SupplierCostSnapshot[]; total: number }> {
   const { data } = await apiClient.get<{ items: SupplierCostSnapshot[]; total: number }>(`/admin-plus/suppliers/${supplierId}/costs/summary`)
   return data
@@ -1310,6 +1437,12 @@ export const adminPlusAPI = {
   loginSupplierSession,
   probeSupplierSession,
   listSupplierChannelMonitors,
+  listSupplierBestChannelChecks,
+  listSupplierChannelChecks,
+  probeSupplierChannel,
+  syncSupplierChannelChecks,
+  enableSupplierChannelScheduling,
+  pauseSupplierChannelScheduling,
   upsertSupplierBrowserSession,
   listSupplierGroups,
   syncSupplierGroups,
@@ -1338,6 +1471,7 @@ export const adminPlusAPI = {
   listUsageCostLines,
   syncSupplierCosts,
   listSupplierCostSnapshots,
+  getSupplierCostLedgerOverview,
   getSupplierCostSummary,
   listSupplierFundingTransactions,
   listSupplierEntitlementTransactions,

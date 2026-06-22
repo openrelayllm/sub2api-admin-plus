@@ -103,6 +103,39 @@ func TestSessionProfileClientProbeSub2APIUserProfile(t *testing.T) {
 	require.Equal(t, []int64{1, 2}, result.Profile.AllowedGroups)
 }
 
+func TestBuildSub2APIUserEndpointURLNormalizesBasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseURL  string
+		wantPath string
+	}{
+		{
+			name:     "origin",
+			baseURL:  "https://relay.example.com",
+			wantPath: "/api/v1/user/profile",
+		},
+		{
+			name:     "api base",
+			baseURL:  "https://relay.example.com/api",
+			wantPath: "/api/v1/user/profile",
+		},
+		{
+			name:     "api v1 base",
+			baseURL:  "https://relay.example.com/api/v1?ignored=true",
+			wantPath: "/api/v1/user/profile",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildSub2APIUserProfileURL(tt.baseURL)
+			require.NoError(t, err)
+			require.Equal(t, "https://relay.example.com"+tt.wantPath, got)
+			require.NotContains(t, got, "?")
+		})
+	}
+}
+
 func TestSessionProfileClientDirectLogin(t *testing.T) {
 	var sawSettings bool
 	var sawLogin bool

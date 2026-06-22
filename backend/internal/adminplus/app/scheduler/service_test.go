@@ -77,7 +77,7 @@ func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
 	announcementSyncer := &stubAnnouncementSyncer{total: 5}
 	healthSyncer := &stubHealthSyncer{total: 1}
 	usageCostSyncer := &stubUsageCostSyncer{total: 4}
-	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer)
+	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -176,7 +176,7 @@ func TestServiceRunDefaultsToBalanceRefreshTask(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	balanceSyncer := &stubBalanceSyncer{total: 1}
-	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil)
+	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -222,6 +222,7 @@ func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
 		&stubBalanceSyncer{total: 1},
 		&stubAnnouncementSyncer{total: 1},
 		&stubHealthSyncer{total: 1},
+		nil,
 		nil,
 	)
 	service.now = func() time.Time {

@@ -16,6 +16,7 @@ const lastResultPanel = document.querySelector('#lastResultPanel')
 const lastResultBadge = document.querySelector('#lastResultBadge')
 const lastResultTitle = document.querySelector('#lastResultTitle')
 const lastResultMeta = document.querySelector('#lastResultMeta')
+const lastResultDetail = document.querySelector('#lastResultDetail')
 
 let state = null
 let identification = null
@@ -228,8 +229,11 @@ function renderLastCaptureResult() {
   const partial = lastCaptureResult.status === 'partial' || Boolean(lastCaptureResult.ingest?.balance_probe_error)
   lastResultPanel.className = `result ${partial ? 'partial' : succeeded ? 'succeeded' : 'failed'}`
   lastResultBadge.textContent = partial ? '已保存' : succeeded ? '成功' : '失败'
-  lastResultTitle.textContent = lastCaptureResult.message || (partial ? '会话已保存，余额读取失败' : succeeded ? '最近上报成功' : '最近上报失败')
+  lastResultTitle.textContent = lastCaptureResult.message || (partial ? '会话已保存，后台余额同步失败' : succeeded ? '最近上报成功' : '最近上报失败')
   lastResultMeta.textContent = formatLastResultMeta(lastCaptureResult)
+  const detail = partial ? sanitizeDiagnostic(lastCaptureResult.ingest?.balance_probe_error) : ''
+  lastResultDetail.textContent = detail ? `后台同步错误：${detail}` : ''
+  lastResultDetail.classList.toggle('hidden', !detail)
 }
 
 function formatLastResultMeta(result) {
@@ -245,6 +249,15 @@ function formatLastResultMeta(result) {
   ].filter(Boolean).join(' / ')
   if (evidence) parts.push(evidence)
   return parts.join(' · ')
+}
+
+function sanitizeDiagnostic(value) {
+  let text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  text = text.replace(/\b(bearer)\s+[A-Za-z0-9._~+/-]+=*/gi, '$1 [redacted]')
+  text = text.replace(/\b(authorization|cookie|set-cookie)\s*[:=]\s*[^,;\s]+/gi, '$1: [redacted]')
+  text = text.replace(/\b((?:access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password|token)\b\s*[:=]\s*)[^,;\s]+/gi, '$1[redacted]')
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text
 }
 
 function formatTime(value) {

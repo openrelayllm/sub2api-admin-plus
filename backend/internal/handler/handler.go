@@ -27,6 +27,7 @@ type AdminPlusHandlers struct {
 	Notification  *adminplushandler.NotificationHandler
 	UsageCost     *adminplushandler.UsageCostHandler
 	Cost          *adminplushandler.CostHandler
+	ChannelCheck  *adminplushandler.ChannelCheckHandler
 	Extension     *adminplushandler.ExtensionHandler
 	Session       *adminplushandler.SessionHandler
 	Scheduler     *adminplushandler.SchedulerHandler

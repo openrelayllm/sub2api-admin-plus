@@ -1,6 +1,7 @@
 package provisionjobs
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/supplierkeys"
@@ -15,6 +16,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GroupSyncer), new(*suppliergroups.Service)),
 	wire.Bind(new(KeyProvisioner), new(*supplierkeys.Service)),
 	wire.Bind(new(CostSyncer), new(*costs.Service)),
-	NewServiceWithCostSyncer,
+	wire.Bind(new(ChannelChecker), new(*channelchecks.Service)),
+	NewServiceWithDependencies,
 	ProvideWorker,
 )

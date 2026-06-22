@@ -304,6 +304,44 @@ func (r *SQLRepository) ListSnapshots(ctx context.Context, filter SummaryFilter)
 	return r.listSnapshots(ctx, where, args, filter.Limit)
 }
 
+func (r *SQLRepository) GetLedgerOverview(ctx context.Context) (*adminplusdomain.SupplierCostLedgerOverview, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, supplier_id, currency, completed_funding_amount_cents,
+			completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+			refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
+			actual_balance_cents, balance_delta_cents, captured_at, created_at
+		FROM (
+			SELECT DISTINCT ON (supplier_id, currency)
+				id, supplier_id, currency, completed_funding_amount_cents,
+				completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+				refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
+				actual_balance_cents, balance_delta_cents, captured_at, created_at
+			FROM admin_plus_supplier_cost_snapshots
+			ORDER BY supplier_id, currency, captured_at DESC, id DESC
+		) latest_snapshots
+		ORDER BY currency, supplier_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	snapshots := make([]*adminplusdomain.SupplierCostSnapshot, 0)
+	for rows.Next() {
+		item, err := scanCostSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return buildLedgerOverview(snapshots, time.Now()), nil
+}
+
 func (r *SQLRepository) listSnapshots(ctx context.Context, where []string, args []any, limit int) ([]*adminplusdomain.SupplierCostSnapshot, error) {
 	args = append(args, limit)
 	query := `

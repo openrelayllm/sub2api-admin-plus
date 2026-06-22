@@ -43,12 +43,19 @@ func RegisterAdminPlusRoutes(
 			suppliers.GET("/:id/funding-transactions", h.AdminPlus.Cost.ListFundingTransactions)
 			suppliers.GET("/:id/entitlement-transactions", h.AdminPlus.Cost.ListEntitlementTransactions)
 			suppliers.GET("/:id/cost-ledger", h.AdminPlus.Cost.ListLedgerEntries)
+			suppliers.GET("/:id/channel-checks", h.AdminPlus.ChannelCheck.List)
+			suppliers.POST("/:id/channel-checks/probe", h.AdminPlus.ChannelCheck.Probe)
+			suppliers.POST("/:id/channel-checks/sync", h.AdminPlus.ChannelCheck.Sync)
+			suppliers.POST("/:id/channel-checks/scheduling/enable", h.AdminPlus.ChannelCheck.EnableScheduling)
+			suppliers.POST("/:id/channel-checks/scheduling/pause", h.AdminPlus.ChannelCheck.PauseScheduling)
 			suppliers.GET("/:id/session", h.AdminPlus.Session.Get)
 			suppliers.POST("/:id/session/login", h.AdminPlus.Session.Login)
 			suppliers.POST("/:id/session/probe", h.AdminPlus.Session.Probe)
 			suppliers.GET("/:id/channel-monitors", h.AdminPlus.Session.ChannelMonitors)
 			suppliers.POST("/:id/browser-sessions", h.AdminPlus.Session.Upsert)
 		}
+
+		adminPlus.GET("/supplier-channel-checks/best", h.AdminPlus.ChannelCheck.ListBest)
 
 		sub2api := adminPlus.Group("/sub2api")
 		{
@@ -112,6 +119,7 @@ func RegisterAdminPlusRoutes(
 
 		costs := adminPlus.Group("/costs")
 		{
+			costs.GET("/ledger-overview", h.AdminPlus.Cost.GetLedgerOverview)
 			costs.GET("/suppliers", h.AdminPlus.Cost.ListSupplierSummaries)
 		}
 

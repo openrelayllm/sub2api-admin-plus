@@ -10,6 +10,7 @@ import (
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
@@ -77,6 +78,7 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			Health:        adminplushandler.NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository())),
 			UsageCost:     adminplushandler.NewUsageCostHandler(usagecostsapp.NewServiceWithDependencies(usagecostsapp.NewMemoryRepository(), sessionService, &routeSurfaceUsageCostReader{})),
 			Cost:          adminplushandler.NewCostHandler(costsapp.NewService(costsapp.NewMemoryRepository())),
+			ChannelCheck:  adminplushandler.NewChannelCheckHandler(channelchecksapp.NewService(nil, supplierService, sessionService, healthapp.NewService(healthapp.NewMemoryRepository()))),
 			Extension:     adminplushandler.NewExtensionHandler(extensionService, nil),
 			Session:       adminplushandler.NewSessionHandler(sessionService, nil),
 			Scheduler:     adminplushandler.NewSchedulerHandler(schedulerapp.NewService(supplierService, extensionService)),
@@ -144,6 +146,11 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/admin-plus/suppliers/:id/funding-transactions",
 		"GET /api/v1/admin-plus/suppliers/:id/entitlement-transactions",
 		"GET /api/v1/admin-plus/suppliers/:id/cost-ledger",
+		"GET /api/v1/admin-plus/suppliers/:id/channel-checks",
+		"POST /api/v1/admin-plus/suppliers/:id/channel-checks/probe",
+		"POST /api/v1/admin-plus/suppliers/:id/channel-checks/sync",
+		"POST /api/v1/admin-plus/suppliers/:id/channel-checks/scheduling/enable",
+		"POST /api/v1/admin-plus/suppliers/:id/channel-checks/scheduling/pause",
 		"GET /api/v1/admin-plus/suppliers/:id/session",
 		"POST /api/v1/admin-plus/suppliers/:id/session/login",
 		"POST /api/v1/admin-plus/suppliers/:id/session/probe",
@@ -173,7 +180,9 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"PATCH /api/v1/admin-plus/health/events/:id/ack",
 		"POST /api/v1/admin-plus/usage-costs/lines/import",
 		"GET /api/v1/admin-plus/usage-costs/lines",
+		"GET /api/v1/admin-plus/costs/ledger-overview",
 		"GET /api/v1/admin-plus/costs/suppliers",
+		"GET /api/v1/admin-plus/supplier-channel-checks/best",
 		"POST /api/v1/admin-plus/extension/tasks",
 		"GET /api/v1/admin-plus/extension/tasks",
 		"POST /api/v1/admin-plus/extension/tasks/claim",

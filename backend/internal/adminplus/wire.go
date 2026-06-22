@@ -7,6 +7,7 @@ import (
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
@@ -41,6 +42,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ports.SessionKeyAdapter), new(*providerrouter.Router)),
 	actionsapp.ProviderSet,
 	balancesapp.ProviderSet,
+	channelchecksapp.ProviderSet,
 	usagecostsapp.ProviderSet,
 	costsapp.ProviderSet,
 	extensionapp.ProviderSet,
@@ -50,6 +52,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ratesapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(suppliergroupsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(supplierkeysapp.SessionReader), new(*sessionsapp.Service)),
+	wire.Bind(new(channelchecksapp.LocalBindingEnsurer), new(*supplierkeysapp.Service)),
 	healthapp.ProviderSet,
 	notificationsapp.ProviderSet,
 	announcementsapp.ProviderSet,
