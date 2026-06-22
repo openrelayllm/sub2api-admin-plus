@@ -586,7 +586,8 @@ func normalizeExtensionOrigin(rawOrigin string) (string, bool) {
 func extensionRoot() (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("ADMIN_PLUS_EXTENSION_DIR")); configured != "" {
 		if stat, err := os.Stat(filepath.Join(configured, "manifest.json")); err == nil && !stat.IsDir() {
-			return configured, nil
+			abs, _ := filepath.Abs(configured)
+			return abs, nil
 		}
 		return "", extensionHandlerInternalError("ADMIN_PLUS_EXTENSION_DIR does not contain manifest.json")
 	}

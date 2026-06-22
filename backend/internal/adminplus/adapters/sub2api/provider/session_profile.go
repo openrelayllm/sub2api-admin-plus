@@ -71,13 +71,7 @@ func (c *SessionProfileClient) DirectLogin(ctx context.Context, in ports.DirectL
 	if err != nil {
 		return nil, err
 	}
-	payload := map[string]any{
-		"email":    strings.TrimSpace(in.Username),
-		"password": strings.TrimSpace(in.Password),
-	}
-	if revision != "" {
-		payload["login_agreement_revision"] = revision
-	}
+	payload := buildDirectLoginPayload(in.Username, in.Password, revision, c.now().UTC())
 	for key, value := range in.LoginContext {
 		if strings.TrimSpace(key) == "" {
 			continue
@@ -114,7 +108,7 @@ func (c *SessionProfileClient) DirectLogin(ctx context.Context, in ports.DirectL
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, classifyDirectLoginFailure(resp.StatusCode, data)
 	}
-	token, expiresAt, raw, err := parseSub2APILoginResponse(data)
+	token, refreshToken, expiresAt, raw, err := parseSub2APILoginResponse(data)
 	if err != nil {
 		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_RESPONSE_INVALID", "supplier login response is invalid").WithCause(err)
 	}
@@ -126,7 +120,7 @@ func (c *SessionProfileClient) DirectLogin(ctx context.Context, in ports.DirectL
 		SupplierID: in.SupplierID,
 		Origin:     origin,
 		APIBaseURL: apiBaseURL,
-	}, token, capturedAt, expiresAt)
+	}, token, refreshToken, capturedAt, expiresAt)
 	return &ports.DirectLoginResult{
 		SupplierID:    in.SupplierID,
 		Origin:        origin,
@@ -137,10 +131,36 @@ func (c *SessionProfileClient) DirectLogin(ctx context.Context, in ports.DirectL
 		Diagnostics: map[string]any{
 			"login_endpoint":           loginEndpoint,
 			"settings_endpoint":        settingsDiagnostics["settings_endpoint"],
+			"settings_totp_enabled":    settingsDiagnostics["totp_enabled"],
 			"login_agreement_revision": revision != "",
 			"login_response_keys":      rawKeys(raw),
 		},
 	}, nil
+}
+
+func buildDirectLoginPayload(username string, password string, revision string, acceptedAt time.Time) map[string]any {
+	payload := map[string]any{
+		"email":    strings.TrimSpace(username),
+		"password": strings.TrimSpace(password),
+	}
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return payload
+	}
+	if acceptedAt.IsZero() {
+		acceptedAt = time.Now().UTC()
+	}
+	acceptedAtText := acceptedAt.UTC().Format(time.RFC3339Nano)
+	consent := map[string]any{
+		"revision":    revision,
+		"accepted_at": acceptedAtText,
+	}
+	payload["login_agreement_revision"] = revision
+	payload["login_agreement_consent"] = consent
+	payload["loginAgreementRevision"] = revision
+	payload["loginAgreementConsent"] = consent
+	payload["agreement_accepted"] = true
+	return payload
 }
 
 func (c *SessionProfileClient) directLoginFromToken(ctx context.Context, in ports.DirectLoginInput, apiBaseURL string) (*ports.DirectLoginResult, error) {
@@ -150,7 +170,7 @@ func (c *SessionProfileClient) directLoginFromToken(ctx context.Context, in port
 		SupplierID: in.SupplierID,
 		Origin:     origin,
 		APIBaseURL: apiBaseURL,
-	}, strings.TrimSpace(in.Token), capturedAt, nil)
+	}, strings.TrimSpace(in.Token), "", capturedAt, nil)
 	probe, err := c.ProbeSub2APIUserProfile(ctx, ports.SessionProbeInput{
 		SupplierID: in.SupplierID,
 		Origin:     origin,
@@ -293,19 +313,17 @@ func (c *SessionProfileClient) fetchLoginAgreementRevision(ctx context.Context, 
 	if boolFromAny(firstExisting(body, "turnstile_enabled", "turnstileEnabled")) {
 		return "", nil, infraerrors.New(http.StatusConflict, "LOGIN_CAPTCHA_REQUIRED", "supplier direct login requires captcha; use browser extension fallback")
 	}
-	if boolFromAny(firstExisting(body, "totp_enabled", "totpEnabled", "mfa_enabled", "mfaEnabled")) {
-		return "", nil, infraerrors.New(http.StatusConflict, "LOGIN_MFA_REQUIRED", "supplier direct login requires 2FA; use browser extension fallback")
-	}
 	if boolFromAny(firstExisting(body, "backend_mode_enabled", "backendModeEnabled")) {
 		return "", nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED", "supplier backend mode requires an admin account for direct login")
 	}
 	return firstNonEmpty(stringFromAny(body["login_agreement_revision"]), stringFromAny(body["loginAgreementRevision"])), map[string]any{
 		"settings_endpoint": endpoint,
 		"settings_keys":     rawKeys(body),
+		"totp_enabled":      boolFromAny(firstExisting(body, "totp_enabled", "totpEnabled", "mfa_enabled", "mfaEnabled")),
 	}, nil
 }
 
-func buildDirectLoginSessionBundle(in ports.DirectLoginInput, accessToken string, capturedAt time.Time, expiresAt *time.Time) map[string]any {
+func buildDirectLoginSessionBundle(in ports.DirectLoginInput, accessToken string, refreshToken string, capturedAt time.Time, expiresAt *time.Time) map[string]any {
 	origin := firstNonEmpty(in.Origin, originFromRawURL(in.APIBaseURL))
 	apiBaseURL := firstNonEmpty(in.APIBaseURL, origin)
 	requiredHeaders := map[string]any{}
@@ -313,11 +331,12 @@ func buildDirectLoginSessionBundle(in ports.DirectLoginInput, accessToken string
 		requiredHeaders["origin"] = origin
 		requiredHeaders["referer"] = strings.TrimRight(origin, "/") + "/"
 	}
+	tokens := map[string]any{"access_token": accessToken}
 	bundle := map[string]any{
 		"origin":           origin,
 		"api_base_url":     apiBaseURL,
 		"access_token":     accessToken,
-		"tokens":           map[string]any{"access_token": accessToken},
+		"tokens":           tokens,
 		"required_headers": requiredHeaders,
 		"context": map[string]any{
 			"api_base_url":   apiBaseURL,
@@ -330,13 +349,17 @@ func buildDirectLoginSessionBundle(in ports.DirectLoginInput, accessToken string
 	if expiresAt != nil && !expiresAt.IsZero() {
 		bundle["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
 	}
+	if refreshToken = strings.TrimSpace(refreshToken); refreshToken != "" {
+		bundle["refresh_token"] = refreshToken
+		tokens["refresh_token"] = refreshToken
+	}
 	return bundle
 }
 
-func parseSub2APILoginResponse(data []byte) (string, *time.Time, map[string]any, error) {
+func parseSub2APILoginResponse(data []byte) (string, string, *time.Time, map[string]any, error) {
 	var root map[string]any
 	if err := json.Unmarshal(data, &root); err != nil {
-		return "", nil, nil, err
+		return "", "", nil, nil, err
 	}
 	body := root
 	if dataValue, ok := root["data"].(map[string]any); ok {
@@ -349,6 +372,12 @@ func parseSub2APILoginResponse(data []byte) (string, *time.Time, map[string]any,
 		stringFromAny(root["access_token"]),
 		stringFromAny(root["accessToken"]),
 	)
+	refreshToken := firstNonEmpty(
+		stringFromAny(body["refresh_token"]),
+		stringFromAny(body["refreshToken"]),
+		stringFromAny(root["refresh_token"]),
+		stringFromAny(root["refreshToken"]),
+	)
 	var expiresAt *time.Time
 	if t, ok := firstTimeValue(body, "expires_at", "expiresAt", "access_token_expires_at", "accessTokenExpiresAt"); ok {
 		value := t.UTC()
@@ -357,7 +386,7 @@ func parseSub2APILoginResponse(data []byte) (string, *time.Time, map[string]any,
 		value := time.Now().UTC().Add(time.Duration(expiresIn) * time.Second)
 		expiresAt = &value
 	}
-	return token, expiresAt, body, nil
+	return token, refreshToken, expiresAt, body, nil
 }
 
 func classifyDirectLoginFailure(statusCode int, body []byte) error {

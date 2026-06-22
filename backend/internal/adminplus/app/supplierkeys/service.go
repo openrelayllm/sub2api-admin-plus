@@ -845,6 +845,7 @@ func (s *Service) ensureLocalAccountForKey(ctx context.Context, in localAccountE
 	}
 	created := false
 	if account == nil {
+		schedulable := false
 		secret := strings.TrimSpace(in.Secret)
 		if secret == "" {
 			secret = s.recoverLegacyLocalAccountSecret(ctx, in.Key.LocalSub2APIAccountID)
@@ -861,6 +862,7 @@ func (s *Service) ensureLocalAccountForKey(ctx context.Context, in localAccountE
 			Concurrency:           in.Concurrency,
 			Priority:              in.Priority,
 			RateMultiplier:        in.RateMultiplier,
+			Schedulable:           &schedulable,
 			GroupIDs:              groupIDs,
 			SkipDefaultGroupBind:  true,
 			SkipMixedChannelCheck: true,

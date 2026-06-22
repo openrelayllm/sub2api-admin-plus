@@ -28,7 +28,7 @@
 
               <label class="block md:col-span-2">
                 <span class="input-label">Logo URL</span>
-                <input v-model.trim="form.site_logo" class="input" placeholder="/logo.png" />
+                <input v-model.trim="form.site_logo" class="input" placeholder="/logo.svg" />
               </label>
 
               <label class="block md:col-span-2">

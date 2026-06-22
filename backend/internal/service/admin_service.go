@@ -287,6 +287,7 @@ type CreateAccountInput struct {
 	Priority           int
 	RateMultiplier     *float64 // 账号计费倍率（>=0，允许 0）
 	LoadFactor         *int
+	Schedulable        *bool
 	GroupIDs           []int64
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
@@ -2593,6 +2594,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
+	schedulable := false
+	if input.Schedulable != nil {
+		schedulable = *input.Schedulable
+	}
+
 	account := &Account{
 		Name:        input.Name,
 		Notes:       normalizeAccountNotes(input.Notes),
@@ -2604,7 +2610,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		Concurrency: input.Concurrency,
 		Priority:    input.Priority,
 		Status:      StatusActive,
-		Schedulable: true,
+		Schedulable: schedulable,
 	}
 	// 预计算固定时间重置的下次重置时间
 	if account.Extra != nil {

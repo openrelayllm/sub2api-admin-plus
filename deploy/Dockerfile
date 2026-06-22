@@ -99,6 +99,7 @@ WORKDIR /app
 
 # Copy binary from builder
 COPY --from=backend-builder /app/sub2api-admin-plus /app/sub2api-admin-plus
+COPY extension /app/extension
 
 # Create data directory
 RUN mkdir -p /app/data && chown -R sub2api:sub2api /app

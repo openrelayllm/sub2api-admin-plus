@@ -49,10 +49,39 @@ func TestSub2APIHTTPGatewayCreatesAccountViaAdminAPI(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "admin-secret", gotAPIKey)
 	require.Equal(t, "local-upstream", gotPayload["name"])
+	require.Equal(t, nil, gotPayload["schedulable"])
 	require.Equal(t, true, gotPayload["confirm_mixed_channel_risk"])
 	require.Equal(t, int64(1001), account.ID)
 	require.Equal(t, []int64{2001}, account.GroupIDs)
 	require.Equal(t, int64(10), int64FromMap(account.Extra, "admin_plus_supplier_group_id"))
+}
+
+func TestSub2APIHTTPGatewayForwardsSchedulable(t *testing.T) {
+	var gotPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotPayload))
+		writeSub2APISuccess(t, w, map[string]any{
+			"id":       1001,
+			"name":     "local-upstream",
+			"platform": "openai",
+			"type":     "apikey",
+		})
+	}))
+	defer server.Close()
+
+	gateway, err := NewSub2APIHTTPGateway(server.URL, "admin-secret", server.Client())
+	require.NoError(t, err)
+	schedulable := false
+	_, err = gateway.CreateAccount(context.Background(), &service.CreateAccountInput{
+		Name:        "local-upstream",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-provider-secret"},
+		Schedulable: &schedulable,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, false, gotPayload["schedulable"])
 }
 
 func TestSub2APIHTTPGatewayFindAccountUsesMetadata(t *testing.T) {

@@ -1,4 +1,7 @@
 (() => {
+  if (window.__adminPlusSessionCaptureLoaded) return
+  window.__adminPlusSessionCaptureLoaded = true
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message?.type?.startsWith('admin-plus:')) return false
     Promise.resolve(handleMessage(message))
@@ -97,38 +100,49 @@
   }
 
   function extractTokens(storage) {
+    const access = firstFoundStorageValue([
+      firstStorageValue(storage, ['auth_token', 'access_token', 'accessToken'], { exact: true }),
+      firstStorageValue(storage, ['token', 'jwt', 'bearer'], { exact: true }),
+      firstStorageValue(storage, ['auth_token', 'access_token', 'accessToken']),
+      firstStorageValue(storage, ['token', 'jwt', 'bearer'], { exclude: ['token_expires_at', 'expires_at', 'today_token', 'total_token'] })
+    ])
     return {
-      access_token: firstStorageValue(storage, [
-        'auth_token',
-        'access_token',
-        'token',
-        'jwt',
-        'bearer'
-      ]),
-      refresh_token: firstStorageValue(storage, ['refresh_token']),
-      csrf_token: firstStorageValue(storage, ['csrf', 'xsrf'])
+      access_token: access.value,
+      access_token_source: access.source,
+      refresh_token: firstStorageValue(storage, ['refresh_token', 'refreshToken'], { exact: true }).value,
+      csrf_token: firstStorageValue(storage, ['csrf', 'xsrf']).value
     }
+  }
+
+  function firstFoundStorageValue(candidates) {
+    return candidates.find((item) => item.value) || { value: '', source: '' }
   }
 
   function extractContext(storage, supplier) {
     return {
-      user_id: firstStorageValue(storage, ['user_id', 'userid', 'uid']),
-      organization_id: firstStorageValue(storage, ['organization_id', 'org_id', 'orgid']),
-      project_id: firstStorageValue(storage, ['project_id', 'projectid']),
-      account_id: firstStorageValue(storage, ['account_id', 'accountid']),
+      user_id: firstStorageValue(storage, ['user_id', 'userid', 'uid']).value,
+      organization_id: firstStorageValue(storage, ['organization_id', 'org_id', 'orgid']).value,
+      project_id: firstStorageValue(storage, ['project_id', 'projectid']).value,
+      account_id: firstStorageValue(storage, ['account_id', 'accountid']).value,
       api_base_url: supplier?.api_base_url || `${location.origin}/api`
     }
   }
 
-  function firstStorageValue(storage, patterns) {
+  function firstStorageValue(storage, patterns, options = {}) {
     const entries = Object.entries(storage)
     for (const [key, value] of entries) {
-      const normalized = key.toLowerCase()
-      if (!patterns.some((pattern) => normalized.includes(pattern))) continue
+      const storageKey = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key
+      const normalized = storageKey.toLowerCase()
+      const matched = patterns.some((pattern) => {
+        const expected = String(pattern).toLowerCase()
+        return options.exact ? normalized === expected : normalized.includes(expected)
+      })
+      if (!matched) continue
+      if ((options.exclude || []).some((pattern) => normalized.includes(String(pattern).toLowerCase()))) continue
       const parsed = extractValue(value)
-      if (parsed) return parsed
+      if (parsed) return { value: parsed, source: key }
     }
-    return ''
+    return { value: '', source: '' }
   }
 
   function extractValue(value) {
@@ -158,7 +172,7 @@
   }
 
   function inferExpiresAt(storage) {
-    const raw = firstStorageValue(storage, ['token_expires_at', 'expires_at', 'expire'])
+    const raw = firstStorageValue(storage, ['token_expires_at', 'expires_at', 'expire']).value
     if (!raw) return ''
     const numeric = Number(raw)
     if (Number.isFinite(numeric)) {

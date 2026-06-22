@@ -71,6 +71,7 @@ func (g *Sub2APIHTTPGateway) CreateAccount(ctx context.Context, input *service.C
 		"priority":                   input.Priority,
 		"rate_multiplier":            input.RateMultiplier,
 		"load_factor":                input.LoadFactor,
+		"schedulable":                input.Schedulable,
 		"group_ids":                  input.GroupIDs,
 		"expires_at":                 input.ExpiresAt,
 		"auto_pause_on_expired":      input.AutoPauseOnExpired,

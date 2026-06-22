@@ -23,6 +23,7 @@ func testConfig() *config.Config {
 type mockAccountRepoForPlatform struct {
 	accounts         []Account
 	accountsByID     map[int64]*Account
+	created          *Account
 	listPlatformFunc func(ctx context.Context, platform string) ([]Account, error)
 	getByIDCalls     int
 }
@@ -72,6 +73,8 @@ func (m *mockAccountRepoForPlatform) ListSchedulableByGroupIDAndPlatform(ctx con
 
 // Stub methods to implement AccountRepository interface
 func (m *mockAccountRepoForPlatform) Create(ctx context.Context, account *Account) error {
+	cp := *account
+	m.created = &cp
 	return nil
 }
 func (m *mockAccountRepoForPlatform) GetByCRSAccountID(ctx context.Context, crsAccountID string) (*Account, error) {

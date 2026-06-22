@@ -137,9 +137,8 @@ func (p *IngestProcessor) processSessionBundle(ctx context.Context, task *adminp
 			SupplierID: task.SupplierID,
 		})
 		if err != nil {
-			return nil, err
-		}
-		if synced != nil {
+			out["balance_probe_error"] = err.Error()
+		} else if synced != nil {
 			var balanceCents any
 			var balanceCurrency string
 			if synced.Probe != nil {

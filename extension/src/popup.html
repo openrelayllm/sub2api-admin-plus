@@ -20,7 +20,7 @@
         <div class="step-index" id="stepIndex">1</div>
         <div class="step-body">
           <p id="stepLabel" class="label">连接</p>
-          <h2 id="stepTitle">连接 sub2apiplus</h2>
+          <h2 id="stepTitle">连接 Admin Plus</h2>
           <p id="stepText" class="hint">先在后台页面完成登录，再连接当前页。</p>
         </div>
       </section>
@@ -36,9 +36,23 @@
         </div>
       </section>
 
+      <section id="lastResultPanel" class="result hidden">
+        <div class="result-head">
+          <span id="lastResultBadge" class="result-badge">-</span>
+          <strong id="lastResultTitle">最近上报</strong>
+        </div>
+        <div id="lastResultMeta" class="result-meta"></div>
+      </section>
+
+      <section id="configPanel" class="config hidden">
+        <label for="adminPlusBaseURL">Admin Plus 后端地址</label>
+        <input id="adminPlusBaseURL" type="url" placeholder="http://localhost:8080" autocomplete="url" />
+        <p class="hint">本地开发通常填后端端口。先打开并登录后台，再连接。</p>
+      </section>
+
       <div class="actions">
-        <button id="primaryAction" type="button" class="primary">连接当前页</button>
-        <button id="secondaryAction" type="button">打开 sub2apiplus</button>
+        <button id="primaryAction" type="button" class="primary">连接后台</button>
+        <button id="secondaryAction" type="button">打开 Admin Plus</button>
       </div>
 
       <div id="status" class="notice hidden" aria-live="polite"></div>

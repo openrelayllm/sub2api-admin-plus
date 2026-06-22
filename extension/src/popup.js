@@ -10,15 +10,28 @@ const stepLabel = document.querySelector('#stepLabel')
 const stepTitle = document.querySelector('#stepTitle')
 const stepText = document.querySelector('#stepText')
 const contextPanel = document.querySelector('#contextPanel')
+const configPanel = document.querySelector('#configPanel')
+const adminPlusBaseURLEl = document.querySelector('#adminPlusBaseURL')
+const lastResultPanel = document.querySelector('#lastResultPanel')
+const lastResultBadge = document.querySelector('#lastResultBadge')
+const lastResultTitle = document.querySelector('#lastResultTitle')
+const lastResultMeta = document.querySelector('#lastResultMeta')
 
 let state = null
 let identification = null
+let lastCaptureResult = null
 let busy = false
 let primaryHandler = connectFromActiveTab
 let secondaryHandler = openAdminPlus
 
 primaryAction.addEventListener('click', () => guard(primaryHandler))
 secondaryAction.addEventListener('click', () => guard(secondaryHandler))
+adminPlusBaseURLEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    guard(saveBaseURLOnly)
+  }
+})
 
 init().catch(showError)
 
@@ -30,13 +43,14 @@ async function refresh() {
   setBusy(true)
   try {
     state = await sendMessage({ type: 'state:get' })
+    lastCaptureResult = await sendMessage({ type: 'capture:last-result' })
     if (state.connection.status === 'connected') {
       identification = await sendMessage({ type: 'site:identify' })
     } else {
       identification = null
     }
     render()
-    writeStatus('')
+    if (!lastCaptureResult) writeStatus('')
   } finally {
     setBusy(false)
   }
@@ -45,29 +59,53 @@ async function refresh() {
 async function connectFromActiveTab() {
   setBusy(true)
   try {
-    state = await sendMessage({ type: 'connect:from-active-tab' })
+    state = await sendMessage({ type: 'connect:from-active-tab', baseURL: currentBaseURLInput() || state?.connection?.baseURL || '' })
     await refresh()
-    writeStatus('已连接')
+    writeStatus('已连接', 'success')
   } finally {
     setBusy(false)
   }
 }
 
 async function openAdminPlus() {
-  await sendMessage({ type: 'connect:open-admin-plus', baseURL: state?.connection?.baseURL || '' })
-  writeStatus('已打开登录页')
+  await sendMessage({ type: 'connect:open-admin-plus', baseURL: currentBaseURLInput() || state?.connection?.baseURL || '' })
+  writeStatus('已打开登录页', 'success')
+}
+
+async function saveBaseURLOnly() {
+  setBusy(true)
+  try {
+    state = await sendMessage({ type: 'connect:save-base-url', baseURL: currentBaseURLInput() })
+    adminPlusBaseURLEl.value = state?.connection?.baseURL || ''
+    render()
+    writeStatus('地址已保存', 'success')
+  } finally {
+    setBusy(false)
+  }
 }
 
 async function capture() {
   if (!identification || !['matched', 'unknown'].includes(identification.status)) {
     throw Object.assign(new Error('当前网站不可上报'), { reason: 'SUPPLIER_SITE_NOT_MATCHED' })
   }
+  const startedAt = Date.now()
   setBusy(true)
   try {
+    writeStatus('')
     const supplierID = identification.supplier?.id
     const result = await sendMessage({ type: 'session:capture', supplierID, autoCreate: identification.status === 'unknown' })
-    writeStatus(formatCaptureResult(result))
+    lastCaptureResult = await sendMessage({ type: 'capture:last-result' })
     await refresh()
+    writeStatus('')
+  } catch (error) {
+    const storedResult = await sendMessage({ type: 'capture:last-result' }).catch(() => null)
+    if (isFreshCaptureResult(storedResult, startedAt)) {
+      lastCaptureResult = storedResult
+      render()
+      writeStatus('')
+      return
+    }
+    throw error
   } finally {
     setBusy(false)
   }
@@ -80,18 +118,23 @@ function render() {
   deviceEl.textContent = shortDeviceID(connection.deviceID)
   connectionBadge.textContent = connected ? '已连接' : invalid ? '需登录' : '未连接'
   connectionBadge.className = `pill ${connected ? 'success' : invalid ? 'warning' : 'neutral'}`
+  if (document.activeElement !== adminPlusBaseURLEl) {
+    adminPlusBaseURLEl.value = connection.baseURL || adminPlusBaseURLEl.value || ''
+  }
+  renderLastCaptureResult()
 
   if (!connected) {
     renderStep({
       index: 1,
       label: '连接',
-      title: invalid ? '重新连接 sub2apiplus' : '连接 sub2apiplus',
-      text: invalid ? '登录态已失效，请回到后台页面重新连接。' : '先在 sub2apiplus 页面登录，再连接当前页。',
+      title: invalid ? '重新连接 Admin Plus' : '连接 Admin Plus',
+      text: invalid ? '登录态已失效，请回到后台页面重新连接。' : '填写后端地址，打开并登录后台后再连接。',
       context: null,
-      primaryText: '连接当前页',
+      primaryText: '连接后台',
       primary: connectFromActiveTab,
-      secondaryText: '打开 sub2apiplus',
-      secondary: openAdminPlus
+      secondaryText: '保存地址',
+      secondary: saveBaseURLOnly,
+      config: true
     })
     return
   }
@@ -108,7 +151,7 @@ function render() {
       context: { host, supplier: identification.supplier?.name || '-' },
       primaryText: loggedOut ? '刷新状态' : '上报当前会话',
       primary: loggedOut ? refresh : capture,
-      secondaryText: '打开 sub2apiplus',
+      secondaryText: '打开 Admin Plus',
       secondary: openAdminPlus
     })
     return
@@ -138,7 +181,7 @@ function render() {
       context: { host, supplier: '多个供应商' },
       primaryText: '刷新状态',
       primary: refresh,
-      secondaryText: '打开 sub2apiplus',
+      secondaryText: '打开 Admin Plus',
       secondary: openAdminPlus
     })
     return
@@ -152,7 +195,7 @@ function render() {
     context: { host, supplier: '-' },
     primaryText: '刷新状态',
     primary: refresh,
-    secondaryText: '打开 sub2apiplus',
+    secondaryText: '打开 Admin Plus',
     secondary: openAdminPlus
   })
 }
@@ -167,6 +210,7 @@ function renderStep(config) {
     supplierTextEl.textContent = config.context.supplier || '-'
   }
   contextPanel.classList.toggle('hidden', !config.context)
+  configPanel.classList.toggle('hidden', !config.config)
   primaryAction.textContent = config.primaryText
   secondaryAction.textContent = config.secondaryText
   primaryHandler = config.primary
@@ -175,16 +219,43 @@ function renderStep(config) {
   secondaryAction.disabled = busy
 }
 
-function formatCaptureResult(result) {
-  if (result.status === 'succeeded') {
-    const summary = result.result?.session_summary || {}
-    const parts = [
-      summary.has_access_token ? 'token' : '',
-      Number(summary.cookie_count || 0) > 0 ? `${summary.cookie_count} cookies` : ''
-    ].filter(Boolean)
-    return `上报成功：${parts.join(' / ') || '会话已保存'}`
+function renderLastCaptureResult() {
+  if (!lastCaptureResult) {
+    lastResultPanel.classList.add('hidden')
+    return
   }
-  return result?.result?.error_message || '上报失败'
+  const succeeded = lastCaptureResult.status === 'succeeded'
+  lastResultPanel.className = `result ${succeeded ? 'succeeded' : 'failed'}`
+  lastResultBadge.textContent = succeeded ? '成功' : '失败'
+  lastResultTitle.textContent = lastCaptureResult.message || (succeeded ? '最近上报成功' : '最近上报失败')
+  lastResultMeta.textContent = formatLastResultMeta(lastCaptureResult)
+}
+
+function formatLastResultMeta(result) {
+  const parts = []
+  if (result.supplier) parts.push(result.supplier)
+  if (result.host) parts.push(result.host)
+  if (result.taskID) parts.push(`#${result.taskID}`)
+  if (result.recordedAt) parts.push(formatTime(result.recordedAt))
+  const summary = result.summary || {}
+  const evidence = [
+    summary.has_access_token ? 'token' : '',
+    Number(summary.cookie_count || 0) > 0 ? `${summary.cookie_count} cookies` : ''
+  ].filter(Boolean).join(' / ')
+  if (evidence) parts.push(evidence)
+  return parts.join(' · ')
+}
+
+function formatTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString()
+}
+
+function isFreshCaptureResult(result, startedAt) {
+  if (!result?.recordedAt) return false
+  const recordedAt = new Date(result.recordedAt).getTime()
+  return Number.isFinite(recordedAt) && recordedAt >= startedAt - 2000
 }
 
 function sendMessage(message) {
@@ -201,17 +272,22 @@ function throwMessage(response) {
 }
 
 function showError(error) {
-  if (error?.reason === 'ADMIN_PLUS_LOGIN_REQUIRED') return writeStatus('请先在 sub2apiplus 页面登录')
-  if (error?.reason === 'ADMIN_PLUS_PAGE_REQUIRED') return writeStatus('请切换到 sub2apiplus 后台页')
-  if (error?.reason === 'ADMIN_PLUS_AUTH_INVALID') return writeStatus('sub2apiplus 登录态无效')
-  if (error?.reason === 'ADMIN_PLUS_NOT_CONNECTED') return writeStatus('请先连接 sub2apiplus')
-  if (error?.reason === 'SUPPLIER_LOGIN_REQUIRED') return writeStatus('请先在供应商页面登录')
-  writeStatus(error.message || String(error))
+  if (error?.reason === 'ADMIN_PLUS_LOGIN_REQUIRED') return writeStatus('请先打开并登录 Admin Plus 后台页', 'failed')
+  if (error?.reason === 'ADMIN_PLUS_PAGE_REQUIRED') return writeStatus('请切换到 Admin Plus 后台页', 'failed')
+  if (error?.reason === 'ADMIN_PLUS_AUTH_INVALID') return writeStatus('Admin Plus 登录态无效或后端地址不对', 'failed')
+  if (error?.reason === 'ADMIN_PLUS_NOT_CONNECTED') return writeStatus('请先连接 Admin Plus', 'failed')
+  if (error?.reason === 'SUPPLIER_LOGIN_REQUIRED') return writeStatus('请先在供应商页面登录', 'failed')
+  writeStatus(error.message || String(error), 'failed')
 }
 
-function writeStatus(message) {
+function writeStatus(message, variant = 'neutral') {
   statusEl.textContent = message
+  statusEl.className = `notice ${variant}`
   statusEl.classList.toggle('hidden', !message)
+}
+
+function currentBaseURLInput() {
+  return String(adminPlusBaseURLEl.value || '').trim()
 }
 
 function shortDeviceID(deviceID) {

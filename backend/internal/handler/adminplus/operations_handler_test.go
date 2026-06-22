@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -484,6 +486,11 @@ func TestSupplierSessionDirectLoginSyncsBalance(t *testing.T) {
 			require.Equal(t, "ops@example.com", payload["email"])
 			require.Equal(t, "secret", payload["password"])
 			require.Equal(t, "rev-test", payload["login_agreement_revision"])
+			require.Equal(t, "rev-test", payload["loginAgreementRevision"])
+			require.Equal(t, true, payload["agreement_accepted"])
+			consent, ok := payload["login_agreement_consent"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "rev-test", consent["revision"])
 			_, _ = w.Write([]byte(`{"data":{"access_token":"direct-provider-token","expires_in":3600}}`))
 		case "/api/v1/user/profile":
 			seenProfileAuth = req.Header.Get("Authorization")
@@ -1018,6 +1025,33 @@ func TestExtensionHandlerPackageInfersOriginFromRequest(t *testing.T) {
 	require.NoError(t, err)
 	defaultConfigJSON := zipEntryText(t, zipReader, extensionDefaultConfigPath)
 	require.JSONEq(t, `{"baseURL":"https://sub2api-plus.example.com"}`, defaultConfigJSON)
+}
+
+func TestExtensionRootFindsRuntimeExtensionDirectory(t *testing.T) {
+	t.Setenv("ADMIN_PLUS_EXTENSION_DIR", "")
+	root := t.TempDir()
+	extensionDir := filepath.Join(root, "extension")
+	require.NoError(t, os.MkdirAll(extensionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(extensionDir, "manifest.json"), []byte(`{"name":"Runtime Extension"}`), 0o644))
+
+	previousWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	resolved, err := extensionRoot()
+	require.NoError(t, err)
+	expected, err := filepath.Abs(extensionDir)
+	require.NoError(t, err)
+	expected, err = filepath.EvalSymlinks(expected)
+	require.NoError(t, err)
+	actual, err := filepath.EvalSymlinks(resolved)
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
 }
 
 func TestActionHandlerGenerateDoesNotExecuteActions(t *testing.T) {

@@ -1,4 +1,5 @@
 const CONFIG_KEY = 'adminPlusOperatorConfig'
+const LAST_CAPTURE_RESULT_KEY = 'adminPlusLastCaptureResult'
 const DEFAULT_CONFIG_PATH = 'config/default-config.json'
 
 export async function loadConfig() {
@@ -30,6 +31,37 @@ export async function saveConfig(config) {
   })
 }
 
+export async function saveBaseURL(baseURL) {
+  const normalized = normalizeBaseURL(baseURL)
+  const config = await loadConfig()
+  const changed = normalizeBaseURL(config.baseURL) !== normalized
+  await saveConfig({
+    ...config,
+    baseURL: normalized,
+    token: changed ? '' : config.token,
+    connectedAt: changed ? '' : config.connectedAt
+  })
+}
+
+export async function loadLastCaptureResult() {
+  const stored = await chrome.storage.local.get(LAST_CAPTURE_RESULT_KEY)
+  return stored[LAST_CAPTURE_RESULT_KEY] || null
+}
+
+export async function saveLastCaptureResult(result) {
+  await chrome.storage.local.set({
+    [LAST_CAPTURE_RESULT_KEY]: {
+      status: result.status || 'failed',
+      message: result.message || '',
+      supplier: result.supplier || '',
+      host: result.host || '',
+      taskID: result.taskID || 0,
+      summary: result.summary || {},
+      recordedAt: result.recordedAt || new Date().toISOString()
+    }
+  })
+}
+
 async function loadDefaultConfig() {
   try {
     const response = await fetch(chrome.runtime.getURL(DEFAULT_CONFIG_PATH), {
@@ -45,9 +77,12 @@ async function loadDefaultConfig() {
   }
 }
 
-function normalizeBaseURL(value) {
-  const raw = String(value || '').trim().replace(/\/+$/, '')
+export function normalizeBaseURL(value) {
+  let raw = String(value || '').trim().replace(/\/+$/, '')
   if (!raw) return ''
+  if (!/^[a-z][a-z\d+\-.]*:\/\//i.test(raw)) {
+    raw = `${usesLocalHTTPByDefault(raw) ? 'http' : 'https'}://${raw}`
+  }
   try {
     const url = new URL(raw)
     if (!['http:', 'https:'].includes(url.protocol)) return ''
@@ -55,4 +90,13 @@ function normalizeBaseURL(value) {
   } catch {
     return ''
   }
+}
+
+function usesLocalHTTPByDefault(value) {
+  const raw = String(value || '').trim().toLowerCase()
+  return raw.startsWith('localhost') ||
+    raw.startsWith('127.') ||
+    raw.startsWith('0.0.0.0') ||
+    raw.startsWith('[::1]') ||
+    raw.startsWith('::1')
 }

@@ -107,6 +107,7 @@ func TestSessionProfileClientDirectLogin(t *testing.T) {
 	var sawSettings bool
 	var sawLogin bool
 	var serverURL string
+	now := time.Date(2026, 6, 22, 0, 27, 8, 786000000, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -128,6 +129,15 @@ func TestSessionProfileClientDirectLogin(t *testing.T) {
 			require.Equal(t, "ops@example.com", payload["email"])
 			require.Equal(t, "secret", payload["password"])
 			require.Equal(t, "rev-1", payload["login_agreement_revision"])
+			require.Equal(t, "rev-1", payload["loginAgreementRevision"])
+			require.Equal(t, true, payload["agreement_accepted"])
+			consent, ok := payload["login_agreement_consent"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "rev-1", consent["revision"])
+			require.Equal(t, now.Format(time.RFC3339Nano), consent["accepted_at"])
+			camelConsent, ok := payload["loginAgreementConsent"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, consent, camelConsent)
 			sawLogin = true
 			_, _ = w.Write([]byte(`{"data":{"access_token":"direct-access-token","expires_in":3600}}`))
 		default:
@@ -138,6 +148,7 @@ func TestSessionProfileClientDirectLogin(t *testing.T) {
 	serverURL = server.URL
 
 	client := NewSessionProfileClient(server.Client())
+	client.now = func() time.Time { return now }
 	result, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
 		SupplierID: 7,
 		Origin:     server.URL,
@@ -189,6 +200,11 @@ func TestSessionProfileClientDirectLoginUsesBrowserUAWhenLegacyAdapterUAIsReject
 			var payload map[string]any
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 			require.Equal(t, "rev-ua", payload["login_agreement_revision"])
+			require.Equal(t, "rev-ua", payload["loginAgreementRevision"])
+			require.Equal(t, true, payload["agreement_accepted"])
+			consent, ok := payload["login_agreement_consent"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "rev-ua", consent["revision"])
 			sawBrowserLogin = true
 			_, _ = w.Write([]byte(`{"data":{"access_token":"browser-ua-access-token","expires_in":3600}}`))
 		default:
@@ -219,6 +235,41 @@ func TestSessionProfileClientDirectLoginUsesBrowserUAWhenLegacyAdapterUAIsReject
 	require.True(t, sawBrowserSettings)
 	require.True(t, sawBrowserLogin)
 	require.Equal(t, "browser-ua-access-token", result.SessionBundle["access_token"])
+}
+
+func TestSessionProfileClientDirectLoginDoesNotPreflightGlobalTotpSetting(t *testing.T) {
+	var sawLogin bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/settings/public":
+			_, _ = w.Write([]byte(`{"data":{"totp_enabled":true,"login_agreement_revision":"rev-totp"}}`))
+		case "/api/v1/auth/login":
+			sawLogin = true
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, "rev-totp", payload["login_agreement_revision"])
+			_, _ = w.Write([]byte(`{"data":{"access_token":"totp-site-access-token","refresh_token":"refresh-token","expires_in":86400}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Username:   "ops@example.com",
+		Password:   "secret",
+	})
+
+	require.NoError(t, err)
+	require.True(t, sawLogin)
+	require.Equal(t, "totp-site-access-token", result.SessionBundle["access_token"])
+	require.Equal(t, "refresh-token", result.SessionBundle["refresh_token"])
+	require.Equal(t, true, result.Diagnostics["settings_totp_enabled"])
 }
 
 func TestSessionProfileClientReadChannelMonitors(t *testing.T) {
