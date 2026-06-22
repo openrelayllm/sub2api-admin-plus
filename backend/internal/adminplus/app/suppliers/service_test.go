@@ -171,6 +171,28 @@ func TestServiceListFiltersSuppliers(t *testing.T) {
 	require.Equal(t, "Active Relay", items[0].Name)
 }
 
+func TestServiceListConvertsLegacyNewAPIQuotaBalance(t *testing.T) {
+	repo := NewMemoryRepository()
+	_, err := repo.Create(context.Background(), &adminplusdomain.Supplier{
+		Name:            "Codex APIs",
+		Kind:            adminplusdomain.SupplierKindRelay,
+		Type:            adminplusdomain.SupplierTypeNewAPI,
+		RuntimeStatus:   adminplusdomain.SupplierRuntimeStatusCandidate,
+		HealthStatus:    adminplusdomain.SupplierHealthStatusNormal,
+		BalanceCents:    892305600,
+		BalanceCurrency: "QTA",
+	})
+	require.NoError(t, err)
+	svc := NewService(repo)
+
+	items, err := svc.List(context.Background(), SupplierFilter{})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(1785), items[0].BalanceCents)
+	require.Equal(t, "USD", items[0].BalanceCurrency)
+}
+
 func TestServiceMatchSitePrefersExactHostPort(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	first, err := svc.Create(context.Background(), CreateSupplierInput{
@@ -248,7 +270,7 @@ func TestServiceEnsureFromSiteCandidateCreatesNewAPISupplier(t *testing.T) {
 	require.Equal(t, adminplusdomain.SupplierTypeNewAPI, result.Supplier.Type)
 	require.Equal(t, adminplusdomain.SupplierRuntimeStatusMonitorOnly, result.Supplier.RuntimeStatus)
 	require.Equal(t, "https://www.codexapis.com", result.Supplier.APIBaseURL)
-	require.Equal(t, "QTA", result.Supplier.BalanceCurrency)
+	require.Equal(t, "USD", result.Supplier.BalanceCurrency)
 }
 
 func TestServiceEnsureFromSiteCandidateInfersThirdPartyRechargeURL(t *testing.T) {

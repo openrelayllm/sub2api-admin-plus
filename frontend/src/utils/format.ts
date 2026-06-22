@@ -69,6 +69,7 @@ export function formatCurrency(amount: number | null | undefined, currency: stri
   return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: currency,
+    currencyDisplay: 'narrowSymbol',
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits
   }).format(amount)

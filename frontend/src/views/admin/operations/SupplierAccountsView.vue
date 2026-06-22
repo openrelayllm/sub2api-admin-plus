@@ -329,7 +329,8 @@ function sortBindingsDesc(items: SupplierAccount[]): SupplierAccount[] {
 function formatMoneyCompact(cents: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
-    currency: currency || 'CNY',
+    currency: currency || 'USD',
+    currencyDisplay: 'narrowSymbol',
     minimumFractionDigits: 4,
     maximumFractionDigits: 4
   }).format((cents || 0) / 100)

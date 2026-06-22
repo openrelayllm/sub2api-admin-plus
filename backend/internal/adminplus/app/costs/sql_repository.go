@@ -31,10 +31,10 @@ func (r *SQLRepository) UpsertFundingTransaction(ctx context.Context, item *admi
 		INSERT INTO admin_plus_supplier_funding_transactions (
 			supplier_id, provider_type, external_id, out_trade_no, payment_trade_no,
 			payment_type, order_type, status, currency, amount_cents, cash_amount_cents,
-			refund_amount_cents, fee_rate, created_at_external, paid_at, completed_at,
+			recharge_multiplier, actual_payment_cents, refund_amount_cents, fee_rate, created_at_external, paid_at, completed_at,
 			raw_payload, last_seen_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		ON CONFLICT (supplier_id, provider_type, external_id)
 		DO UPDATE SET
 			out_trade_no = EXCLUDED.out_trade_no,
@@ -45,6 +45,8 @@ func (r *SQLRepository) UpsertFundingTransaction(ctx context.Context, item *admi
 			currency = EXCLUDED.currency,
 			amount_cents = EXCLUDED.amount_cents,
 			cash_amount_cents = EXCLUDED.cash_amount_cents,
+			recharge_multiplier = EXCLUDED.recharge_multiplier,
+			actual_payment_cents = EXCLUDED.actual_payment_cents,
 			refund_amount_cents = EXCLUDED.refund_amount_cents,
 			fee_rate = EXCLUDED.fee_rate,
 			created_at_external = EXCLUDED.created_at_external,
@@ -55,7 +57,7 @@ func (r *SQLRepository) UpsertFundingTransaction(ctx context.Context, item *admi
 			updated_at = NOW()
 		RETURNING id, supplier_id, provider_type, external_id, out_trade_no, payment_trade_no,
 			payment_type, order_type, status, currency, amount_cents, cash_amount_cents,
-			refund_amount_cents, fee_rate, created_at_external, paid_at, completed_at,
+			recharge_multiplier, actual_payment_cents, refund_amount_cents, fee_rate, created_at_external, paid_at, completed_at,
 			raw_payload, last_seen_at, created_at, updated_at,
 			(xmax = 0) AS inserted
 	`,
@@ -70,6 +72,8 @@ func (r *SQLRepository) UpsertFundingTransaction(ctx context.Context, item *admi
 		item.Currency,
 		item.AmountCents,
 		item.CashAmountCents,
+		item.RechargeMultiplier,
+		item.ActualPaymentCents,
 		item.RefundAmountCents,
 		nullableFloat64(item.FeeRate),
 		nullableTime(item.CreatedAtExternal),
@@ -155,20 +159,21 @@ func (r *SQLRepository) UpsertLedgerEntry(ctx context.Context, entry *adminplusd
 		INSERT INTO admin_plus_supplier_cost_ledger_entries (
 			supplier_id, provider_type, entry_type, source_type, source_id,
 			source_external_id, currency, amount_cents, cash_amount_cents,
-			occurred_at, raw_payload
+			actual_payment_cents, occurred_at, raw_payload
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (supplier_id, provider_type, entry_type, source_type, source_id)
 		DO UPDATE SET
 			source_external_id = EXCLUDED.source_external_id,
 			currency = EXCLUDED.currency,
 			amount_cents = EXCLUDED.amount_cents,
 			cash_amount_cents = EXCLUDED.cash_amount_cents,
+			actual_payment_cents = EXCLUDED.actual_payment_cents,
 			occurred_at = EXCLUDED.occurred_at,
 			raw_payload = EXCLUDED.raw_payload
 		RETURNING id, supplier_id, provider_type, entry_type, source_type, source_id,
 			source_external_id, currency, amount_cents, cash_amount_cents,
-			occurred_at, raw_payload, created_at,
+			actual_payment_cents, occurred_at, raw_payload, created_at,
 			(xmax = 0) AS inserted
 	`,
 		entry.SupplierID,
@@ -180,6 +185,7 @@ func (r *SQLRepository) UpsertLedgerEntry(ctx context.Context, entry *adminplusd
 		entry.Currency,
 		entry.AmountCents,
 		entry.CashAmountCents,
+		entry.ActualPaymentCents,
 		entry.OccurredAt,
 		rawPayload,
 	)
@@ -210,11 +216,17 @@ func (r *SQLRepository) RefreshSnapshot(ctx context.Context, supplierID int64, c
 			SELECT
 				COALESCE(SUM(CASE WHEN entry_type = 'funding_credit' THEN amount_cents ELSE 0 END), 0) AS funding_amount,
 				COALESCE(SUM(CASE WHEN entry_type = 'funding_credit' THEN cash_amount_cents ELSE 0 END), 0) AS funding_cash,
+				COALESCE(SUM(CASE WHEN entry_type = 'funding_credit' THEN actual_payment_cents ELSE 0 END), 0) AS funding_actual_payment,
 				COALESCE(SUM(CASE WHEN entry_type = 'entitlement_credit' THEN amount_cents ELSE 0 END), 0) AS entitlement_amount,
 				COALESCE(SUM(CASE WHEN entry_type = 'refund_debit' THEN -amount_cents ELSE 0 END), 0) AS refund_amount,
 				COALESCE(SUM(CASE WHEN entry_type IN ('manual_adjustment', 'reversal') THEN amount_cents ELSE 0 END), 0) AS adjustment_amount
 			FROM admin_plus_supplier_cost_ledger_entries
 			WHERE supplier_id = $1 AND currency = $2
+		),
+		supplier_config AS (
+			SELECT GREATEST(COALESCE(NULLIF(recharge_multiplier, 0), 1), 0.000001) AS recharge_multiplier
+			FROM admin_plus_suppliers
+			WHERE id = $1
 		),
 		auto_redeem_entitlement AS (
 			SELECT COALESCE(SUM(value_cents), 0) AS amount
@@ -241,6 +253,7 @@ func (r *SQLRepository) RefreshSnapshot(ctx context.Context, supplierID int64, c
 			SELECT
 				ledger.funding_amount,
 				ledger.funding_cash,
+				ledger.funding_actual_payment,
 				ledger.entitlement_amount + GREATEST(auto_redeem_entitlement.amount - ledger.funding_amount, 0) AS entitlement_amount,
 				usage.usage_cost AS raw_usage_cost,
 				ledger.refund_amount,
@@ -252,8 +265,13 @@ func (r *SQLRepository) RefreshSnapshot(ctx context.Context, supplierID int64, c
 					- ledger.refund_amount
 					+ ledger.adjustment_amount
 				) AS balance_before_usage,
-				balance.balance_cents AS actual_balance
+				balance.balance_cents AS actual_balance,
+				(
+					ledger.funding_actual_payment
+					+ ROUND((ledger.entitlement_amount + GREATEST(auto_redeem_entitlement.amount - ledger.funding_amount, 0))::numeric / supplier_config.recharge_multiplier::numeric)::BIGINT
+				) AS recharge_actual_payment
 			FROM ledger
+			CROSS JOIN supplier_config
 			CROSS JOIN auto_redeem_entitlement
 			CROSS JOIN usage
 			LEFT JOIN balance ON TRUE
@@ -262,6 +280,7 @@ func (r *SQLRepository) RefreshSnapshot(ctx context.Context, supplierID int64, c
 			SELECT
 				funding_amount,
 				funding_cash,
+				recharge_actual_payment,
 				entitlement_amount,
 				CASE
 					WHEN actual_balance IS NULL THEN raw_usage_cost
@@ -278,18 +297,19 @@ func (r *SQLRepository) RefreshSnapshot(ctx context.Context, supplierID int64, c
 		)
 		INSERT INTO admin_plus_supplier_cost_snapshots (
 			supplier_id, currency, completed_funding_amount_cents, completed_funding_cash_cents,
+			recharge_actual_payment_cents,
 			entitlement_amount_cents, usage_cost_cents, refund_amount_cents,
 			adjustment_amount_cents, expected_balance_cents, actual_balance_cents,
 			balance_delta_cents, captured_at
 		)
 		SELECT
-			$1, $2, funding_amount, funding_cash, entitlement_amount, usage_cost,
+			$1, $2, funding_amount, funding_cash, recharge_actual_payment, entitlement_amount, usage_cost,
 			refund_amount, adjustment_amount, expected_balance, actual_balance,
 			CASE WHEN actual_balance IS NULL THEN NULL ELSE actual_balance - expected_balance END,
 			$3
 		FROM totals
 		RETURNING id, supplier_id, currency, completed_funding_amount_cents,
-			completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+			completed_funding_cash_cents, recharge_actual_payment_cents, entitlement_amount_cents, usage_cost_cents,
 			refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
 			actual_balance_cents, balance_delta_cents, captured_at, created_at
 	`, supplierID, strings.ToUpper(currency), capturedAt)
@@ -310,16 +330,17 @@ func (r *SQLRepository) GetLedgerOverview(ctx context.Context) (*adminplusdomain
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, supplier_id, currency, completed_funding_amount_cents,
-			completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+			completed_funding_cash_cents, recharge_actual_payment_cents, entitlement_amount_cents, usage_cost_cents,
 			refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
 			actual_balance_cents, balance_delta_cents, captured_at, created_at
 		FROM (
 			SELECT DISTINCT ON (supplier_id, currency)
 				id, supplier_id, currency, completed_funding_amount_cents,
-				completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+				completed_funding_cash_cents, recharge_actual_payment_cents, entitlement_amount_cents, usage_cost_cents,
 				refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
 				actual_balance_cents, balance_delta_cents, captured_at, created_at
 			FROM admin_plus_supplier_cost_snapshots
+			WHERE UPPER(currency) = 'USD'
 			ORDER BY supplier_id, currency, captured_at DESC, id DESC
 		) latest_snapshots
 		ORDER BY currency, supplier_id
@@ -346,13 +367,13 @@ func (r *SQLRepository) listSnapshots(ctx context.Context, where []string, args 
 	args = append(args, limit)
 	query := `
 		SELECT id, supplier_id, currency, completed_funding_amount_cents,
-			completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+			completed_funding_cash_cents, recharge_actual_payment_cents, entitlement_amount_cents, usage_cost_cents,
 			refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
 			actual_balance_cents, balance_delta_cents, captured_at, created_at
 		FROM (
 			SELECT DISTINCT ON (supplier_id, currency)
 				id, supplier_id, currency, completed_funding_amount_cents,
-				completed_funding_cash_cents, entitlement_amount_cents, usage_cost_cents,
+				completed_funding_cash_cents, recharge_actual_payment_cents, entitlement_amount_cents, usage_cost_cents,
 				refund_amount_cents, adjustment_amount_cents, expected_balance_cents,
 				actual_balance_cents, balance_delta_cents, captured_at, created_at
 			FROM admin_plus_supplier_cost_snapshots
@@ -386,7 +407,7 @@ func (r *SQLRepository) ListFundingTransactions(ctx context.Context, filter Tran
 	query := `
 		SELECT id, supplier_id, provider_type, external_id, out_trade_no, payment_trade_no,
 			payment_type, order_type, status, currency, amount_cents, cash_amount_cents,
-			refund_amount_cents, fee_rate, created_at_external, paid_at, completed_at,
+			recharge_multiplier, actual_payment_cents, refund_amount_cents, fee_rate, created_at_external, paid_at, completed_at,
 			raw_payload, last_seen_at, created_at, updated_at
 		FROM admin_plus_supplier_funding_transactions
 		WHERE ` + strings.Join(where, " AND ") + `
@@ -448,7 +469,7 @@ func (r *SQLRepository) ListLedgerEntries(ctx context.Context, filter LedgerFilt
 	query := `
 		SELECT id, supplier_id, provider_type, entry_type, source_type, source_id,
 			source_external_id, currency, amount_cents, cash_amount_cents,
-			occurred_at, raw_payload, created_at
+			actual_payment_cents, occurred_at, raw_payload, created_at
 		FROM admin_plus_supplier_cost_ledger_entries
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY occurred_at DESC, id DESC
@@ -470,7 +491,7 @@ func (r *SQLRepository) ListLedgerEntries(ctx context.Context, filter LedgerFilt
 }
 
 func supplierWhere(supplierID int64) ([]string, []any) {
-	where := []string{"1=1"}
+	where := []string{"UPPER(currency) = 'USD'"}
 	args := make([]any, 0, 2)
 	if supplierID > 0 {
 		args = append(args, supplierID)
@@ -502,7 +523,8 @@ func scanFundingTransactionInternal(s scanner, withInserted bool) (*adminplusdom
 	dest := []any{
 		&item.ID, &item.SupplierID, &item.ProviderType, &item.ExternalID, &item.OutTradeNo,
 		&item.PaymentTradeNo, &item.PaymentType, &item.OrderType, &item.Status, &item.Currency,
-		&item.AmountCents, &item.CashAmountCents, &item.RefundAmountCents, &feeRate,
+		&item.AmountCents, &item.CashAmountCents, &item.RechargeMultiplier, &item.ActualPaymentCents,
+		&item.RefundAmountCents, &feeRate,
 		&createdAtExternal, &paidAt, &completedAt, &rawPayload, &item.LastSeenAt,
 		&item.CreatedAt, &item.UpdatedAt,
 	}
@@ -519,6 +541,10 @@ func scanFundingTransactionInternal(s scanner, withInserted bool) (*adminplusdom
 	item.PaidAt = nullableTimePtr(paidAt)
 	item.CompletedAt = nullableTimePtr(completedAt)
 	item.RawPayload = unmarshalPayload(rawPayload)
+	item.RechargeMultiplier = normalizeRechargeMultiplier(item.RechargeMultiplier)
+	if item.ActualPaymentCents == 0 && item.AmountCents > 0 {
+		item.ActualPaymentCents = actualPaymentCents(item.AmountCents, item.CashAmountCents, item.RechargeMultiplier)
+	}
 	return &item, inserted, nil
 }
 
@@ -571,7 +597,7 @@ func scanLedgerEntryInternal(s scanner, withInserted bool) (*adminplusdomain.Sup
 	dest := []any{
 		&item.ID, &item.SupplierID, &item.ProviderType, &item.EntryType, &item.SourceType,
 		&item.SourceID, &item.SourceExternalID, &item.Currency, &item.AmountCents,
-		&item.CashAmountCents, &item.OccurredAt, &rawPayload, &item.CreatedAt,
+		&item.CashAmountCents, &item.ActualPaymentCents, &item.OccurredAt, &rawPayload, &item.CreatedAt,
 	}
 	if withInserted {
 		dest = append(dest, &inserted)
@@ -580,6 +606,13 @@ func scanLedgerEntryInternal(s scanner, withInserted bool) (*adminplusdomain.Sup
 		return nil, false, err
 	}
 	item.RawPayload = unmarshalPayload(rawPayload)
+	if item.ActualPaymentCents == 0 && item.EntryType == "funding_credit" && item.AmountCents > 0 {
+		if item.CashAmountCents > 0 {
+			item.ActualPaymentCents = item.CashAmountCents
+		} else {
+			item.ActualPaymentCents = item.AmountCents
+		}
+	}
 	return &item, inserted, nil
 }
 
@@ -588,7 +621,8 @@ func scanCostSnapshot(s scanner) (*adminplusdomain.SupplierCostSnapshot, error) 
 	var actual, delta sql.NullInt64
 	err := s.Scan(
 		&item.ID, &item.SupplierID, &item.Currency, &item.CompletedFundingAmountCents,
-		&item.CompletedFundingCashCents, &item.EntitlementAmountCents, &item.UsageCostCents,
+		&item.CompletedFundingCashCents, &item.RechargeActualPaymentCents,
+		&item.EntitlementAmountCents, &item.UsageCostCents,
 		&item.RefundAmountCents, &item.AdjustmentAmountCents, &item.ExpectedBalanceCents,
 		&actual, &delta, &item.CapturedAt, &item.CreatedAt,
 	)
@@ -606,7 +640,17 @@ func scanCostSnapshot(s scanner) (*adminplusdomain.SupplierCostSnapshot, error) 
 }
 
 func normalizeCostSnapshotDerivedAmounts(item *adminplusdomain.SupplierCostSnapshot) {
-	if item == nil || item.ActualBalanceCents == nil {
+	if item == nil {
+		return
+	}
+	if item.RechargeActualPaymentCents == 0 && item.CompletedFundingAmountCents+item.EntitlementAmountCents > 0 {
+		if item.CompletedFundingCashCents > 0 {
+			item.RechargeActualPaymentCents = item.CompletedFundingCashCents + item.EntitlementAmountCents
+		} else {
+			item.RechargeActualPaymentCents = item.CompletedFundingAmountCents + item.EntitlementAmountCents
+		}
+	}
+	if item.ActualBalanceCents == nil {
 		return
 	}
 	balanceBeforeUsage := item.CompletedFundingAmountCents +

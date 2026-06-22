@@ -1153,12 +1153,21 @@ func isLocalAccountNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
+	if infraerrors.Code(err) == http.StatusNotFound {
+		return true
+	}
 	reason := strings.ToUpper(strings.TrimSpace(infraerrors.Reason(err)))
 	if strings.Contains(reason, "NOT_FOUND") {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "not found") || strings.Contains(message, "404")
+	return strings.Contains(message, "not found") ||
+		strings.Contains(message, "not exist") ||
+		strings.Contains(message, "no rows") ||
+		strings.Contains(message, "404") ||
+		strings.Contains(message, "不存在") ||
+		strings.Contains(message, "未找到") ||
+		strings.Contains(message, "已删除")
 }
 
 func stringFromMap(values map[string]any, key string) string {
@@ -1235,7 +1244,7 @@ func normalizeLocalPlatform(providerFamily string) string {
 
 func normalizeCurrency(value string) string {
 	value = strings.ToUpper(strings.TrimSpace(value))
-	if value == "" {
+	if value == "" || value == "QTA" || value == "CNY" {
 		return "USD"
 	}
 	return trimLimit(value, 12)

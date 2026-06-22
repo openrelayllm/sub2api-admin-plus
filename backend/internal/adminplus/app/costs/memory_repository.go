@@ -137,7 +137,7 @@ func (r *MemoryRepository) RefreshSnapshot(_ context.Context, supplierID int64, 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	currency = normalizeCurrency(currency)
-	var fundingAmount, fundingCash, entitlementAmount, refundAmount, adjustmentAmount int64
+	var fundingAmount, fundingCash, fundingActualPayment, entitlementAmount, refundAmount, adjustmentAmount int64
 	var autoRedeemEntitlementAmount int64
 	for _, entry := range r.ledger {
 		if entry.SupplierID != supplierID || normalizeCurrency(entry.Currency) != currency {
@@ -147,6 +147,7 @@ func (r *MemoryRepository) RefreshSnapshot(_ context.Context, supplierID int64, 
 		case "funding_credit":
 			fundingAmount += entry.AmountCents
 			fundingCash += entry.CashAmountCents
+			fundingActualPayment += entry.ActualPaymentCents
 		case "entitlement_credit":
 			entitlementAmount += entry.AmountCents
 		case "refund_debit":
@@ -168,12 +169,20 @@ func (r *MemoryRepository) RefreshSnapshot(_ context.Context, supplierID int64, 
 	if autoRedeemFallback := autoRedeemEntitlementAmount - fundingAmount; autoRedeemFallback > 0 {
 		entitlementAmount += autoRedeemFallback
 	}
+	if fundingActualPayment == 0 && fundingAmount > 0 {
+		if fundingCash > 0 {
+			fundingActualPayment = fundingCash
+		} else {
+			fundingActualPayment = fundingAmount
+		}
+	}
 	snapshot := &adminplusdomain.SupplierCostSnapshot{
 		ID:                          r.nextSnapshot,
 		SupplierID:                  supplierID,
 		Currency:                    currency,
 		CompletedFundingAmountCents: fundingAmount,
 		CompletedFundingCashCents:   fundingCash,
+		RechargeActualPaymentCents:  fundingActualPayment + entitlementAmount,
 		EntitlementAmountCents:      entitlementAmount,
 		RefundAmountCents:           refundAmount,
 		AdjustmentAmountCents:       adjustmentAmount,
@@ -194,6 +203,9 @@ func (r *MemoryRepository) ListSnapshots(_ context.Context, filter SummaryFilter
 		if filter.SupplierID > 0 && snapshot.SupplierID != filter.SupplierID {
 			continue
 		}
+		if strings.ToUpper(strings.TrimSpace(snapshot.Currency)) != "USD" {
+			continue
+		}
 		items = append(items, cloneSnapshot(snapshot))
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -211,6 +223,9 @@ func (r *MemoryRepository) GetLedgerOverview(_ context.Context) (*adminplusdomai
 	latest := make(map[string]*adminplusdomain.SupplierCostSnapshot)
 	for _, snapshot := range r.snapshots {
 		if snapshot == nil {
+			continue
+		}
+		if strings.ToUpper(strings.TrimSpace(snapshot.Currency)) != "USD" {
 			continue
 		}
 		key := snapshotKey(snapshot.SupplierID, snapshot.Currency)

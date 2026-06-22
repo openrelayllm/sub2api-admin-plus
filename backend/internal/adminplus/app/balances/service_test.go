@@ -131,6 +131,27 @@ func TestServiceRecordSnapshotDoesNotMakeMonitorOnlySwitchEligible(t *testing.T)
 	require.False(t, snapshot.SwitchEligible)
 }
 
+func TestServiceRecordSnapshotConvertsLegacyNewAPIQuotaBalance(t *testing.T) {
+	repo := newFakeBalanceRepository()
+	svc := NewService(repo)
+
+	event, snapshot, err := svc.RecordSnapshot(context.Background(), RecordSnapshotInput{
+		SupplierID:               7,
+		RuntimeStatus:            adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:             892305600,
+		Currency:                 "QTA",
+		LowBalanceThresholdCents: 2000,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	require.NotNil(t, event)
+	require.Equal(t, int64(1785), snapshot.BalanceCents)
+	require.Equal(t, "USD", snapshot.Currency)
+	require.Equal(t, int64(1785), event.NewBalanceCents)
+	require.Equal(t, "USD", event.Currency)
+}
+
 func TestServiceRecordSnapshotValidatesInput(t *testing.T) {
 	svc := NewService(newFakeBalanceRepository())
 
@@ -179,7 +200,7 @@ func TestServiceSyncFromSessionRecordsBalanceSnapshot(t *testing.T) {
 	require.NotNil(t, result.Snapshot)
 	require.NotNil(t, result.Event)
 	require.Equal(t, int64(1234), result.Snapshot.BalanceCents)
-	require.Equal(t, "CNY", result.Snapshot.Currency)
+	require.Equal(t, "USD", result.Snapshot.Currency)
 	require.Equal(t, adminplusdomain.BalanceEventTypeLowBalance, result.Event.Type)
 }
 
@@ -230,6 +251,75 @@ func TestServiceGetCurrentUsesFreshCache(t *testing.T) {
 	require.False(t, current.Fallback)
 	require.Equal(t, 0, reader.calls)
 	require.Equal(t, 1, cache.getCalls)
+}
+
+func TestServiceGetCurrentConvertsLegacyNewAPIQuotaCache(t *testing.T) {
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	cache := &fakeBalanceCache{current: &CurrentBalance{
+		SupplierID:     7,
+		RuntimeStatus:  adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:   892305600,
+		Currency:       "QTA",
+		SwitchEligible: true,
+		Source:         "provider_session",
+		CapturedAt:     now.Add(-time.Minute),
+		RefreshAfter:   now.Add(time.Minute),
+		ExpiresAt:      now.Add(10 * time.Minute),
+	}}
+	reader := &fakeBalanceProbeAdapter{}
+	svc := NewServiceWithCurrentCache(newFakeBalanceRepository(), nil, &fakeBalanceSessionReader{}, reader, cache)
+	svc.now = func() time.Time { return now }
+
+	current, err := svc.GetCurrent(context.Background(), CurrentBalanceInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1785), current.BalanceCents)
+	require.Equal(t, "USD", current.Currency)
+	require.False(t, current.Stale)
+	require.False(t, current.Expired)
+	require.Equal(t, 0, reader.calls)
+}
+
+func TestServiceListSnapshotsConvertsLegacyNewAPIQuotaBalance(t *testing.T) {
+	repo := newFakeBalanceRepository()
+	repo.snapshots = append(repo.snapshots, &adminplusdomain.BalanceSnapshot{
+		ID:           1,
+		SupplierID:   7,
+		BalanceCents: 892305600,
+		Currency:     "QTA",
+		CapturedAt:   time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC),
+	})
+	svc := NewService(repo)
+
+	items, err := svc.ListSnapshots(context.Background(), SnapshotFilter{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(1785), items[0].BalanceCents)
+	require.Equal(t, "USD", items[0].Currency)
+}
+
+func TestServiceListEventsConvertsLegacyNewAPIQuotaBalance(t *testing.T) {
+	oldBalance := int64(900000000)
+	repo := newFakeBalanceRepository()
+	repo.events = append(repo.events, &adminplusdomain.BalanceEvent{
+		ID:              1,
+		SupplierID:      7,
+		OldBalanceCents: &oldBalance,
+		NewBalanceCents: 892305600,
+		Currency:        "QTA",
+		Status:          adminplusdomain.BalanceEventStatusOpen,
+	})
+	svc := NewService(repo)
+
+	items, err := svc.ListEvents(context.Background(), EventFilter{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.NotNil(t, items[0].OldBalanceCents)
+	require.Equal(t, int64(1800), *items[0].OldBalanceCents)
+	require.Equal(t, int64(1785), items[0].NewBalanceCents)
+	require.Equal(t, "USD", items[0].Currency)
 }
 
 func TestServiceGetCurrentRefreshesStaleCache(t *testing.T) {

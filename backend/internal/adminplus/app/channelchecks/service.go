@@ -228,9 +228,26 @@ func (s *Service) ListBest(ctx context.Context, supplierIDs []int64) ([]*adminpl
 	}
 	out := make([]*adminplusdomain.SupplierChannelCheckSnapshot, 0, len(bySupplier))
 	for _, items := range bySupplier {
-		out = append(out, chooseBestOrLatest(items))
+		for _, protocolItems := range groupSnapshotsByProtocol(items) {
+			if selected := chooseBestOrLatest(protocolItems); selected != nil {
+				out = append(out, selected)
+			}
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].SupplierID < out[j].SupplierID })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SupplierID != out[j].SupplierID {
+			return out[i].SupplierID < out[j].SupplierID
+		}
+		leftProtocol := snapshotProtocolKey(out[i])
+		rightProtocol := snapshotProtocolKey(out[j])
+		if leftProtocol != rightProtocol {
+			return channelProtocolPriority(leftProtocol) < channelProtocolPriority(rightProtocol)
+		}
+		if out[i].EffectiveRateMultiplier != out[j].EffectiveRateMultiplier {
+			return out[i].EffectiveRateMultiplier < out[j].EffectiveRateMultiplier
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 
@@ -505,6 +522,59 @@ func chooseBestOrLatest(items []*adminplusdomain.SupplierChannelCheckSnapshot) *
 		return items[i].ID > items[j].ID
 	})
 	return items[0]
+}
+
+func groupSnapshotsByProtocol(items []*adminplusdomain.SupplierChannelCheckSnapshot) map[string][]*adminplusdomain.SupplierChannelCheckSnapshot {
+	out := make(map[string][]*adminplusdomain.SupplierChannelCheckSnapshot)
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		key := snapshotProtocolKey(item)
+		out[key] = append(out[key], item)
+	}
+	return out
+}
+
+func snapshotProtocolKey(item *adminplusdomain.SupplierChannelCheckSnapshot) string {
+	if item == nil {
+		return "other"
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		item.ProviderFamily,
+		item.GroupName,
+		item.ChannelName,
+		item.ChannelProvider,
+		item.PrimaryModel,
+		item.ProbeModel,
+	}, " "))
+	switch {
+	case strings.Contains(haystack, "anthropic") || strings.Contains(haystack, "claude"):
+		return "claude"
+	case strings.Contains(haystack, "gemini") || strings.Contains(haystack, "google"):
+		return "gemini"
+	case strings.Contains(haystack, "openai") ||
+		strings.Contains(haystack, "gpt") ||
+		strings.Contains(haystack, "chatgpt") ||
+		strings.Contains(haystack, "o3") ||
+		strings.Contains(haystack, "o4"):
+		return "openai"
+	default:
+		return "other"
+	}
+}
+
+func channelProtocolPriority(protocol string) int {
+	switch protocol {
+	case "openai":
+		return 0
+	case "claude":
+		return 1
+	case "gemini":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func sortSnapshotsForBest(items []*adminplusdomain.SupplierChannelCheckSnapshot) {

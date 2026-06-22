@@ -90,7 +90,7 @@ func TestServiceSyncRecordsFundingEntitlementsAndIdempotentLedger(t *testing.T) 
 			},
 		},
 	}}
-	svc := NewServiceWithDependencies(repo, session, funding, entitlements, nil, nil)
+	svc := NewServiceWithDependencies(repo, session, funding, entitlements, nil, nil, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.Sync(context.Background(), SyncInput{
@@ -173,7 +173,7 @@ func TestServiceSyncCountsAutoRedeemEntitlementsWhenFundingIsMissing(t *testing.
 			},
 		},
 	}}
-	svc := NewServiceWithDependencies(repo, session, nil, entitlements, nil, nil)
+	svc := NewServiceWithDependencies(repo, session, nil, entitlements, nil, nil, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.Sync(context.Background(), SyncInput{
@@ -188,6 +188,51 @@ func TestServiceSyncCountsAutoRedeemEntitlementsWhenFundingIsMissing(t *testing.
 	require.Equal(t, int64(0), result.Snapshot.CompletedFundingAmountCents)
 	require.Equal(t, int64(5000), result.Snapshot.EntitlementAmountCents)
 	require.Equal(t, int64(5000), result.Snapshot.ExpectedBalanceCents)
+}
+
+func TestServiceSyncAppliesSupplierRechargeMultiplierToFundingCost(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	session := &stubCostSessionReader{}
+	funding := &stubCostFundingReader{result: &ports.ReadFundingTransactionsResult{
+		SupplierID:   7,
+		ProviderType: "sub2api",
+		Items: []ports.ProviderFundingTransaction{
+			{
+				ExternalID:  "order-100",
+				Status:      "paid",
+				Currency:    "USD",
+				AmountCents: 10000,
+			},
+		},
+	}}
+	supplierLookup := &stubCostSupplierLookup{
+		supplier: &adminplusdomain.Supplier{
+			ID:                 7,
+			RechargeMultiplier: 10,
+		},
+	}
+	svc := NewServiceWithDependencies(repo, session, funding, nil, nil, nil, supplierLookup)
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.Sync(context.Background(), SyncInput{
+		SupplierID:                 7,
+		IncludeFundingTransactions: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Snapshot)
+	require.Equal(t, int64(10000), result.Snapshot.CompletedFundingAmountCents)
+	require.Equal(t, int64(1000), result.Snapshot.RechargeActualPaymentCents)
+	items, err := svc.ListFundingTransactions(context.Background(), TransactionFilter{SupplierID: 7, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, float64(10), items[0].RechargeMultiplier)
+	require.Equal(t, int64(1000), items[0].ActualPaymentCents)
+	ledger, err := svc.ListLedgerEntries(context.Background(), LedgerFilter{SupplierID: 7, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, ledger, 1)
+	require.Equal(t, int64(1000), ledger[0].ActualPaymentCents)
 }
 
 func TestServiceSyncUsesProviderTypeFromSessionBundleForBalanceOnlyNewAPI(t *testing.T) {
@@ -213,11 +258,11 @@ func TestServiceSyncUsesProviderTypeFromSessionBundleForBalanceOnlyNewAPI(t *tes
 		Snapshot: &adminplusdomain.BalanceSnapshot{
 			SupplierID:   7,
 			BalanceCents: 1234500,
-			Currency:     "QTA",
+			Currency:     "USD",
 			CapturedAt:   now,
 		},
 	}}
-	svc := NewServiceWithDependencies(repo, session, nil, nil, nil, balance)
+	svc := NewServiceWithDependencies(repo, session, nil, nil, nil, balance, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.Sync(context.Background(), SyncInput{
@@ -234,7 +279,7 @@ func TestServiceSyncUsesProviderTypeFromSessionBundleForBalanceOnlyNewAPI(t *tes
 	require.Equal(t, "https://www.codexapis.com", result.APIBaseURL)
 	require.Equal(t, true, result.Capabilities["balance_snapshot"])
 	require.NotNil(t, result.Snapshot)
-	require.Equal(t, "QTA", result.Snapshot.Currency)
+	require.Equal(t, "USD", result.Snapshot.Currency)
 }
 
 func TestServiceSyncTurnsRefundedFundingIntoDebit(t *testing.T) {
@@ -254,7 +299,7 @@ func TestServiceSyncTurnsRefundedFundingIntoDebit(t *testing.T) {
 			},
 		},
 	}}
-	svc := NewServiceWithDependencies(repo, session, funding, nil, nil, nil)
+	svc := NewServiceWithDependencies(repo, session, funding, nil, nil, nil, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.Sync(context.Background(), SyncInput{
@@ -296,7 +341,7 @@ func TestServiceSyncReconcilesEntitlementTypeCorrection(t *testing.T) {
 			},
 		},
 	}}
-	svc := NewServiceWithDependencies(repo, session, nil, entitlements, nil, nil)
+	svc := NewServiceWithDependencies(repo, session, nil, entitlements, nil, nil, nil)
 	svc.now = func() time.Time { return now }
 
 	first, err := svc.Sync(context.Background(), SyncInput{
@@ -396,22 +441,19 @@ func TestServiceGetLedgerOverviewAggregatesLatestSnapshotsByCurrency(t *testing.
 
 	require.NoError(t, err)
 	require.NotNil(t, overview)
-	require.Len(t, overview.Items, 2)
-	require.Equal(t, "CNY", overview.Items[0].Currency)
-	require.Equal(t, int64(5000), overview.Items[0].RechargeTotalCents)
-	require.Nil(t, overview.Items[0].ActualBalanceCents)
-	require.Equal(t, "USD", overview.Items[1].Currency)
-	require.Equal(t, 2, overview.Items[1].SupplierCount)
-	require.Equal(t, 2, overview.Items[1].SnapshotCount)
-	require.Equal(t, 2, overview.Items[1].ActualBalanceAvailableCount)
-	require.Equal(t, int64(17000), overview.Items[1].CompletedFundingAmountCents)
-	require.Equal(t, int64(3000), overview.Items[1].EntitlementAmountCents)
-	require.Equal(t, int64(20000), overview.Items[1].RechargeTotalCents)
-	require.Equal(t, int64(13500), overview.Items[1].UsageCostCents)
-	require.NotNil(t, overview.Items[1].ActualBalanceCents)
-	require.Equal(t, int64(6500), *overview.Items[1].ActualBalanceCents)
-	require.NotNil(t, overview.Items[1].BalanceDeltaCents)
-	require.Equal(t, int64(0), *overview.Items[1].BalanceDeltaCents)
+	require.Len(t, overview.Items, 1)
+	require.Equal(t, "USD", overview.Items[0].Currency)
+	require.Equal(t, 2, overview.Items[0].SupplierCount)
+	require.Equal(t, 2, overview.Items[0].SnapshotCount)
+	require.Equal(t, 2, overview.Items[0].ActualBalanceAvailableCount)
+	require.Equal(t, int64(17000), overview.Items[0].CompletedFundingAmountCents)
+	require.Equal(t, int64(3000), overview.Items[0].EntitlementAmountCents)
+	require.Equal(t, int64(20000), overview.Items[0].RechargeTotalCents)
+	require.Equal(t, int64(13500), overview.Items[0].UsageCostCents)
+	require.NotNil(t, overview.Items[0].ActualBalanceCents)
+	require.Equal(t, int64(6500), *overview.Items[0].ActualBalanceCents)
+	require.NotNil(t, overview.Items[0].BalanceDeltaCents)
+	require.Equal(t, int64(0), *overview.Items[0].BalanceDeltaCents)
 }
 
 type stubCostSessionReader struct {
@@ -457,6 +499,21 @@ func (s *stubCostBalanceSyncer) SyncFromSession(_ context.Context, in balancesap
 	return s.result, nil
 }
 
+type stubCostSupplierLookup struct {
+	supplier *adminplusdomain.Supplier
+}
+
+func (s *stubCostSupplierLookup) Get(_ context.Context, id int64) (*adminplusdomain.Supplier, error) {
+	if s.supplier == nil {
+		return &adminplusdomain.Supplier{ID: id, RechargeMultiplier: 1}, nil
+	}
+	out := *s.supplier
+	if out.ID == 0 {
+		out.ID = id
+	}
+	return &out, nil
+}
+
 func findEntitlementByExternalID(t *testing.T, items []*adminplusdomain.SupplierEntitlementTransaction, externalID string) *adminplusdomain.SupplierEntitlementTransaction {
 	t.Helper()
 	for _, item := range items {
@@ -472,3 +529,4 @@ var _ Repository = (*MemoryRepository)(nil)
 var _ SessionReader = (*stubCostSessionReader)(nil)
 var _ ports.SessionFundingAdapter = (*stubCostFundingReader)(nil)
 var _ ports.SessionEntitlementAdapter = (*stubCostEntitlementReader)(nil)
+var _ SupplierLookup = (*stubCostSupplierLookup)(nil)

@@ -10,14 +10,13 @@ const stylePath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sty
 const styleSource = readFileSync(stylePath, 'utf8')
 
 describe('AppSidebar Admin Plus navigation', () => {
-  it('只展示 Admin Plus P4 current 导航入口', () => {
+  it('只展示 Admin Plus current 导航入口', () => {
     expect(componentSource).toContain("path: '/admin/dashboard'")
     expect(componentSource).toContain("path: '/admin/settings'")
     expect(componentSource).toContain("path: '/admin/suppliers'")
     expect(componentSource).toContain("path: '/admin/supplier-bindings'")
     expect(componentSource).toContain("path: '/admin/collection/scheduler'")
     expect(componentSource).toContain("path: '/admin/collection/sessions'")
-    expect(componentSource).toContain("path: '/admin/events/announcements'")
     expect(componentSource).toContain("path: '/admin/finance/costs'")
     expect(componentSource).toContain("path: '/admin/finance/usage-costs'")
     expect(componentSource).toContain("path: '/admin/finance/local-usage'")
@@ -26,6 +25,7 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(componentSource).not.toContain("path: '/admin/accounts'")
     expect(componentSource).not.toContain("path: '/admin/channels'")
     expect(componentSource).not.toContain("path: '/admin/payment'")
+    expect(componentSource).not.toContain("path: '/admin/events/announcements'")
     expect(componentSource).not.toContain("path: '/admin/operations/")
     expect(componentSource).not.toContain("path: '/admin/operations/extension-tasks'")
     expect(componentSource).not.toContain("path: '/admin/finance/billing'")
@@ -45,10 +45,9 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(componentSource).not.toContain("path: '/payment'")
   })
 
-  it('将业务页面收敛到 P4 四组导航下', () => {
+  it('将业务页面收敛到当前三组导航下', () => {
     const suppliersGroupMatch = componentSource.match(/label: '供应商',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
     const collectionGroupMatch = componentSource.match(/label: '采集监控',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
-    const monitorGroupMatch = componentSource.match(/label: '运营事件',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
     const financeGroupMatch = componentSource.match(/label: '财务对账',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
 
     expect(suppliersGroupMatch?.[1]).toContain("label: '供应商管理'")
@@ -56,13 +55,13 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(collectionGroupMatch?.[1]).toContain("label: '任务调度'")
     expect(collectionGroupMatch?.[1]).toContain("label: '采集会话'")
     expect(collectionGroupMatch?.[1]).not.toContain("label: '插件任务'")
-    expect(monitorGroupMatch).not.toBeNull()
-    expect(monitorGroupMatch?.[1]).not.toContain("label: t('nav.ops')")
-    expect(monitorGroupMatch?.[1]).not.toContain("label: '费率'")
-    expect(monitorGroupMatch?.[1]).not.toContain("label: '余额'")
-    expect(monitorGroupMatch?.[1]).not.toContain("label: '健康与并发'")
-    expect(monitorGroupMatch?.[1]).not.toContain("label: '账号运行态'")
-    expect(monitorGroupMatch?.[1]).toContain("label: '公告'")
+    expect(componentSource).not.toContain("label: '运营事件'")
+    expect(componentSource).not.toContain("label: t('nav.ops')")
+    expect(componentSource).not.toContain("label: '费率'")
+    expect(componentSource).not.toContain("label: '余额'")
+    expect(componentSource).not.toContain("label: '健康与并发'")
+    expect(componentSource).not.toContain("label: '账号运行态'")
+    expect(componentSource).not.toContain("label: '公告'")
     expect(financeGroupMatch?.[1]).toContain("label: '成本对账'")
     expect(financeGroupMatch?.[1]).toContain("label: '用量消耗'")
     expect(financeGroupMatch?.[1]).toContain("label: '本地用量'")

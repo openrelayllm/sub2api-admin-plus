@@ -63,6 +63,7 @@ export interface Supplier {
   balance_cents: number
   balance_currency: string
   balance_updated_at?: string | null
+  recharge_multiplier: number
   created_at: string
   updated_at: string
 }
@@ -303,6 +304,7 @@ export interface CreateSupplierPayload {
   browser_login_token?: string
   balance_cents?: number
   balance_currency?: string
+  recharge_multiplier?: number
 }
 
 export type UpdateSupplierPayload = CreateSupplierPayload
@@ -702,6 +704,7 @@ export interface SupplierCostSnapshot {
   currency: string
   completed_funding_amount_cents: number
   completed_funding_cash_cents: number
+  recharge_actual_payment_cents: number
   entitlement_amount_cents: number
   usage_cost_cents: number
   refund_amount_cents: number
@@ -720,6 +723,7 @@ export interface SupplierCostLedgerOverviewItem {
   actual_balance_available_count: number
   completed_funding_amount_cents: number
   completed_funding_cash_cents: number
+  recharge_actual_payment_cents: number
   entitlement_amount_cents: number
   recharge_total_cents: number
   usage_cost_cents: number
@@ -749,6 +753,8 @@ export interface SupplierFundingTransaction {
   currency: string
   amount_cents: number
   cash_amount_cents: number
+  recharge_multiplier: number
+  actual_payment_cents: number
   refund_amount_cents: number
   fee_rate?: number | null
   created_at_external?: string | null
@@ -792,6 +798,7 @@ export interface SupplierCostLedgerEntry {
   currency: string
   amount_cents: number
   cash_amount_cents: number
+  actual_payment_cents: number
   occurred_at: string
   created_at: string
 }

@@ -297,14 +297,6 @@ const adminNavItems = computed((): NavItem[] => [
     ]
   },
   {
-    path: '/admin/events/announcements',
-    label: '运营事件',
-    icon: ChartIcon,
-    children: [
-      { path: '/admin/events/announcements', label: '公告', icon: ChartIcon }
-    ]
-  },
-  {
     path: '/admin/finance/costs',
     label: '财务对账',
     icon: ChartIcon,

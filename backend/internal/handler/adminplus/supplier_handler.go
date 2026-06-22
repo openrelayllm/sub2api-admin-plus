@@ -19,25 +19,26 @@ func NewSupplierHandler(service *suppliersapp.Service) *SupplierHandler {
 }
 
 type createSupplierRequest struct {
-	Name                  string `json:"name" binding:"required"`
-	Kind                  string `json:"kind" binding:"required"`
-	Type                  string `json:"type" binding:"required"`
-	RuntimeStatus         string `json:"runtime_status"`
-	HealthStatus          string `json:"health_status"`
-	DashboardURL          string `json:"dashboard_url"`
-	APIBaseURL            string `json:"api_base_url"`
-	ThirdPartyRechargeURL string `json:"third_party_recharge_url"`
-	LocalRechargeURL      string `json:"local_recharge_url"`
-	Contact               string `json:"contact"`
-	Notes                 string `json:"notes"`
-	PostgresReadDSN       string `json:"postgres_read_dsn"`
-	RedisReadDSN          string `json:"redis_read_dsn"`
-	BrowserLoginEnabled   bool   `json:"browser_login_enabled"`
-	BrowserLoginUsername  string `json:"browser_login_username"`
-	BrowserLoginPassword  string `json:"browser_login_password"`
-	BrowserLoginToken     string `json:"browser_login_token"`
-	BalanceCents          int64  `json:"balance_cents"`
-	BalanceCurrency       string `json:"balance_currency"`
+	Name                  string  `json:"name" binding:"required"`
+	Kind                  string  `json:"kind" binding:"required"`
+	Type                  string  `json:"type" binding:"required"`
+	RuntimeStatus         string  `json:"runtime_status"`
+	HealthStatus          string  `json:"health_status"`
+	DashboardURL          string  `json:"dashboard_url"`
+	APIBaseURL            string  `json:"api_base_url"`
+	ThirdPartyRechargeURL string  `json:"third_party_recharge_url"`
+	LocalRechargeURL      string  `json:"local_recharge_url"`
+	Contact               string  `json:"contact"`
+	Notes                 string  `json:"notes"`
+	PostgresReadDSN       string  `json:"postgres_read_dsn"`
+	RedisReadDSN          string  `json:"redis_read_dsn"`
+	BrowserLoginEnabled   bool    `json:"browser_login_enabled"`
+	BrowserLoginUsername  string  `json:"browser_login_username"`
+	BrowserLoginPassword  string  `json:"browser_login_password"`
+	BrowserLoginToken     string  `json:"browser_login_token"`
+	BalanceCents          int64   `json:"balance_cents"`
+	BalanceCurrency       string  `json:"balance_currency"`
+	RechargeMultiplier    float64 `json:"recharge_multiplier"`
 }
 
 type createSupplierAccountRequest struct {
@@ -137,6 +138,7 @@ func (h *SupplierHandler) Create(c *gin.Context) {
 		BrowserLoginToken:     req.BrowserLoginToken,
 		BalanceCents:          req.BalanceCents,
 		BalanceCurrency:       req.BalanceCurrency,
+		RechargeMultiplier:    req.RechargeMultiplier,
 	})
 	if response.ErrorFrom(c, err) {
 		return
@@ -215,6 +217,7 @@ func (h *SupplierHandler) Update(c *gin.Context) {
 		BrowserLoginToken:     req.BrowserLoginToken,
 		BalanceCents:          req.BalanceCents,
 		BalanceCurrency:       req.BalanceCurrency,
+		RechargeMultiplier:    req.RechargeMultiplier,
 	})
 	if response.ErrorFrom(c, err) {
 		return

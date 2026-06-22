@@ -217,6 +217,13 @@ func TestServiceEnsureAllFailsBeforeProviderKeyWhenSub2APIGatewayUnavailable(t *
 	require.Empty(t, keys)
 }
 
+func TestIsLocalAccountNotFoundAcceptsStatusAndLocalizedMessages(t *testing.T) {
+	require.True(t, isLocalAccountNotFound(infraerrors.New(http.StatusNotFound, "SUB2API_GATEWAY_BAD_STATUS", "账号不存在")))
+	require.True(t, isLocalAccountNotFound(infraerrors.New(http.StatusBadGateway, "LOCAL_ACCOUNT_DELETED", "本地账号已删除")))
+	require.True(t, isLocalAccountNotFound(infraerrors.New(http.StatusBadGateway, "LOCAL_ACCOUNT_MISSING", "record does not exist")))
+	require.False(t, isLocalAccountNotFound(infraerrors.New(http.StatusUnauthorized, "UNAUTHORIZED", "invalid admin key")))
+}
+
 func TestLocalGatewayErrorDetailRedactsSensitiveCause(t *testing.T) {
 	err := localGatewayError(
 		"LOCAL_SUB2API_GROUP_LIST_FAILED",
@@ -367,7 +374,7 @@ func TestServiceEnsureAllSupportsNewAPISupplier(t *testing.T) {
 	require.Equal(t, adminplusdomain.SupplierKeyStatusBound, result.Items[0].Key.Status)
 	require.Equal(t, "701", result.Items[0].Key.ExternalKeyID)
 	require.Equal(t, "new_api", result.Items[0].Key.ProviderFamily)
-	require.Equal(t, "QTA", result.Items[0].Binding.BalanceCurrency)
+	require.Equal(t, "USD", result.Items[0].Binding.BalanceCurrency)
 	require.Equal(t, "openai", local.input.Platform)
 	require.Equal(t, "https://www.codexapis.com/v1", local.input.Credentials["base_url"])
 	require.Equal(t, "sk-new-api-secret", local.input.Credentials["api_key"])

@@ -84,13 +84,13 @@ func TestClientDirectLoginStoresCookieAndProbesSelfWithUserHeader(t *testing.T) 
 	require.Equal(t, "signed-session", cookie["value"])
 }
 
-func TestClientProbeSelfReturnsRawQuotaAsQTA(t *testing.T) {
+func TestClientProbeSelfConvertsQuotaUnitsToUSD(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/user/self", r.URL.Path)
 		require.Equal(t, "9", r.Header.Get("New-Api-User"))
 		require.Equal(t, "session=abc", r.Header.Get("Cookie"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true,"data":{"id":9,"username":"alice","role":1,"status":1,"quota":50,"used_quota":2,"request_count":3}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":9,"username":"alice","role":1,"status":1,"quota":2500000,"used_quota":1000000,"request_count":3}}`))
 	}))
 	defer server.Close()
 
@@ -110,11 +110,15 @@ func TestClientProbeSelfReturnsRawQuotaAsQTA(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "new_api", result.SystemType)
-	require.Equal(t, "QTA", result.BalanceCurrency)
+	require.Equal(t, "USD", result.BalanceCurrency)
 	require.NotNil(t, result.BalanceCents)
-	require.Equal(t, int64(5000), *result.BalanceCents)
-	require.Equal(t, float64(50), result.Profile.Balance)
-	require.Equal(t, float64(2), result.Diagnostics["raw_used_quota"])
+	require.Equal(t, int64(500), *result.BalanceCents)
+	require.Equal(t, float64(5), result.Profile.Balance)
+	require.Equal(t, float64(2500000), result.Diagnostics["raw_quota"])
+	require.Equal(t, float64(1000000), result.Diagnostics["raw_used_quota"])
+	require.Equal(t, float64(500000), result.Diagnostics["quota_units_per_usd"])
+	require.Equal(t, float64(5), result.Diagnostics["quota_balance_usd"])
+	require.Equal(t, float64(2), result.Diagnostics["used_quota_usd"])
 	require.Equal(t, int64(3), result.Diagnostics["request_count"])
 }
 
@@ -209,6 +213,201 @@ func TestClientCreateKeyCreatesTokenSearchesAndReadsSecret(t *testing.T) {
 	require.Equal(t, "sk-raw-new-api-secret", result.Secret)
 	require.Equal(t, "active", result.Status)
 	require.NotContains(t, result.RawPayload, "key")
+}
+
+func TestClientCreateKeyConvertsQuotaUSDToNewAPIUnits(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.Equal(t, "9", r.Header.Get("New-Api-User"))
+		switch r.URL.Path {
+		case "/api/token/search":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[]}}`))
+		case "/api/token/":
+			require.Equal(t, http.MethodPost, r.Method)
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			_, _ = w.Write([]byte(`{"success":true,"message":""}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	_, err := client.CreateKey(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"provider_type":    "new_api",
+			"required_headers": map[string]any{"New-Api-User": "9"},
+		},
+	}, ports.CreateProviderKeyInput{
+		SupplierID:      7,
+		ExternalGroupID: "kiro",
+		Name:            "AdminPlus-kiro",
+		QuotaUSD:        5,
+	})
+
+	require.Error(t, err)
+	require.Equal(t, false, payload["unlimited_quota"])
+	require.Equal(t, float64(2500000), payload["remain_quota"])
+}
+
+func TestClientReadFundingTransactionsReadsTopupOrders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/user/topup/self", r.URL.Path)
+		require.Equal(t, "1", r.URL.Query().Get("p"))
+		require.Equal(t, "100", r.URL.Query().Get("page_size"))
+		require.Equal(t, "9", r.Header.Get("New-Api-User"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success": true,
+			"data": {
+				"items": [
+					{
+						"id": 701,
+						"amount": 100,
+						"money": 10,
+						"trade_no": "USR9NOabc",
+						"payment_method": "redeem",
+						"payment_provider": "redemption",
+						"create_time": 1782122400,
+						"complete_time": 1782122523,
+						"status": "success"
+					}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	result, err := client.ReadFundingTransactions(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"provider_type":    "new_api",
+			"required_headers": map[string]any{"New-Api-User": "9"},
+		},
+	}, ports.ReadFundingTransactionsInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, "new_api", result.ProviderType)
+	require.Len(t, result.Items, 1)
+	item := result.Items[0]
+	require.Equal(t, "USR9NOabc", item.ExternalID)
+	require.Equal(t, "USR9NOabc", item.OutTradeNo)
+	require.Equal(t, "redeem", item.PaymentType)
+	require.Equal(t, "redemption", item.OrderType)
+	require.Equal(t, "COMPLETED", item.Status)
+	require.Equal(t, "USD", item.Currency)
+	require.Equal(t, int64(10000), item.AmountCents)
+	require.Equal(t, int64(1000), item.CashAmountCents)
+	require.NotNil(t, item.CompletedAt)
+	require.Equal(t, time.Unix(1782122523, 0).UTC(), *item.CompletedAt)
+}
+
+func TestClientReadUsageCostsReadsConsumeLogsByPage(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/log/self", r.URL.Path)
+		require.Equal(t, "100", r.URL.Query().Get("page_size"))
+		require.Equal(t, "2", r.URL.Query().Get("type"))
+		require.Equal(t, "1782122400", r.URL.Query().Get("start_timestamp"))
+		require.Equal(t, "1782126000", r.URL.Query().Get("end_timestamp"))
+		require.Equal(t, "9", r.Header.Get("New-Api-User"))
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("p") {
+		case "1":
+			_, _ = w.Write([]byte(`{
+				"success": true,
+				"data": {
+					"page": 1,
+					"page_size": 100,
+					"total": 2,
+					"items": [
+						{
+							"id": 901,
+							"created_at": 1782122500,
+							"type": 2,
+							"model_name": "gpt-5.4-mini",
+							"quota": 250000,
+							"prompt_tokens": 100,
+							"completion_tokens": 40,
+							"use_time": 2,
+							"token_name": "ops-key",
+							"group": "PRO",
+							"request_id": "req-901",
+							"upstream_request_id": "up-901"
+						}
+					]
+				}
+			}`))
+		case "2":
+			_, _ = w.Write([]byte(`{
+				"success": true,
+				"data": {
+					"page": 2,
+					"page_size": 100,
+					"total": 2,
+					"items": [
+						{
+							"id": 902,
+							"created_at": 1782122600,
+							"type": 2,
+							"model_name": "claude-opus-4",
+							"quota": 500000,
+							"prompt_tokens": 200,
+							"completion_tokens": 120,
+							"use_time": 1500,
+							"token_name": "ops-key",
+							"group": "Claude",
+							"request_id": "req-902"
+						}
+					]
+				}
+			}`))
+		default:
+			t.Fatalf("unexpected page %q", r.URL.Query().Get("p"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	result, err := client.ReadUsageCosts(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"provider_type":    "new_api",
+			"required_headers": map[string]any{"New-Api-User": "9"},
+		},
+	}, ports.ReadUsageCostsInput{
+		SupplierID: 7,
+		StartedAt:  time.Unix(1782122400, 0).UTC(),
+		EndedAt:    time.Unix(1782126000, 0).UTC(),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, requests)
+	require.Equal(t, "new_api", result.SystemType)
+	require.Len(t, result.Lines, 2)
+	require.Equal(t, "901", result.Lines[0].ExternalUsageCostID)
+	require.Equal(t, "req-901", result.Lines[0].ExternalRequestID)
+	require.Equal(t, "gpt-5.4-mini", result.Lines[0].Model)
+	require.Equal(t, "PRO", result.Lines[0].ReasoningEffort)
+	require.Equal(t, int64(50), result.Lines[0].CostCents)
+	require.Equal(t, int64(100), result.Lines[0].InputTokens)
+	require.Equal(t, int64(40), result.Lines[0].OutputTokens)
+	require.Equal(t, int64(140), result.Lines[0].TotalTokens)
+	require.Equal(t, int64(2000), result.Lines[0].DurationMS)
+	require.NotNil(t, result.Lines[0].EndedAt)
+	require.Equal(t, time.Unix(1782122502, 0).UTC(), *result.Lines[0].EndedAt)
+	require.Equal(t, int64(100), result.Lines[1].CostCents)
+	require.Equal(t, int64(1500), result.Lines[1].DurationMS)
 }
 
 func TestClientReadChannelMonitorsFromPulse(t *testing.T) {

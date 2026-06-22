@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -112,6 +113,7 @@ var ErrCurrentBalanceCacheMiss = errors.New("admin plus current balance cache mi
 const (
 	defaultCurrentBalanceFreshFor = 6 * time.Minute
 	defaultCurrentBalanceCacheTTL = 15 * time.Minute
+	legacyNewAPIQuotaUnitsPerUSD  = 500000.0
 )
 
 func NewService(repo Repository) *Service {
@@ -294,7 +296,14 @@ func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]*
 		return nil, badRequest("BALANCE_SUPPLIER_ID_INVALID", "invalid supplier id")
 	}
 	filter.Limit = normalizeLimit(filter.Limit)
-	return s.repo.ListSnapshots(ctx, filter)
+	items, err := s.repo.ListSnapshots(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for index, item := range items {
+		items[index] = normalizeBalanceSnapshotForRead(item)
+	}
+	return items, nil
 }
 
 func (s *Service) ListEvents(ctx context.Context, filter EventFilter) ([]*adminplusdomain.BalanceEvent, error) {
@@ -308,7 +317,14 @@ func (s *Service) ListEvents(ctx context.Context, filter EventFilter) ([]*adminp
 		return nil, badRequest("BALANCE_EVENT_STATUS_INVALID", "invalid balance event status")
 	}
 	filter.Limit = normalizeLimit(filter.Limit)
-	return s.repo.ListEvents(ctx, filter)
+	items, err := s.repo.ListEvents(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for index, item := range items {
+		items[index] = normalizeBalanceEventForRead(item)
+	}
+	return items, nil
 }
 
 func (s *Service) AcknowledgeEvent(ctx context.Context, id int64) (*adminplusdomain.BalanceEvent, error) {
@@ -318,7 +334,11 @@ func (s *Service) AcknowledgeEvent(ctx context.Context, id int64) (*adminplusdom
 	if id <= 0 {
 		return nil, badRequest("BALANCE_EVENT_ID_INVALID", "invalid balance event id")
 	}
-	return s.repo.UpdateEventStatus(ctx, id, adminplusdomain.BalanceEventStatusAcknowledged)
+	event, err := s.repo.UpdateEventStatus(ctx, id, adminplusdomain.BalanceEventStatusAcknowledged)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeBalanceEventForRead(event), nil
 }
 
 func (s *Service) buildSnapshot(in RecordSnapshotInput) (*adminplusdomain.BalanceSnapshot, error) {
@@ -331,6 +351,7 @@ func (s *Service) buildSnapshot(in RecordSnapshotInput) (*adminplusdomain.Balanc
 	if in.LowBalanceThresholdCents < 0 {
 		return nil, badRequest("BALANCE_THRESHOLD_INVALID", "low balance threshold must be non-negative")
 	}
+	balanceCents, currency := normalizeBalanceAmountAndCurrency(in.BalanceCents, in.Currency)
 	runtimeStatus := in.RuntimeStatus
 	if runtimeStatus == "" {
 		runtimeStatus = adminplusdomain.SupplierRuntimeStatusMonitorOnly
@@ -346,9 +367,9 @@ func (s *Service) buildSnapshot(in RecordSnapshotInput) (*adminplusdomain.Balanc
 		SupplierID:     in.SupplierID,
 		Source:         normalizeSource(in.Source),
 		RuntimeStatus:  runtimeStatus,
-		BalanceCents:   in.BalanceCents,
-		Currency:       normalizeCurrency(in.Currency),
-		SwitchEligible: adminplusdomain.CanUseSupplierForSwitching(runtimeStatus, in.BalanceCents),
+		BalanceCents:   balanceCents,
+		Currency:       currency,
+		SwitchEligible: adminplusdomain.CanUseSupplierForSwitching(runtimeStatus, balanceCents),
 		RawPayload:     in.RawPayload,
 		CapturedAt:     capturedAt,
 	}, nil
@@ -387,11 +408,12 @@ func (s *Service) currentFromSnapshot(snapshot *adminplusdomain.BalanceSnapshot)
 		return nil
 	}
 	capturedAt := snapshot.CapturedAt.UTC()
+	balanceCents, currency := normalizeBalanceAmountAndCurrency(snapshot.BalanceCents, snapshot.Currency)
 	current := &CurrentBalance{
 		SupplierID:     snapshot.SupplierID,
 		RuntimeStatus:  snapshot.RuntimeStatus,
-		BalanceCents:   snapshot.BalanceCents,
-		Currency:       normalizeCurrency(snapshot.Currency),
+		BalanceCents:   balanceCents,
+		Currency:       currency,
 		SwitchEligible: snapshot.SwitchEligible,
 		Source:         normalizeSource(snapshot.Source),
 		CapturedAt:     capturedAt,
@@ -406,9 +428,7 @@ func (s *Service) withFreshness(current *CurrentBalance) *CurrentBalance {
 		return nil
 	}
 	out := *current
-	if out.Currency == "" {
-		out.Currency = "USD"
-	}
+	out.BalanceCents, out.Currency = normalizeBalanceAmountAndCurrency(out.BalanceCents, out.Currency)
 	now := s.now().UTC()
 	if out.RefreshAfter.IsZero() {
 		out.RefreshAfter = out.CapturedAt.UTC().Add(s.currentBalanceFreshFor())
@@ -532,10 +552,50 @@ func normalizeSource(value string) string {
 
 func normalizeCurrency(value string) string {
 	v := strings.ToUpper(strings.TrimSpace(value))
-	if len(v) != 3 {
+	if len(v) != 3 || v == "QTA" || v == "CNY" {
 		return "USD"
 	}
 	return v
+}
+
+func normalizeBalanceAmountAndCurrency(cents int64, currency string) (int64, string) {
+	v := strings.ToUpper(strings.TrimSpace(currency))
+	if v == "QTA" {
+		return int64(math.Round(float64(cents) / legacyNewAPIQuotaUnitsPerUSD)), "USD"
+	}
+	return cents, normalizeCurrency(v)
+}
+
+func normalizeBalanceSnapshotForRead(in *adminplusdomain.BalanceSnapshot) *adminplusdomain.BalanceSnapshot {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.BalanceCents, out.Currency = normalizeBalanceAmountAndCurrency(in.BalanceCents, in.Currency)
+	if in.RawPayload != nil {
+		out.RawPayload = make(map[string]any, len(in.RawPayload))
+		for key, value := range in.RawPayload {
+			out.RawPayload[key] = value
+		}
+	}
+	return &out
+}
+
+func normalizeBalanceEventForRead(in *adminplusdomain.BalanceEvent) *adminplusdomain.BalanceEvent {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.NewBalanceCents, out.Currency = normalizeBalanceAmountAndCurrency(in.NewBalanceCents, in.Currency)
+	if in.OldBalanceCents != nil {
+		oldBalance, _ := normalizeBalanceAmountAndCurrency(*in.OldBalanceCents, in.Currency)
+		out.OldBalanceCents = &oldBalance
+	}
+	if in.AcknowledgedAt != nil {
+		t := *in.AcknowledgedAt
+		out.AcknowledgedAt = &t
+	}
+	return &out
 }
 
 func normalizeLimit(limit int) int {

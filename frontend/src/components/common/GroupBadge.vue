@@ -95,11 +95,10 @@ const labelText = computed(() => {
 
 // Label style based on type and days remaining
 const labelClass = computed(() => {
-  const base = 'px-1.5 py-0.5 rounded text-[10px] font-semibold'
+  const base = 'px-1.5 py-0.5 rounded text-base font-extrabold ring-1'
 
   if (!isSubscription.value) {
-    // Standard: subtle background (不再为专属倍率使用不同的背景色)
-    return `${base} bg-black/10 dark:bg-white/10`
+    return `${base} ${rateToneClass.value}`
   }
 
   // 订阅类型：根据剩余天数显示不同颜色
@@ -125,6 +124,19 @@ const labelClass = computed(() => {
     return `${base} bg-blue-200/60 text-blue-800 dark:bg-blue-800/40 dark:text-blue-300`
   }
   return `${base} bg-violet-200/60 text-violet-800 dark:bg-violet-800/40 dark:text-violet-300`
+})
+
+const rateToneClass = computed(() => {
+  const displayRate = props.userRateMultiplier ?? props.rateMultiplier
+  if (
+    props.platform === 'openai' &&
+    typeof displayRate === 'number' &&
+    Number.isFinite(displayRate) &&
+    displayRate > 0.1
+  ) {
+    return 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:ring-rose-800/60'
+  }
+  return 'bg-green-50 text-green-800 ring-green-200 dark:bg-green-950/50 dark:text-green-300 dark:ring-green-800/60'
 })
 
 // Badge color based on platform and subscription type

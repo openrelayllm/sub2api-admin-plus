@@ -99,7 +99,6 @@ describe('adminPlusRoutes', () => {
         '/admin/supplier-bindings',
         '/admin/collection/scheduler',
         '/admin/collection/sessions',
-        '/admin/events/announcements',
         '/admin/finance/costs',
         '/admin/finance/usage-costs',
         '/admin/finance/local-usage',
@@ -107,7 +106,7 @@ describe('adminPlusRoutes', () => {
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(10)
+    expect(adminRoutes).toHaveLength(9)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)
@@ -130,8 +129,9 @@ describe('adminPlusRoutes', () => {
         ['/admin/monitoring/balances', '/admin/suppliers'],
         ['/admin/operations/balances', '/admin/suppliers'],
         ['/admin/operations/health', '/admin/suppliers'],
-        ['/admin/monitoring/announcements', '/admin/events/announcements'],
-        ['/admin/operations/announcements', '/admin/events/announcements'],
+        ['/admin/events/announcements', '/admin/suppliers'],
+        ['/admin/monitoring/announcements', '/admin/suppliers'],
+        ['/admin/operations/announcements', '/admin/suppliers'],
         ['/admin/operations/scheduler', '/admin/collection/scheduler'],
         ['/admin/collection/plugin-tasks', '/admin/collection/sessions'],
         ['/admin/operations/extension-tasks', '/admin/collection/sessions'],

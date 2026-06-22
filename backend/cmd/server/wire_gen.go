@@ -206,7 +206,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	usageCostSQLRepository := usagecosts.NewSQLRepository(db)
 	usageCostService := usagecosts.NewServiceWithDependencies(usageCostSQLRepository, sessionsService, router)
 	costsSQLRepository := costs.NewSQLRepository(db)
-	costsService := costs.NewServiceWithDependencies(costsSQLRepository, sessionsService, router, router, usageCostService, balancesService)
+	costsService := costs.NewServiceWithDependencies(costsSQLRepository, sessionsService, router, router, usageCostService, balancesService, suppliersService)
 	announcementsSQLRepository := announcements.NewSQLRepository(db)
 	announcementsFeishuNotifier := announcements.NewFeishuNotifierFromEnv(notificationsSQLRepository)
 	announcementsService := announcements.NewServiceWithDependencies(announcementsSQLRepository, announcementsFeishuNotifier, sessionsService, router)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -165,7 +164,7 @@ func newAPITokenCreatePayload(request ports.CreateProviderKeyInput, now time.Tim
 		payload["expired_time"] = now.Add(time.Duration(*request.ExpiresInDays) * 24 * time.Hour).Unix()
 	}
 	if request.QuotaUSD > 0 {
-		payload["remain_quota"] = int(math.Round(request.QuotaUSD))
+		payload["remain_quota"] = usdAmountToNewAPIQuotaUnits(request.QuotaUSD)
 		payload["unlimited_quota"] = false
 	}
 	return payload

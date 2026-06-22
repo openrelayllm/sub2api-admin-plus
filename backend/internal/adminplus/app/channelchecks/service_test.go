@@ -115,6 +115,30 @@ func TestServiceSetSchedulingKeepsConflictWhenEnsureCannotBindLocalGroup(t *test
 	require.False(t, repo.candidates[0].LocalAccountSchedulable)
 }
 
+func TestServiceListBestReturnsBestChannelPerProtocol(t *testing.T) {
+	repo := newFakeChannelCheckRepository()
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	repo.snapshots = []*adminplusdomain.SupplierChannelCheckSnapshot{
+		fakeSnapshot(1, 7, 101, "new_api", "gptpro", 0.2, true, now),
+		fakeSnapshot(2, 7, 102, "new_api", "gpt-4o", 0.5, true, now.Add(time.Second)),
+		fakeSnapshot(3, 7, 201, "new_api", "claude_kiro", 0.1, true, now.Add(2*time.Second)),
+		fakeSnapshot(4, 7, 301, "new_api", "gemini-flash", 0.3, true, now.Add(3*time.Second)),
+		fakeSnapshot(5, 8, 401, "new_api", "claude-sonnet", 0.4, true, now.Add(4*time.Second)),
+	}
+	svc := NewService(repo, nil, nil, nil)
+
+	items, err := svc.ListBest(context.Background(), []int64{7})
+
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	require.Equal(t, int64(101), items[0].SupplierGroupID)
+	require.Equal(t, "openai", snapshotProtocolKey(items[0]))
+	require.Equal(t, int64(201), items[1].SupplierGroupID)
+	require.Equal(t, "claude", snapshotProtocolKey(items[1]))
+	require.Equal(t, int64(301), items[2].SupplierGroupID)
+	require.Equal(t, "gemini", snapshotProtocolKey(items[2]))
+}
+
 type fakeChannelCheckRepository struct {
 	nextID           int64
 	candidates       []*Candidate
@@ -277,6 +301,23 @@ func fakeCandidate(supplierID int64, groupID int64, rate float64, localAccountID
 		LocalAccountStatus:      "active",
 		LocalAccountSchedulable: schedulable,
 		LocalAccountGroupIDs:    []int64{1},
+	}
+}
+
+func fakeSnapshot(id int64, supplierID int64, groupID int64, provider string, groupName string, rate float64, recommended bool, capturedAt time.Time) *adminplusdomain.SupplierChannelCheckSnapshot {
+	return &adminplusdomain.SupplierChannelCheckSnapshot{
+		ID:                      id,
+		SupplierID:              supplierID,
+		SupplierGroupID:         groupID,
+		ProviderFamily:          provider,
+		GroupName:               groupName,
+		ProbeStatus:             adminplusdomain.SupplierChannelProbeStatusAvailable,
+		Recommended:             recommended,
+		EffectiveRateMultiplier: rate,
+		FirstTokenMS:            1000,
+		DurationMS:              1500,
+		CapturedAt:              capturedAt,
+		CreatedAt:               capturedAt,
 	}
 }
 

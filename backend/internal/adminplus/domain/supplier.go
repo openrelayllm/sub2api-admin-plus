@@ -74,6 +74,7 @@ type Supplier struct {
 	BalanceCents          int64                    `json:"balance_cents"`
 	BalanceCurrency       string                   `json:"balance_currency"`
 	BalanceUpdatedAt      *time.Time               `json:"balance_updated_at,omitempty"`
+	RechargeMultiplier    float64                  `json:"recharge_multiplier"`
 	CreatedAt             time.Time                `json:"created_at"`
 	UpdatedAt             time.Time                `json:"updated_at"`
 }

@@ -2,6 +2,7 @@ package costs
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -79,6 +80,10 @@ type BalanceSyncer interface {
 	SyncFromSession(ctx context.Context, in balancesapp.SyncFromSessionInput) (*balancesapp.SyncFromSessionResult, error)
 }
 
+type SupplierLookup interface {
+	Get(ctx context.Context, id int64) (*adminplusdomain.Supplier, error)
+}
+
 type Service struct {
 	repo              Repository
 	session           SessionReader
@@ -86,6 +91,7 @@ type Service struct {
 	entitlementReader ports.SessionEntitlementAdapter
 	usageCostSyncer   UsageCostSyncer
 	balanceSyncer     BalanceSyncer
+	supplierLookup    SupplierLookup
 	now               func() time.Time
 }
 
@@ -93,13 +99,14 @@ func NewService(repo Repository) *Service {
 	return &Service{repo: repo, now: time.Now}
 }
 
-func NewServiceWithDependencies(repo Repository, session SessionReader, fundingReader ports.SessionFundingAdapter, entitlementReader ports.SessionEntitlementAdapter, usageCostSyncer UsageCostSyncer, balanceSyncer BalanceSyncer) *Service {
+func NewServiceWithDependencies(repo Repository, session SessionReader, fundingReader ports.SessionFundingAdapter, entitlementReader ports.SessionEntitlementAdapter, usageCostSyncer UsageCostSyncer, balanceSyncer BalanceSyncer, supplierLookup SupplierLookup) *Service {
 	service := NewService(repo)
 	service.session = session
 	service.fundingReader = fundingReader
 	service.entitlementReader = entitlementReader
 	service.usageCostSyncer = usageCostSyncer
 	service.balanceSyncer = balanceSyncer
+	service.supplierLookup = supplierLookup
 	return service
 }
 
@@ -127,6 +134,10 @@ func (s *Service) Sync(ctx context.Context, in SyncInput) (*SyncResult, error) {
 		in.IncludeBalanceSnapshot = true
 	}
 	probeInput, err := s.session.DecryptedProbeInput(ctx, in.SupplierID)
+	if err != nil {
+		return nil, err
+	}
+	rechargeMultiplier, err := s.rechargeMultiplier(ctx, in.SupplierID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +169,7 @@ func (s *Service) Sync(ctx context.Context, in SyncInput) (*SyncResult, error) {
 			result.APIBaseURL = read.APIBaseURL
 			result.Capabilities["funding_transactions"] = true
 			for _, item := range read.Items {
-				stored, _, err := s.repo.UpsertFundingTransaction(ctx, fundingFromProvider(in.SupplierID, read.ProviderType, item, result.SyncedAt))
+				stored, _, err := s.repo.UpsertFundingTransaction(ctx, fundingFromProvider(in.SupplierID, read.ProviderType, item, rechargeMultiplier, result.SyncedAt))
 				if err != nil {
 					return nil, err
 				}
@@ -335,26 +346,43 @@ func normalizeWindow(startedAt *time.Time, endedAt *time.Time, now func() time.T
 	return &start, &end, nil
 }
 
-func fundingFromProvider(supplierID int64, providerType string, item ports.ProviderFundingTransaction, now time.Time) *adminplusdomain.SupplierFundingTransaction {
+func (s *Service) rechargeMultiplier(ctx context.Context, supplierID int64) (float64, error) {
+	if s == nil || s.supplierLookup == nil {
+		return 1, nil
+	}
+	supplier, err := s.supplierLookup.Get(ctx, supplierID)
+	if err != nil {
+		return 0, err
+	}
+	return normalizeRechargeMultiplier(supplier.RechargeMultiplier), nil
+}
+
+func fundingFromProvider(supplierID int64, providerType string, item ports.ProviderFundingTransaction, rechargeMultiplier float64, now time.Time) *adminplusdomain.SupplierFundingTransaction {
+	amountCents := nonNegative(item.AmountCents)
+	cashAmountCents := nonNegative(item.CashAmountCents)
+	refundAmountCents := nonNegative(item.RefundAmountCents)
+	rechargeMultiplier = normalizeRechargeMultiplier(rechargeMultiplier)
 	return &adminplusdomain.SupplierFundingTransaction{
-		SupplierID:        supplierID,
-		ProviderType:      normalizeProviderType(providerType),
-		ExternalID:        strings.TrimSpace(item.ExternalID),
-		OutTradeNo:        trimLimit(item.OutTradeNo, 160),
-		PaymentTradeNo:    trimLimit(item.PaymentTradeNo, 160),
-		PaymentType:       trimLimit(item.PaymentType, 80),
-		OrderType:         trimLimit(item.OrderType, 80),
-		Status:            normalizeStatus(item.Status),
-		Currency:          normalizeCurrency(item.Currency),
-		AmountCents:       nonNegative(item.AmountCents),
-		CashAmountCents:   nonNegative(item.CashAmountCents),
-		RefundAmountCents: nonNegative(item.RefundAmountCents),
-		FeeRate:           item.FeeRate,
-		CreatedAtExternal: cloneTime(item.CreatedAtExternal),
-		PaidAt:            cloneTime(item.PaidAt),
-		CompletedAt:       cloneTime(item.CompletedAt),
-		RawPayload:        item.RawPayload,
-		LastSeenAt:        now.UTC(),
+		SupplierID:         supplierID,
+		ProviderType:       normalizeProviderType(providerType),
+		ExternalID:         strings.TrimSpace(item.ExternalID),
+		OutTradeNo:         trimLimit(item.OutTradeNo, 160),
+		PaymentTradeNo:     trimLimit(item.PaymentTradeNo, 160),
+		PaymentType:        trimLimit(item.PaymentType, 80),
+		OrderType:          trimLimit(item.OrderType, 80),
+		Status:             normalizeStatus(item.Status),
+		Currency:           normalizeCurrency(item.Currency),
+		AmountCents:        amountCents,
+		CashAmountCents:    cashAmountCents,
+		RechargeMultiplier: rechargeMultiplier,
+		ActualPaymentCents: actualPaymentCents(amountCents, cashAmountCents, rechargeMultiplier),
+		RefundAmountCents:  refundAmountCents,
+		FeeRate:            item.FeeRate,
+		CreatedAtExternal:  cloneTime(item.CreatedAtExternal),
+		PaidAt:             cloneTime(item.PaidAt),
+		CompletedAt:        cloneTime(item.CompletedAt),
+		RawPayload:         item.RawPayload,
+		LastSeenAt:         now.UTC(),
 	}
 }
 
@@ -392,28 +420,32 @@ func ledgerFromFunding(item *adminplusdomain.SupplierFundingTransaction) *adminp
 	occurredAt := firstTime(item.CompletedAt, item.PaidAt, item.CreatedAtExternal, item.LastSeenAt)
 	entryType := "funding_credit"
 	amount := item.AmountCents
+	actualPayment := item.ActualPaymentCents
 	if item.RefundAmountCents > 0 || strings.Contains(strings.ToUpper(item.Status), "REFUND") {
 		entryType = "refund_debit"
 		amount = -item.RefundAmountCents
 		if amount == 0 {
 			amount = -item.AmountCents
 		}
+		actualPayment = -actualPaymentCents(-amount, item.CashAmountCents, item.RechargeMultiplier)
 	}
 	return &adminplusdomain.SupplierCostLedgerEntry{
-		SupplierID:       item.SupplierID,
-		ProviderType:     item.ProviderType,
-		EntryType:        entryType,
-		SourceType:       "funding_transaction",
-		SourceID:         item.ID,
-		SourceExternalID: item.ExternalID,
-		Currency:         item.Currency,
-		AmountCents:      amount,
-		CashAmountCents:  item.CashAmountCents,
-		OccurredAt:       occurredAt,
+		SupplierID:         item.SupplierID,
+		ProviderType:       item.ProviderType,
+		EntryType:          entryType,
+		SourceType:         "funding_transaction",
+		SourceID:           item.ID,
+		SourceExternalID:   item.ExternalID,
+		Currency:           item.Currency,
+		AmountCents:        amount,
+		CashAmountCents:    item.CashAmountCents,
+		ActualPaymentCents: actualPayment,
+		OccurredAt:         occurredAt,
 		RawPayload: map[string]any{
-			"status":       item.Status,
-			"order_type":   item.OrderType,
-			"out_trade_no": item.OutTradeNo,
+			"status":              item.Status,
+			"order_type":          item.OrderType,
+			"out_trade_no":        item.OutTradeNo,
+			"recharge_multiplier": item.RechargeMultiplier,
 		},
 	}
 }
@@ -424,15 +456,16 @@ func ledgerFromEntitlement(item *adminplusdomain.SupplierEntitlementTransaction)
 	}
 	occurredAt := firstTime(item.UsedAt, item.CreatedAtExternal, item.LastSeenAt)
 	return &adminplusdomain.SupplierCostLedgerEntry{
-		SupplierID:       item.SupplierID,
-		ProviderType:     item.ProviderType,
-		EntryType:        "entitlement_credit",
-		SourceType:       "entitlement_transaction",
-		SourceID:         item.ID,
-		SourceExternalID: item.ExternalID,
-		Currency:         item.Currency,
-		AmountCents:      item.ValueCents,
-		OccurredAt:       occurredAt,
+		SupplierID:         item.SupplierID,
+		ProviderType:       item.ProviderType,
+		EntryType:          "entitlement_credit",
+		SourceType:         "entitlement_transaction",
+		SourceID:           item.ID,
+		SourceExternalID:   item.ExternalID,
+		Currency:           item.Currency,
+		AmountCents:        item.ValueCents,
+		ActualPaymentCents: 0,
+		OccurredAt:         occurredAt,
 		RawPayload: map[string]any{
 			"type":          item.Type,
 			"source_family": item.SourceFamily,
@@ -444,7 +477,7 @@ func ledgerFromEntitlement(item *adminplusdomain.SupplierEntitlementTransaction)
 func fundingStatusCounts(status string) bool {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	switch status {
-	case "PAID", "RECHARGING", "COMPLETED", "REFUNDED", "PARTIALLY_REFUNDED":
+	case "PAID", "SUCCESS", "RECHARGING", "COMPLETED", "REFUNDED", "PARTIALLY_REFUNDED":
 		return true
 	default:
 		return false
@@ -463,7 +496,7 @@ func normalizeLimit(limit int) int {
 
 func normalizeCurrency(value string) string {
 	value = strings.ToUpper(strings.TrimSpace(value))
-	if value == "" {
+	if value == "" || value == "QTA" || value == "CNY" {
 		return "USD"
 	}
 	return value
@@ -538,6 +571,26 @@ func nonNegative(value int64) int64 {
 	return value
 }
 
+func normalizeRechargeMultiplier(value float64) float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 1
+	}
+	return value
+}
+
+func actualPaymentCents(amountCents int64, cashAmountCents int64, rechargeMultiplier float64) int64 {
+	amountCents = nonNegative(amountCents)
+	cashAmountCents = nonNegative(cashAmountCents)
+	rechargeMultiplier = normalizeRechargeMultiplier(rechargeMultiplier)
+	if amountCents > 0 && math.Abs(rechargeMultiplier-1) > 0.000001 {
+		return int64(math.Round(float64(amountCents) / rechargeMultiplier))
+	}
+	if cashAmountCents > 0 {
+		return cashAmountCents
+	}
+	return amountCents
+}
+
 func trimLimit(value string, limit int) string {
 	value = strings.TrimSpace(value)
 	if limit > 0 && len(value) > limit {
@@ -586,6 +639,9 @@ func buildLedgerOverview(snapshots []*adminplusdomain.SupplierCostSnapshot, gene
 		if snapshot == nil {
 			continue
 		}
+		if strings.ToUpper(strings.TrimSpace(snapshot.Currency)) != "USD" {
+			continue
+		}
 		currency := normalizeCurrency(snapshot.Currency)
 		item := itemsByCurrency[currency]
 		if item == nil {
@@ -597,6 +653,7 @@ func buildLedgerOverview(snapshots []*adminplusdomain.SupplierCostSnapshot, gene
 		suppliersByCurrency[currency][snapshot.SupplierID] = struct{}{}
 		item.CompletedFundingAmountCents += snapshot.CompletedFundingAmountCents
 		item.CompletedFundingCashCents += snapshot.CompletedFundingCashCents
+		item.RechargeActualPaymentCents += snapshot.RechargeActualPaymentCents
 		item.EntitlementAmountCents += snapshot.EntitlementAmountCents
 		item.RechargeTotalCents += snapshot.CompletedFundingAmountCents + snapshot.EntitlementAmountCents
 		item.UsageCostCents += snapshot.UsageCostCents

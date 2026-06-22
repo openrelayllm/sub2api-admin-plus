@@ -63,14 +63,14 @@ func (r *SQLRepository) Create(ctx context.Context, supplier *adminplusdomain.Su
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
 			browser_login_username_ciphertext, browser_login_password_ciphertext, browser_login_token_ciphertext,
-			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
+			balance_cents, balance_currency, balance_updated_at, recharge_multiplier, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		RETURNING id, name, kind, type, runtime_status, health_status,
 			dashboard_url, api_base_url, third_party_recharge_url, local_recharge_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
-			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
+			balance_cents, balance_currency, balance_updated_at, recharge_multiplier, created_at, updated_at
 	`,
 		supplier.Name,
 		string(supplier.Kind),
@@ -96,6 +96,7 @@ func (r *SQLRepository) Create(ctx context.Context, supplier *adminplusdomain.Su
 		supplier.BalanceCents,
 		supplier.BalanceCurrency,
 		supplier.BalanceUpdatedAt,
+		supplier.RechargeMultiplier,
 		supplier.CreatedAt,
 		supplier.UpdatedAt,
 	)
@@ -163,7 +164,7 @@ func (r *SQLRepository) Get(ctx context.Context, id int64) (*adminplusdomain.Sup
 			dashboard_url, api_base_url, third_party_recharge_url, local_recharge_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
-			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
+			balance_cents, balance_currency, balance_updated_at, recharge_multiplier, created_at, updated_at
 		FROM admin_plus_suppliers
 		WHERE id = $1
 	`, id)
@@ -202,7 +203,7 @@ func (r *SQLRepository) List(ctx context.Context, filter SupplierFilter) ([]*adm
 			dashboard_url, api_base_url, third_party_recharge_url, local_recharge_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
-			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
+			balance_cents, balance_currency, balance_updated_at, recharge_multiplier, created_at, updated_at
 		FROM admin_plus_suppliers
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY created_at DESC, id DESC
@@ -271,13 +272,14 @@ func (r *SQLRepository) Update(ctx context.Context, supplier *adminplusdomain.Su
 			balance_cents = $23,
 			balance_currency = $24,
 			balance_updated_at = $25,
-			updated_at = $26
+			recharge_multiplier = $26,
+			updated_at = $27
 		WHERE id = $1
 		RETURNING id, name, kind, type, runtime_status, health_status,
 			dashboard_url, api_base_url, third_party_recharge_url, local_recharge_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
-			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
+			balance_cents, balance_currency, balance_updated_at, recharge_multiplier, created_at, updated_at
 	`,
 		supplier.ID,
 		supplier.Name,
@@ -304,6 +306,7 @@ func (r *SQLRepository) Update(ctx context.Context, supplier *adminplusdomain.Su
 		supplier.BalanceCents,
 		supplier.BalanceCurrency,
 		supplier.BalanceUpdatedAt,
+		supplier.RechargeMultiplier,
 		supplier.UpdatedAt,
 	)
 	return scanSupplier(row)
@@ -321,7 +324,7 @@ func (r *SQLRepository) UpdateStatus(ctx context.Context, id int64, runtimeStatu
 			dashboard_url, api_base_url, third_party_recharge_url, local_recharge_url, contact, notes,
 			postgres_configured, redis_configured, browser_login_enabled,
 			browser_login_username_configured, browser_login_password_configured, browser_login_token_configured, masked_browser_login_username,
-			balance_cents, balance_currency, balance_updated_at, created_at, updated_at
+			balance_cents, balance_currency, balance_updated_at, recharge_multiplier, created_at, updated_at
 	`, id, string(runtimeStatus), string(healthStatus))
 	return scanSupplier(row)
 }
@@ -633,6 +636,7 @@ func scanSupplier(scanner supplierScanner) (*adminplusdomain.Supplier, error) {
 		&supplier.BalanceCents,
 		&supplier.BalanceCurrency,
 		&balanceUpdatedAt,
+		&supplier.RechargeMultiplier,
 		&supplier.CreatedAt,
 		&supplier.UpdatedAt,
 	)

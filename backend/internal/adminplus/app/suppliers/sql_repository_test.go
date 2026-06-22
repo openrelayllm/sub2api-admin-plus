@@ -55,6 +55,7 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 			int64(5000),
 			"USD",
 			&balanceUpdatedAt,
+			float64(1),
 			now,
 			now,
 		).
@@ -81,6 +82,7 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 			int64(5000),
 			"USD",
 			balanceUpdatedAt,
+			float64(1),
 			now,
 			now,
 		))
@@ -107,11 +109,12 @@ func TestSQLRepositoryCreatePersistsSupplier(t *testing.T) {
 			BrowserLoginPasswordConfigured: true,
 			MaskedBrowserLoginUsername:     "op***@example.com",
 		},
-		BalanceCents:     5000,
-		BalanceCurrency:  "USD",
-		BalanceUpdatedAt: &balanceUpdatedAt,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		BalanceCents:       5000,
+		BalanceCurrency:    "USD",
+		BalanceUpdatedAt:   &balanceUpdatedAt,
+		RechargeMultiplier: 1,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	})
 
 	require.NoError(t, err)
@@ -193,6 +196,7 @@ func TestSQLRepositoryListFiltersWithParameterizedQuery(t *testing.T) {
 			int64(0),
 			"USD",
 			nil,
+			float64(1),
 			now,
 			now,
 		))
@@ -240,6 +244,7 @@ func TestSQLRepositoryUpdateStatus(t *testing.T) {
 			int64(0),
 			"USD",
 			nil,
+			float64(1),
 			now,
 			now,
 		))
@@ -391,6 +396,7 @@ func newSupplierRows() *sqlmock.Rows {
 		"balance_cents",
 		"balance_currency",
 		"balance_updated_at",
+		"recharge_multiplier",
 		"created_at",
 		"updated_at",
 	})

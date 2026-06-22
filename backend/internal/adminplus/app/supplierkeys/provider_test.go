@@ -14,12 +14,23 @@ type noopAdminGateway struct {
 	service.AdminService
 }
 
-func TestUseSub2APIGatewayDefaultsToFailingGatewayWhenRemoteConfigMissing(t *testing.T) {
+func TestUseSub2APIGatewayDefaultsToEmbeddedGatewayWhenRemoteConfigMissing(t *testing.T) {
+	t.Setenv(sub2APIAdminBaseURLEnv, "")
+	t.Setenv(sub2APIAdminAPIKeyEnv, "")
+	t.Setenv(sub2APIEmbeddedGatewayFallbackEnv, "")
+	admin := &noopAdminGateway{}
+
+	gateway := UseSub2APIGateway(admin, nil)
+
+	require.Same(t, admin, gateway)
+}
+
+func TestUseSub2APIGatewayFailsWhenRemoteConfigMissingAndEmbeddedUnavailable(t *testing.T) {
 	t.Setenv(sub2APIAdminBaseURLEnv, "")
 	t.Setenv(sub2APIAdminAPIKeyEnv, "")
 	t.Setenv(sub2APIEmbeddedGatewayFallbackEnv, "")
 
-	gateway := UseSub2APIGateway(&noopAdminGateway{}, nil)
+	gateway := UseSub2APIGateway(nil, nil)
 
 	require.IsType(t, &FailingSub2APIGateway{}, gateway)
 	_, err := gateway.GetAccount(context.Background(), 1)

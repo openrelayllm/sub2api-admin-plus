@@ -51,7 +51,17 @@ func parseGroups(data map[string]any) []*ports.ProviderGroup {
 			continue
 		}
 		rawMap, _ := raw.(map[string]any)
-		ratio, ok := float64Value(firstExisting(rawMap, "ratio", "rate", "multiplier"))
+		ratio, ok := float64Value(firstExisting(rawMap,
+			"ratio",
+			"rate",
+			"multiplier",
+			"rate_multiplier",
+			"group_ratio",
+			"groupRate",
+			"group_rate",
+			"effective_rate_multiplier",
+			"effectiveRateMultiplier",
+		))
 		if !ok || ratio <= 0 {
 			ratio = 1
 		}

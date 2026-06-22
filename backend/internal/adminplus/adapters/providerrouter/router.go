@@ -83,7 +83,10 @@ func (r *Router) ReadAnnouncements(ctx context.Context, in ports.SessionProbeInp
 
 func (r *Router) ReadUsageCosts(ctx context.Context, in ports.SessionProbeInput, request ports.ReadUsageCostsInput) (*ports.ReadUsageCostsResult, error) {
 	if providerTypeFromBundle(in.Bundle) == "new_api" {
-		return nil, capabilityMissing("SUPPLIER_USAGE_COST_CAPABILITY_MISSING", "new api usage cost reading is not implemented")
+		if r == nil || r.newapi == nil {
+			return nil, internalError()
+		}
+		return r.newapi.ReadUsageCosts(ctx, in, request)
 	}
 	if r == nil || r.sub2api == nil {
 		return nil, internalError()
@@ -93,7 +96,10 @@ func (r *Router) ReadUsageCosts(ctx context.Context, in ports.SessionProbeInput,
 
 func (r *Router) ReadFundingTransactions(ctx context.Context, in ports.SessionProbeInput, request ports.ReadFundingTransactionsInput) (*ports.ReadFundingTransactionsResult, error) {
 	if providerTypeFromBundle(in.Bundle) == "new_api" {
-		return nil, capabilityMissing("SUPPLIER_FUNDING_CAPABILITY_MISSING", "new api funding transaction reading is not implemented")
+		if r == nil || r.newapi == nil {
+			return nil, internalError()
+		}
+		return r.newapi.ReadFundingTransactions(ctx, in, request)
 	}
 	if r == nil || r.sub2api == nil {
 		return nil, internalError()

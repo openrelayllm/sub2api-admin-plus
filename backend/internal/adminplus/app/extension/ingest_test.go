@@ -283,7 +283,7 @@ func TestCompleteTaskNormalizesNewAPIBrowserSessionAndSyncsBalance(t *testing.T)
 	require.True(t, ok)
 	require.Equal(t, true, ingest["session_captured"])
 	require.Equal(t, int64(1234500), ingest["balance_cents"])
-	require.Equal(t, "QTA", ingest["balance_currency"])
+	require.Equal(t, "USD", ingest["balance_currency"])
 	require.Equal(t, 1, probe.calls)
 	require.Equal(t, int64(42), probe.lastInput.SupplierID)
 	require.Equal(t, "https://www.codexapis.com", probe.lastInput.APIBaseURL)
@@ -422,7 +422,7 @@ func (p *recordingSessionProbe) ProbeSub2APIUserProfile(_ context.Context, in po
 		Origin:          in.Origin,
 		APIBaseURL:      in.APIBaseURL,
 		BalanceCents:    &p.balanceCents,
-		BalanceCurrency: "QTA",
+		BalanceCurrency: "USD",
 		Profile: &ports.UserProfileSnapshot{
 			ID:       42,
 			Username: "wutongci",

@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +32,7 @@ type CreateSupplierInput struct {
 	BrowserLoginToken     string
 	BalanceCents          int64
 	BalanceCurrency       string
+	RechargeMultiplier    float64
 }
 
 type UpdateSupplierInput struct {
@@ -53,6 +55,7 @@ type UpdateSupplierInput struct {
 	BrowserLoginToken     string
 	BalanceCents          int64
 	BalanceCurrency       string
+	RechargeMultiplier    float64
 }
 
 type CreateSupplierAccountInput struct {
@@ -154,6 +157,8 @@ type Service struct {
 	now  func() time.Time
 }
 
+const legacyNewAPIQuotaUnitsPerUSD = 500000.0
+
 func NewService(repo Repository) *Service {
 	return &Service{
 		repo: repo,
@@ -177,6 +182,7 @@ func (s *Service) Create(ctx context.Context, in CreateSupplierInput) (*adminplu
 		LocalRechargeURL:      in.LocalRechargeURL,
 		BalanceCents:          in.BalanceCents,
 		BalanceCurrency:       in.BalanceCurrency,
+		RechargeMultiplier:    in.RechargeMultiplier,
 	})
 	if err != nil {
 		return nil, err
@@ -207,10 +213,11 @@ func (s *Service) Create(ctx context.Context, in CreateSupplierInput) (*adminplu
 			BrowserLoginTokenConfigured:    strings.TrimSpace(in.BrowserLoginToken) != "",
 			MaskedBrowserLoginUsername:     maskUsername(in.BrowserLoginUsername),
 		},
-		BalanceCents:    normalized.BalanceCents,
-		BalanceCurrency: normalized.BalanceCurrency,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		BalanceCents:       normalized.BalanceCents,
+		BalanceCurrency:    normalized.BalanceCurrency,
+		RechargeMultiplier: normalized.RechargeMultiplier,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	if normalized.BalanceCents > 0 {
 		t := now
@@ -400,7 +407,11 @@ func (s *Service) Get(ctx context.Context, id int64) (*adminplusdomain.Supplier,
 	if id <= 0 {
 		return nil, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
 	}
-	return s.repo.Get(ctx, id)
+	supplier, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeSupplierForRead(supplier), nil
 }
 
 func (s *Service) GetBrowserCredential(ctx context.Context, id int64) (*adminplusdomain.SupplierBrowserCredential, error) {
@@ -440,7 +451,14 @@ func (s *Service) List(ctx context.Context, filter SupplierFilter) ([]*adminplus
 		return nil, badRequest("SUPPLIER_HEALTH_STATUS_INVALID", "invalid supplier health status")
 	}
 	filter.Query = strings.ToLower(strings.TrimSpace(filter.Query))
-	return s.repo.List(ctx, filter)
+	items, err := s.repo.List(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for index, supplier := range items {
+		items[index] = normalizeSupplierForRead(supplier)
+	}
+	return items, nil
 }
 
 func (s *Service) Update(ctx context.Context, id int64, in UpdateSupplierInput) (*adminplusdomain.Supplier, error) {
@@ -466,6 +484,7 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateSupplierInput) 
 		LocalRechargeURL:      in.LocalRechargeURL,
 		BalanceCents:          in.BalanceCents,
 		BalanceCurrency:       in.BalanceCurrency,
+		RechargeMultiplier:    in.RechargeMultiplier,
 	})
 	if err != nil {
 		return nil, err
@@ -508,6 +527,7 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateSupplierInput) 
 	}
 	updated.BalanceCents = normalized.BalanceCents
 	updated.BalanceCurrency = normalized.BalanceCurrency
+	updated.RechargeMultiplier = normalized.RechargeMultiplier
 	updated.UpdatedAt = now
 	return s.repo.Update(ctx, &updated)
 }
@@ -522,17 +542,22 @@ func (s *Service) UpdateBalance(ctx context.Context, id int64, balanceCents int6
 	if balanceCents < 0 {
 		return nil, badRequest("SUPPLIER_BALANCE_INVALID", "balance cannot be negative")
 	}
+	normalizedBalanceCents, normalizedCurrency := normalizeBalanceAmountAndCurrency(balanceCents, currency)
 	existing, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	updated := *existing
-	updated.BalanceCents = balanceCents
-	updated.BalanceCurrency = normalizeCurrency(currency)
+	updated.BalanceCents = normalizedBalanceCents
+	updated.BalanceCurrency = normalizedCurrency
 	now := s.now().UTC()
 	updated.BalanceUpdatedAt = &now
 	updated.UpdatedAt = now
-	return s.repo.Update(ctx, &updated)
+	supplier, err := s.repo.Update(ctx, &updated)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeSupplierForRead(supplier), nil
 }
 
 func (s *Service) UpdateStatus(ctx context.Context, id int64, in UpdateSupplierStatusInput) (*adminplusdomain.Supplier, error) {
@@ -558,7 +583,11 @@ func (s *Service) UpdateStatus(ctx context.Context, id int64, in UpdateSupplierS
 	if in.RuntimeStatus == adminplusdomain.SupplierRuntimeStatusActive && existing.BalanceCents <= 0 {
 		return nil, badRequest("SUPPLIER_BALANCE_REQUIRED_FOR_ACTIVE", "active supplier must have positive balance")
 	}
-	return s.repo.UpdateStatus(ctx, id, in.RuntimeStatus, in.HealthStatus)
+	supplier, err := s.repo.UpdateStatus(ctx, id, in.RuntimeStatus, in.HealthStatus)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeSupplierForRead(supplier), nil
 }
 
 func (s *Service) Delete(ctx context.Context, id int64) error {
@@ -733,6 +762,7 @@ type supplierInput struct {
 	LocalRechargeURL      string
 	BalanceCents          int64
 	BalanceCurrency       string
+	RechargeMultiplier    float64
 }
 
 func normalizeSupplierInput(in supplierInput) (supplierInput, error) {
@@ -766,10 +796,15 @@ func normalizeSupplierInput(in supplierInput) (supplierInput, error) {
 	if in.BalanceCents < 0 {
 		return supplierInput{}, badRequest("SUPPLIER_BALANCE_INVALID", "balance cannot be negative")
 	}
-	if runtimeStatus == adminplusdomain.SupplierRuntimeStatusCandidate && in.BalanceCents <= 0 {
+	balanceCents, balanceCurrency := normalizeBalanceAmountAndCurrency(in.BalanceCents, in.BalanceCurrency)
+	rechargeMultiplier, err := normalizeRechargeMultiplier(in.RechargeMultiplier)
+	if err != nil {
+		return supplierInput{}, err
+	}
+	if runtimeStatus == adminplusdomain.SupplierRuntimeStatusCandidate && balanceCents <= 0 {
 		return supplierInput{}, badRequest("SUPPLIER_BALANCE_REQUIRED_FOR_CANDIDATE", "candidate supplier must have positive balance")
 	}
-	if runtimeStatus == adminplusdomain.SupplierRuntimeStatusActive && in.BalanceCents <= 0 {
+	if runtimeStatus == adminplusdomain.SupplierRuntimeStatusActive && balanceCents <= 0 {
 		return supplierInput{}, badRequest("SUPPLIER_BALANCE_REQUIRED_FOR_ACTIVE", "active supplier must have positive balance")
 	}
 	dashboardURL, err := normalizeOptionalURL(in.DashboardURL, "SUPPLIER_DASHBOARD_URL_INVALID")
@@ -798,8 +833,9 @@ func normalizeSupplierInput(in supplierInput) (supplierInput, error) {
 		APIBaseURL:            apiBaseURL,
 		ThirdPartyRechargeURL: thirdPartyRechargeURL,
 		LocalRechargeURL:      localRechargeURL,
-		BalanceCents:          in.BalanceCents,
-		BalanceCurrency:       normalizeCurrency(in.BalanceCurrency),
+		BalanceCents:          balanceCents,
+		BalanceCurrency:       balanceCurrency,
+		RechargeMultiplier:    rechargeMultiplier,
 	}, nil
 }
 
@@ -841,10 +877,7 @@ func normalizeCandidateSupplierType(value adminplusdomain.SupplierType) adminplu
 }
 
 func defaultCurrencyForCandidateSupplier(supplierType adminplusdomain.SupplierType) string {
-	if supplierType == adminplusdomain.SupplierTypeNewAPI {
-		return "QTA"
-	}
-	return "CNY"
+	return "USD"
 }
 
 func normalizeCandidateAPIBaseURL(raw string, fallback *url.URL) (string, error) {
@@ -966,13 +999,49 @@ func trimLimit(value string, limit int) string {
 
 func normalizeCurrency(value string) string {
 	v := strings.ToUpper(strings.TrimSpace(value))
-	if v == "" {
+	if v == "" || v == "QTA" || v == "CNY" {
 		return "USD"
 	}
 	if len(v) != 3 {
 		return "USD"
 	}
 	return v
+}
+
+func normalizeBalanceAmountAndCurrency(cents int64, currency string) (int64, string) {
+	v := strings.ToUpper(strings.TrimSpace(currency))
+	if v == "QTA" {
+		return int64(math.Round(float64(cents) / legacyNewAPIQuotaUnitsPerUSD)), "USD"
+	}
+	return cents, normalizeCurrency(v)
+}
+
+func normalizeRechargeMultiplier(value float64) (float64, error) {
+	if value == 0 {
+		return 1, nil
+	}
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, badRequest("SUPPLIER_RECHARGE_MULTIPLIER_INVALID", "recharge multiplier must be positive")
+	}
+	return value, nil
+}
+
+func normalizeSupplierForRead(in *adminplusdomain.Supplier) *adminplusdomain.Supplier {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.BalanceCents, out.BalanceCurrency = normalizeBalanceAmountAndCurrency(in.BalanceCents, in.BalanceCurrency)
+	if multiplier, err := normalizeRechargeMultiplier(in.RechargeMultiplier); err == nil {
+		out.RechargeMultiplier = multiplier
+	} else {
+		out.RechargeMultiplier = 1
+	}
+	if in.BalanceUpdatedAt != nil {
+		t := *in.BalanceUpdatedAt
+		out.BalanceUpdatedAt = &t
+	}
+	return &out
 }
 
 func maskUsername(value string) string {

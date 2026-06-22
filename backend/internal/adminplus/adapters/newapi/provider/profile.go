@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,10 +39,7 @@ func (c *Client) ProbeSub2APIUserProfile(ctx context.Context, in ports.SessionPr
 	if profile.ID <= 0 {
 		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_SESSION_PROFILE_INVALID", "new api profile response did not include user id")
 	}
-	balanceCents := int64(math.Round(rawQuota * 100))
-	if balanceCents < 0 {
-		balanceCents = 0
-	}
+	balanceCents := newAPIQuotaToUSDCents(rawQuota)
 	return &ports.SessionProbeResult{
 		SupplierID: in.SupplierID,
 		Status:     "valid",
@@ -58,13 +54,16 @@ func (c *Client) ProbeSub2APIUserProfile(ctx context.Context, in ports.SessionPr
 		},
 		Profile:         profile,
 		BalanceCents:    &balanceCents,
-		BalanceCurrency: "QTA",
+		BalanceCurrency: "USD",
 		Diagnostics: map[string]any{
-			"profile_endpoint": endpoint,
-			"profile_keys":     rawKeys(envelope.Data),
-			"raw_quota":        rawQuota,
-			"raw_used_quota":   rawUsedQuota,
-			"request_count":    requestCount,
+			"profile_endpoint":    endpoint,
+			"profile_keys":        rawKeys(envelope.Data),
+			"quota_units_per_usd": newAPIQuotaUnitsPerUSD,
+			"quota_balance_usd":   newAPIQuotaToUSDAmount(rawQuota),
+			"used_quota_usd":      newAPIQuotaToUSDAmount(rawUsedQuota),
+			"raw_quota":           rawQuota,
+			"raw_used_quota":      rawUsedQuota,
+			"request_count":       requestCount,
 		},
 		ProbedAt: c.now().UTC(),
 	}, nil
@@ -108,7 +107,7 @@ func parseProfile(data map[string]any) (*ports.UserProfileSnapshot, float64, flo
 		Username: stringFromAny(data["username"]),
 		Role:     role,
 		Status:   status,
-		Balance:  rawQuota,
+		Balance:  newAPIQuotaToUSDAmount(rawQuota),
 	}, rawQuota, rawUsedQuota, requestCount
 }
 

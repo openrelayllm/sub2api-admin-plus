@@ -49,6 +49,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(extensionapp.BrowserCredentialProvider), new(*suppliersapp.Service)),
 	wire.Bind(new(sessionsapp.SupplierLookup), new(*suppliersapp.Service)),
 	wire.Bind(new(costsapp.SessionReader), new(*sessionsapp.Service)),
+	wire.Bind(new(costsapp.SupplierLookup), new(*suppliersapp.Service)),
 	wire.Bind(new(ratesapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(suppliergroupsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(supplierkeysapp.SessionReader), new(*sessionsapp.Service)),

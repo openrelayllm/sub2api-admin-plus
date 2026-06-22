@@ -17,12 +17,12 @@ func UseSub2APIGateway(admin service.AdminService, client *http.Client) Sub2APIG
 		if err == nil {
 			return gateway
 		}
-		if !ShouldAllowEmbeddedSub2APIGatewayFallbackFromEnv() {
+		if admin == nil || !ShouldAllowEmbeddedSub2APIGatewayFallbackFromEnv() {
 			return NewFailingSub2APIGateway(err)
 		}
 		return admin
 	}
-	if !ShouldAllowEmbeddedSub2APIGatewayFallbackFromEnv() {
+	if admin == nil {
 		_, err := NewSub2APIHTTPGatewayFromEnv(client)
 		return NewFailingSub2APIGateway(err)
 	}

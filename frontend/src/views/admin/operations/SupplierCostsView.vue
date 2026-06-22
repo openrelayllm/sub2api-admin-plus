@@ -53,12 +53,13 @@
           </div>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[1180px] divide-y divide-gray-200 dark:divide-dark-700">
+          <table class="w-full min-w-[1260px] divide-y divide-gray-200 dark:divide-dark-700">
             <thead class="bg-gray-50 dark:bg-dark-800">
               <tr>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">币种</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">供应商/快照</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值总额</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实际支付</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值订单</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">兑换充值</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">用量消耗</th>
@@ -69,7 +70,7 @@
             </thead>
             <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
               <tr v-if="ledgerOverviewItems.length === 0">
-                <td colspan="9" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无总账统计</td>
+                <td colspan="10" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无总账统计</td>
               </tr>
               <tr v-for="item in ledgerOverviewItems" :key="item.currency">
                 <td class="px-4 py-4 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ item.currency }}</td>
@@ -77,6 +78,7 @@
                   {{ item.supplier_count }} / {{ item.snapshot_count }}
                 </td>
                 <td class="px-4 py-4 text-right text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatMoney(item.recharge_total_cents, item.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm font-semibold text-emerald-700 dark:text-emerald-300">{{ formatMoney(item.recharge_actual_payment_cents, item.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.completed_funding_amount_cents, item.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.entitlement_amount_cents, item.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.usage_cost_cents, item.currency) }}</td>
@@ -94,10 +96,14 @@
         </div>
       </section>
 
-      <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+      <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
         <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">充值总额</p>
           <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatMoney(supplierRechargeTotalCents(currentSnapshot), currentCurrency) }}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">实际支付</p>
+          <p class="mt-2 text-2xl font-semibold text-emerald-700 dark:text-emerald-300">{{ formatMoney(currentSnapshot?.recharge_actual_payment_cents || 0, currentCurrency) }}</p>
         </div>
         <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">充值订单</p>
@@ -143,12 +149,13 @@
         </div>
 
         <div v-if="activeTab === 'summary'" class="overflow-x-auto">
-          <table class="w-full min-w-[1180px] divide-y divide-gray-200 dark:divide-dark-700">
+          <table class="w-full min-w-[1260px] divide-y divide-gray-200 dark:divide-dark-700">
             <thead class="bg-gray-50 dark:bg-dark-800">
               <tr>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">供应商</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">币种</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值总额</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实际支付</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值订单</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">兑换充值</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">用量消耗</th>
@@ -159,7 +166,7 @@
             </thead>
             <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
               <tr v-if="snapshots.length === 0">
-                <td colspan="9" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无成本快照</td>
+                <td colspan="10" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无成本快照</td>
               </tr>
               <tr
                 v-for="snapshot in snapshots"
@@ -170,6 +177,7 @@
                 <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">{{ supplierName(snapshot.supplier_id) }}</td>
                 <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">{{ snapshot.currency }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(supplierRechargeTotalCents(snapshot), snapshot.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm font-semibold text-emerald-700 dark:text-emerald-300">{{ formatMoney(snapshot.recharge_actual_payment_cents, snapshot.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(snapshot.completed_funding_amount_cents, snapshot.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(snapshot.entitlement_amount_cents, snapshot.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(supplierDisplayUsageCents(snapshot), snapshot.currency) }}</td>
@@ -184,20 +192,22 @@
         </div>
 
         <div v-else-if="activeTab === 'funding'" class="overflow-x-auto">
-          <table class="w-full min-w-[980px] divide-y divide-gray-200 dark:divide-dark-700">
+          <table class="w-full min-w-[1180px] divide-y divide-gray-200 dark:divide-dark-700">
             <thead class="bg-gray-50 dark:bg-dark-800">
               <tr>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">订单</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">支付方式</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">状态</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">额度</th>
-                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实付</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">原始实付</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">充值倍率</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实际支付</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">完成时间</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
               <tr v-if="funding.length === 0">
-                <td colspan="6" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无充值订单</td>
+                <td colspan="8" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-dark-400">暂无充值订单</td>
               </tr>
               <tr v-for="item in funding" :key="item.id">
                 <td class="px-4 py-4 text-sm text-gray-900 dark:text-gray-100">
@@ -208,6 +218,8 @@
                 <td class="px-4 py-4"><span class="badge badge-gray">{{ item.status }}</span></td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.amount_cents, item.currency) }}</td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(item.cash_amount_cents, item.currency) }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMultiplier(item.recharge_multiplier) }}</td>
+                <td class="px-4 py-4 text-right text-sm font-semibold text-emerald-700 dark:text-emerald-300">{{ formatMoney(item.actual_payment_cents, item.currency) }}</td>
                 <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(item.completed_at || item.paid_at || item.created_at_external) }}</td>
               </tr>
             </tbody>
@@ -255,7 +267,7 @@
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">类型</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">来源</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">金额</th>
-                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实付</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">实际支付</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">发生时间</th>
               </tr>
             </thead>
@@ -270,7 +282,7 @@
                   <div class="mt-1 font-mono text-xs text-gray-500 dark:text-dark-400">{{ entry.source_external_id || `#${entry.source_id}` }}</div>
                 </td>
                 <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ formatMoney(entry.amount_cents, entry.currency) }}</td>
-                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ entry.cash_amount_cents ? formatMoney(entry.cash_amount_cents, entry.currency) : '-' }}</td>
+                <td class="px-4 py-4 text-right text-sm text-gray-900 dark:text-gray-100">{{ entry.actual_payment_cents ? formatMoney(entry.actual_payment_cents, entry.currency) : '-' }}</td>
                 <td class="px-4 py-4 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(entry.occurred_at) }}</td>
               </tr>
             </tbody>
@@ -361,12 +373,19 @@ function formatMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: currency || 'USD',
+    currencyDisplay: 'narrowSymbol',
     minimumFractionDigits: 2
   }).format((cents || 0) / 100)
 }
 
 function formatNumber(value?: number | null): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value || 0)
+}
+
+function formatMultiplier(value?: number | null): string {
+  if (typeof value !== 'number') return '-'
+  if (!Number.isFinite(value)) return '-'
+  return `${value.toFixed(4).replace(/\.?0+$/, '')}x`
 }
 
 function formatDateTime(value?: string | null): string {

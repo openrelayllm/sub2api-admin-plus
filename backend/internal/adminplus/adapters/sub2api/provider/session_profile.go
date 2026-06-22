@@ -1038,7 +1038,15 @@ func parseSub2APIGroups(data []byte) ([]*ports.ProviderGroup, error) {
 		if externalID == "" || name == "" {
 			continue
 		}
-		rateMultiplier := float64FromAny(raw["rate_multiplier"])
+		rateMultiplier := float64FromAny(firstExisting(raw,
+			"rate_multiplier",
+			"rateMultiplier",
+			"group_ratio",
+			"groupRate",
+			"group_rate",
+			"effective_rate_multiplier",
+			"effectiveRateMultiplier",
+		))
 		if rateMultiplier <= 0 {
 			rateMultiplier = 1
 		}

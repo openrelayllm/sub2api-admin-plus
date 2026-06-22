@@ -94,7 +94,7 @@ const widthClasses = computed(() => {
     normal: 'max-w-lg',
     wide: 'w-full sm:max-w-2xl md:max-w-3xl lg:max-w-4xl',
     'extra-wide': 'w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl',
-    full: 'w-[calc(100vw-1rem)] sm:w-[calc(100vw-2rem)] max-w-[1600px]'
+    full: 'w-[calc(100vw-1rem)] sm:w-[calc(100vw-2rem)] max-w-[1680px]'
   }
   return widths[props.width]
 })

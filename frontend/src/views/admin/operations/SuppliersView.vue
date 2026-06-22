@@ -3,13 +3,22 @@
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-wrap-reverse items-start justify-between gap-3">
-          <div class="grid flex-1 gap-3 lg:grid-cols-[minmax(220px,1fr)_160px_160px_160px_160px]">
+          <div class="grid flex-1 gap-3 lg:grid-cols-[minmax(220px,1fr)_150px_160px_160px_160px_160px]">
             <label class="block">
               <span class="input-label">搜索</span>
               <div class="relative">
                 <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input v-model.trim="filters.q" class="input pl-9" placeholder="供应商名称、联系人、备注" />
               </div>
+            </label>
+            <label class="block">
+              <span class="input-label">有效倍率渠道</span>
+              <select v-model="channelProtocolFilter" class="input">
+                <option value="openai">OpenAI</option>
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+                <option value="">全部协议</option>
+              </select>
             </label>
             <label class="block">
               <span class="input-label">供应商归类</span>
@@ -208,38 +217,85 @@
           </template>
 
           <template #cell-status="{ row }">
-            <div class="flex min-w-[170px] flex-col gap-1.5">
+            <div class="flex w-[178px] flex-col items-start gap-1.5">
               <div class="flex flex-wrap gap-1.5">
-                <span class="badge w-fit" :class="runtimeClass(row.runtime_status)">{{ runtimeLabel(row.runtime_status) }}</span>
-                <span class="badge w-fit" :class="healthClass(row.health_status)">{{ healthLabel(row.health_status) }}</span>
+                <span class="relative inline-flex items-center">
+                  <select
+                    :value="row.runtime_status"
+                    class="status-quick-select"
+                    :class="runtimeClass(row.runtime_status)"
+                    :disabled="quickStatusSupplierID === row.id"
+                    title="快速切换运行状态"
+                    @change="handleQuickRuntimeStatusChange(row, $event)"
+                  >
+                    <option value="monitor_only">仅监控</option>
+                    <option value="candidate">候选</option>
+                    <option value="active">当前使用</option>
+                    <option value="disabled">停用</option>
+                  </select>
+                  <Icon name="chevronDown" size="xs" class="pointer-events-none absolute right-1.5 text-current opacity-60" />
+                </span>
+                <span class="relative inline-flex items-center">
+                  <select
+                    :value="row.health_status"
+                    class="status-quick-select"
+                    :class="healthClass(row.health_status)"
+                    :disabled="quickStatusSupplierID === row.id"
+                    title="快速切换健康状态"
+                    @change="handleQuickHealthStatusChange(row, $event)"
+                  >
+                    <option value="normal">正常</option>
+                    <option value="unavailable">不可用</option>
+                    <option value="credential_invalid">凭据失效</option>
+                    <option value="paused">暂停</option>
+                  </select>
+                  <Icon name="chevronDown" size="xs" class="pointer-events-none absolute right-1.5 text-current opacity-60" />
+                </span>
               </div>
               <span class="text-xs font-medium" :class="supplierSwitchStateClass(row)">
                 {{ supplierSwitchStateLabel(row) }}
               </span>
+              <div class="flex flex-col items-start gap-1 border-t border-gray-100 pt-1.5 text-xs dark:border-dark-700">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-gray-500 dark:text-dark-400">会话</span>
+                  <span class="badge" :class="sessionBadgeClass(row.id)">{{ sessionBadgeText(row.id) }}</span>
+                </div>
+                <span v-if="sessionStore[row.id]?.captured_at" class="text-gray-500 dark:text-dark-400">
+                  {{ formatDateTime(sessionStore[row.id]?.captured_at) }}
+                </span>
+              </div>
             </div>
           </template>
 
           <template #cell-best_channel="{ row }">
-            <div class="min-w-[230px]">
-              <template v-if="supplierBestChannel(row.id)">
-                <div class="flex min-w-0 items-center gap-2">
-                  <span class="badge shrink-0" :class="channelProbeStatusClass(supplierBestChannel(row.id)?.probe_status)">
-                    {{ channelProbeStatusLabel(supplierBestChannel(row.id)?.probe_status) }}
-                  </span>
-                  <span class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100" :title="supplierBestChannel(row.id)?.group_name">
-                    {{ supplierBestChannel(row.id)?.group_name || '-' }}
-                  </span>
-                </div>
-                <div class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
-                  <span>{{ formatMultiplier(supplierBestChannel(row.id)?.effective_rate_multiplier) }}</span>
-                  <span>首 {{ formatLatency(supplierBestChannel(row.id)?.first_token_ms) }}</span>
-                  <span>总 {{ formatLatency(supplierBestChannel(row.id)?.duration_ms) }}</span>
-                </div>
-                <div class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
-                  <span :class="supplierBestChannel(row.id)?.local_account_schedulable ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-300'">
-                    {{ supplierBestChannel(row.id)?.local_account_schedulable ? '已入调度' : '未入调度' }}
-                  </span>
-                  <span>{{ formatDateTime(supplierBestChannel(row.id)?.captured_at) }}</span>
+            <div class="w-[280px]" :title="supplierBestChannelTooltip(row.id)">
+              <template v-if="supplierBestChannelVariants(row.id).length > 0">
+                <div class="space-y-1.5">
+                  <div
+                    v-for="snapshot in supplierBestChannelVariants(row.id)"
+                    :key="snapshot.id || `${snapshot.supplier_id}:${snapshot.supplier_group_id}:${channelProtocol(snapshot)}`"
+                    class="min-w-0"
+                  >
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <span class="badge shrink-0" :class="channelProtocolBadgeClass(channelProtocol(snapshot))">
+                        {{ channelProtocolLabel(channelProtocol(snapshot)) }}
+                      </span>
+                      <span class="badge shrink-0" :class="channelProbeStatusClass(snapshot.probe_status)">
+                        {{ channelProbeStatusLabel(snapshot.probe_status) }}
+                      </span>
+                      <span class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        {{ snapshot.group_name || '-' }}
+                      </span>
+                    </div>
+                    <div class="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500 dark:text-dark-400">
+                      <span :class="rateMultiplierTextClass(snapshot.effective_rate_multiplier, channelProtocol(snapshot), 'compact')">{{ formatMultiplier(snapshot.effective_rate_multiplier) }}</span>
+                      <span>首 {{ formatLatency(snapshot.first_token_ms) }}</span>
+                      <span>总 {{ formatLatency(snapshot.duration_ms) }}</span>
+                      <span :class="snapshot.local_account_schedulable ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-300'">
+                        {{ snapshot.local_account_schedulable ? '已入调度' : '未入调度' }}
+                      </span>
+                    </div>
+                  </div>
                 </div>
                 <div class="mt-2 flex flex-wrap gap-1.5">
                   <button
@@ -273,6 +329,35 @@
                   </button>
                 </div>
               </template>
+              <template v-else-if="supplierAllBestChannelVariants(row.id).length > 0">
+                <div class="flex flex-col gap-1">
+                  <span class="badge badge-gray w-fit">无 {{ channelProtocolFilterLabel }}</span>
+                  <span class="text-xs text-gray-500 dark:text-dark-400">
+                    可切换查看 {{ supplierAvailableChannelProtocolLabels(row.id) }}
+                  </span>
+                  <div class="mt-1 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      title="打开供应商分组，查看其他协议渠道"
+                      @click="openGroupsDialog(row)"
+                    >
+                      <Icon name="database" size="xs" />
+                      分组
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      :disabled="rowChannelCheckSupplierID === row.id"
+                      title="提交异步渠道检测任务"
+                      @click="syncSupplierChannelFromRow(row)"
+                    >
+                      <Icon name="beaker" size="xs" :class="{ 'animate-spin': rowChannelCheckSupplierID === row.id }" />
+                      {{ rowChannelCheckSupplierID === row.id ? '提交中' : '一键检测' }}
+                    </button>
+                  </div>
+                </div>
+              </template>
               <template v-else>
                 <div class="flex flex-col gap-1">
                   <span class="badge badge-gray w-fit">未检测</span>
@@ -303,63 +388,97 @@
             </div>
           </template>
 
-          <template #cell-cost="{ row }">
-            <div class="min-w-[190px] text-right">
+          <template #cell-balance_cents="{ row }">
+            <div class="min-w-[230px] text-left">
+              <div class="flex items-center justify-start gap-2">
+                <span class="text-base font-semibold" :class="supplierBalanceAmountClass(row)">
+                  {{ formatBalanceMoney(row.balance_cents, row.balance_currency || 'USD') }}
+                </span>
+                <span class="badge" :class="supplierBalanceBadgeClass(row)">
+                  {{ supplierBalanceLabel(row) }}
+                </span>
+              </div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">余额更新 {{ supplierBalanceUpdatedLabel(row) }}</div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">充值倍率 {{ formatMultiplier(row.recharge_multiplier) }}</div>
+
               <template v-if="supplierCostSnapshot(row.id)">
-                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                  充值总额 {{ formatMoney(supplierRechargeTotalCents(supplierCostSnapshot(row.id)), supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                  订单 {{ formatMoney(supplierCostSnapshot(row.id)?.completed_funding_amount_cents || 0, supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}
-                  · 兑换 {{ formatMoney(supplierCostSnapshot(row.id)?.entitlement_amount_cents || 0, supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                  消耗 {{ formatMoney(supplierDisplayUsageCents(supplierCostSnapshot(row.id)), supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}
-                </div>
-                <div class="mt-1 text-xs" :class="costDeltaClass(row.id)">
-                  差异 {{ costDeltaLabel(row.id) }}
+                <div class="mt-1 space-y-0.5 text-xs">
+                  <div class="flex items-center gap-2 text-gray-500 dark:text-dark-400">
+                    <span class="w-8 shrink-0">充值</span>
+                    <span>{{ formatMoney(supplierRechargeTotalCents(supplierCostSnapshot(row.id)), supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-gray-500 dark:text-dark-400">
+                    <span class="w-8 shrink-0">消耗</span>
+                    <span>{{ formatMoney(supplierDisplayUsageCents(supplierCostSnapshot(row.id)), supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-gray-500 dark:text-dark-400">
+                    <span class="w-8 shrink-0">订单</span>
+                    <span>{{ formatMoney(supplierCostSnapshot(row.id)?.completed_funding_amount_cents || 0, supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-gray-500 dark:text-dark-400">
+                    <span class="w-8 shrink-0">兑换</span>
+                    <span>{{ formatMoney(supplierCostSnapshot(row.id)?.entitlement_amount_cents || 0, supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-gray-500 dark:text-dark-400">
+                    <span class="w-8 shrink-0">实付</span>
+                    <span>{{ formatMoney(supplierCostSnapshot(row.id)?.recharge_actual_payment_cents || 0, supplierCostSnapshot(row.id)?.currency || row.balance_currency) }}</span>
+                  </div>
+                  <div class="flex items-center gap-2" :class="costDeltaClass(row.id)">
+                    <span class="w-8 shrink-0">差异</span>
+                    <span>{{ costDeltaLabel(row.id) }}</span>
+                  </div>
                 </div>
               </template>
               <template v-else>
-                <span class="badge badge-gray">未同步成本</span>
+                <div class="mt-1">
+                  <span class="badge badge-gray">成本未同步</span>
+                </div>
               </template>
             </div>
           </template>
 
           <template #cell-credential="{ row }">
-            <div class="flex min-w-[210px] flex-wrap gap-1">
-              <span v-if="row.credential.browser_login_enabled" class="badge badge-warning">Chrome</span>
-              <span v-if="row.credential.browser_login_username_configured" class="badge badge-gray">
-                {{ row.credential.masked_browser_login_username || '账号' }}
-              </span>
-              <span v-if="row.credential.browser_login_password_configured" class="badge badge-success">密码</span>
-              <span
-                v-if="needsDirectLoginCredential(row)"
-                class="badge badge-danger"
-                title="未配置登录账号密码或临时 Token，请先编辑供应商补齐凭据"
-              >
-                凭据未配置
-              </span>
-              <span
-                v-if="shouldShowTokenBadge(row)"
-                class="badge"
-                :class="credentialTokenBadgeClass(row)"
-                :title="credentialTokenBadgeTitle(row)"
-              >
-                {{ credentialTokenBadgeText(row) }}
-              </span>
-              <span v-if="row.credential.postgres_configured" class="badge badge-purple">PG</span>
-              <span v-if="row.credential.redis_configured" class="badge badge-primary">Redis</span>
-              <span v-if="!hasCredential(row)" class="badge badge-gray">未配置</span>
-            </div>
-          </template>
-
-          <template #cell-session="{ row }">
-            <div class="flex min-w-[150px] flex-col items-start gap-1">
-              <span class="badge" :class="sessionBadgeClass(row.id)">{{ sessionBadgeText(row.id) }}</span>
-              <span v-if="sessionStore[row.id]?.captured_at" class="text-xs text-gray-500 dark:text-dark-400">
-                {{ formatDateTime(sessionStore[row.id]?.captured_at) }}
-              </span>
+            <div class="min-w-[220px] space-y-1 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="w-10 shrink-0 text-gray-500 dark:text-dark-400">方式</span>
+                <div class="flex flex-wrap gap-1">
+                  <span v-if="row.credential.browser_login_enabled" class="badge badge-warning">Chrome</span>
+                  <span v-else class="badge badge-gray">未启用</span>
+                </div>
+              </div>
+              <div v-if="row.credential.browser_login_username_configured" class="flex items-center gap-2">
+                <span class="w-10 shrink-0 text-gray-500 dark:text-dark-400">账号</span>
+                <span class="badge badge-gray">{{ row.credential.masked_browser_login_username || '账号' }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-10 shrink-0 text-gray-500 dark:text-dark-400">凭据</span>
+                <div class="flex flex-wrap gap-1">
+                  <span v-if="row.credential.browser_login_password_configured" class="badge badge-success">密码</span>
+                  <span
+                    v-if="needsDirectLoginCredential(row)"
+                    class="badge badge-danger"
+                    title="未配置登录账号密码或临时 Token，请先编辑供应商补齐凭据"
+                  >
+                    未配置
+                  </span>
+                  <span
+                    v-if="shouldShowTokenBadge(row)"
+                    class="badge"
+                    :class="credentialTokenBadgeClass(row)"
+                    :title="credentialTokenBadgeTitle(row)"
+                  >
+                    {{ credentialTokenBadgeText(row) }}
+                  </span>
+                  <span v-if="!hasCredential(row)" class="badge badge-gray">未配置</span>
+                </div>
+              </div>
+              <div v-if="row.credential.postgres_configured || row.credential.redis_configured" class="flex items-center gap-2">
+                <span class="w-10 shrink-0 text-gray-500 dark:text-dark-400">数据源</span>
+                <div class="flex flex-wrap gap-1">
+                  <span v-if="row.credential.postgres_configured" class="badge badge-purple">PG</span>
+                  <span v-if="row.credential.redis_configured" class="badge badge-primary">Redis</span>
+                </div>
+              </div>
             </div>
           </template>
 
@@ -538,7 +657,7 @@
           </label>
         </div>
 
-        <div class="grid gap-4 sm:grid-cols-3">
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label class="block">
             <span class="input-label">健康状态</span>
             <select v-model="form.health_status" class="input">
@@ -554,7 +673,11 @@
           </label>
           <label class="block">
             <span class="input-label">币种</span>
-            <input v-model.trim="form.balance_currency" class="input" placeholder="CNY" />
+            <input v-model.trim="form.balance_currency" class="input" placeholder="USD" />
+          </label>
+          <label class="block">
+            <span class="input-label">充值倍率</span>
+            <input v-model.number="form.recharge_multiplier" type="number" min="0.000001" step="0.01" class="input" placeholder="1" />
           </label>
         </div>
 
@@ -741,7 +864,7 @@
             <div>
               <div class="text-xs text-gray-500 dark:text-dark-400">余额</div>
               <div class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
-                {{ formatMoney(lastProbe.balance_cents || 0, lastProbe.balance_currency || 'USD') }}
+                {{ formatBalanceMoney(lastProbe.balance_cents || 0, lastProbe.balance_currency || 'USD') }}
               </div>
             </div>
             <div>
@@ -891,7 +1014,7 @@
       </template>
     </BaseDialog>
 
-    <BaseDialog :show="groupsDialogOpen" :title="groupsSupplier ? `供应商分组 - ${groupsSupplier.name}` : '供应商分组'" width="wide" @close="closeGroupsDialog">
+    <BaseDialog :show="groupsDialogOpen" :title="groupsSupplier ? `供应商分组 - ${groupsSupplier.name}` : '供应商分组'" width="full" @close="closeGroupsDialog">
       <div class="space-y-4">
         <div class="flex flex-wrap items-end justify-between gap-3">
           <div class="grid flex-1 gap-3 sm:grid-cols-[minmax(180px,1fr)_160px]">
@@ -984,12 +1107,13 @@
           row-key="id"
           default-sort-key="last_seen_at"
           default-sort-order="desc"
-          :estimate-row-height="72"
+          :estimate-row-height="88"
         >
           <template #cell-name="{ row }">
-            <div class="min-w-[220px]">
-              <div class="flex items-center gap-2">
+            <div class="w-[190px] space-y-1 whitespace-normal">
+              <div class="flex min-w-0 items-center gap-2">
                 <GroupBadge
+                  class="max-w-full"
                   :name="row.name"
                   :platform="groupPlatform(row.provider_family)"
                   :rate-multiplier="row.effective_rate_multiplier"
@@ -997,29 +1121,39 @@
                 <span v-if="row.is_private" class="badge badge-warning">专属</span>
                 <span v-if="row.allow_image_generation" class="badge badge-primary">图片</span>
               </div>
-              <div class="mt-1 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-dark-400">
+              <div class="flex min-w-0 flex-col gap-0.5 text-xs text-gray-500 dark:text-dark-400">
                 <span class="font-mono">#{{ row.external_group_id }}</span>
-                <span v-if="row.description" class="max-w-[260px] truncate" :title="row.description">{{ row.description }}</span>
+                <span v-if="row.description" class="truncate" :title="row.description">{{ row.description }}</span>
               </div>
             </div>
           </template>
 
           <template #cell-provider_family="{ row }">
-            <span class="badge badge-gray">{{ row.provider_family || 'mixed' }}</span>
+            <div class="w-[72px]">
+              <span class="badge badge-gray max-w-full truncate">{{ row.provider_family || 'mixed' }}</span>
+            </div>
           </template>
 
           <template #cell-rate="{ row }">
-            <div class="min-w-[120px] text-right">
-              <div class="font-medium text-gray-900 dark:text-gray-100">{{ formatMultiplier(row.effective_rate_multiplier) }}</div>
-              <div class="text-xs text-gray-500 dark:text-dark-400">
-                基础 {{ formatMultiplier(row.rate_multiplier) }}
-                <span v-if="row.user_rate_multiplier != null"> / 专属 {{ formatMultiplier(row.user_rate_multiplier) }}</span>
+            <div class="w-[86px] space-y-0.5 text-right">
+              <div :class="rateMultiplierTextClass(row.effective_rate_multiplier, channelProtocolFromProviderFamily(row.provider_family))">
+                {{ formatMultiplier(row.effective_rate_multiplier) }}
+              </div>
+              <div class="flex flex-col text-xs text-gray-500 dark:text-dark-400">
+                <span>
+                  基础
+                  <strong :class="rateMultiplierTextClass(row.rate_multiplier, channelProtocolFromProviderFamily(row.provider_family), 'compact')">{{ formatMultiplier(row.rate_multiplier) }}</strong>
+                </span>
+                <span v-if="row.user_rate_multiplier != null">
+                  专属
+                  <strong :class="rateMultiplierTextClass(row.user_rate_multiplier, channelProtocolFromProviderFamily(row.provider_family), 'compact')">{{ formatMultiplier(row.user_rate_multiplier) }}</strong>
+                </span>
               </div>
             </div>
           </template>
 
           <template #cell-limits="{ row }">
-            <div class="min-w-[150px] text-xs text-gray-600 dark:text-dark-300">
+            <div class="w-[82px] text-xs text-gray-600 dark:text-dark-300">
               <div>RPM：{{ row.rpm_limit ?? '-' }}</div>
               <div>日：{{ formatUSDLimit(row.daily_limit_usd) }}</div>
               <div>月：{{ formatUSDLimit(row.monthly_limit_usd) }}</div>
@@ -1027,21 +1161,19 @@
           </template>
 
           <template #cell-account="{ row }">
-            <div class="min-w-[260px]">
+            <div class="w-[250px] whitespace-normal">
               <template v-if="groupKey(row)">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-medium text-gray-900 dark:text-gray-100">{{ groupKey(row)?.name || '-' }}</span>
-                  <span class="badge" :class="supplierKeyStatusClass(groupKey(row)?.status)">{{ supplierKeyStatusLabel(groupKey(row)?.status) }}</span>
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="truncate font-medium text-gray-900 dark:text-gray-100" :title="groupKey(row)?.name || ''">{{ groupKey(row)?.name || '-' }}</span>
+                  <span class="badge shrink-0" :class="supplierKeyStatusClass(groupKey(row)?.status)">{{ supplierKeyStatusLabel(groupKey(row)?.status) }}</span>
                 </div>
-                <div class="mt-1 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-dark-400">
+                <div class="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs text-gray-500 dark:text-dark-400">
                   <span v-if="groupKey(row)?.key_last4" class="font-mono">****{{ groupKey(row)?.key_last4 }}</span>
                   <span v-if="groupKey(row)?.external_key_id" class="font-mono">Key #{{ groupKey(row)?.external_key_id }}</span>
-                  <span v-if="groupKey(row)?.local_sub2api_account_id">
-                    本地账号 #{{ groupKey(row)?.local_sub2api_account_id }}
-                  </span>
-                  <span v-if="groupKey(row)?.local_account_name">{{ groupKey(row)?.local_account_name }}</span>
+                  <span v-if="groupKey(row)?.local_sub2api_account_id">本地 #{{ groupKey(row)?.local_sub2api_account_id }}</span>
+                  <span v-if="groupKey(row)?.local_account_name" class="truncate" :title="groupKey(row)?.local_account_name">{{ groupKey(row)?.local_account_name }}</span>
                 </div>
-                <div v-if="groupKey(row)?.error_message" class="mt-1 max-w-[320px] truncate text-xs text-red-600 dark:text-red-300" :title="groupKey(row)?.error_message">
+                <div v-if="groupKey(row)?.error_message" class="mt-1 truncate text-xs text-red-600 dark:text-red-300" :title="groupKey(row)?.error_message">
                   {{ groupKey(row)?.error_message }}
                 </div>
               </template>
@@ -1055,9 +1187,9 @@
           </template>
 
           <template #cell-channel_check="{ row }">
-            <div class="min-w-[190px]">
+            <div class="w-[190px] whitespace-normal">
               <template v-if="groupChannelCheck(row.id)">
-                <div class="flex flex-wrap items-center gap-2">
+                <div class="flex flex-wrap items-center gap-1.5">
                   <span class="badge" :class="channelProbeStatusClass(groupChannelCheck(row.id)?.probe_status)">
                     {{ channelProbeStatusLabel(groupChannelCheck(row.id)?.probe_status) }}
                   </span>
@@ -1068,7 +1200,7 @@
                 <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   首 {{ formatLatency(groupChannelCheck(row.id)?.first_token_ms) }} · 总 {{ formatLatency(groupChannelCheck(row.id)?.duration_ms) }}
                 </div>
-                <div class="mt-1 max-w-[220px] truncate text-xs text-gray-500 dark:text-dark-400" :title="groupChannelCheck(row.id)?.error_message || ''">
+                <div class="mt-1 truncate text-xs text-gray-500 dark:text-dark-400" :title="groupChannelCheck(row.id)?.error_message || ''">
                   {{ groupChannelCheck(row.id)?.error_message || formatDateTime(groupChannelCheck(row.id)?.captured_at) }}
                 </div>
               </template>
@@ -1079,11 +1211,11 @@
           </template>
 
           <template #cell-group_actions="{ row }">
-            <div class="flex min-w-[330px] justify-end gap-2">
+            <div class="ml-auto flex w-[90px] flex-col gap-1">
               <button
                 v-if="groupAction(row).kind === 'provision'"
                 type="button"
-                class="btn btn-secondary btn-sm"
+                class="btn btn-secondary btn-sm h-8 px-2"
                 :disabled="groupAction(row).disabled"
                 :title="groupAction(row).title"
                 @click="openProvisionDialog(row)"
@@ -1094,7 +1226,7 @@
               <button
                 v-if="groupAction(row).kind === 'repair_sub2api_landing'"
                 type="button"
-                class="btn btn-secondary btn-sm"
+                class="btn btn-secondary btn-sm h-8 px-2"
                 :disabled="groupAction(row).disabled"
                 :title="groupAction(row).title"
                 @click="openRepairDialog(groupKey(row)!)"
@@ -1104,7 +1236,7 @@
               </button>
               <button
                 type="button"
-                class="btn btn-secondary btn-sm"
+                class="btn btn-secondary btn-sm h-8 px-2"
                 :disabled="isChannelCheckActionRunning(`probe:${row.id}`)"
                 title="使用 GPT-5.4 Mini 真实复测该渠道，失败时自动暂停本地调度"
                 @click="probeGroupChannel(row)"
@@ -1113,9 +1245,10 @@
                 复测
               </button>
               <button
+                v-if="groupHasLocalBinding(row)"
                 type="button"
-                class="btn btn-secondary btn-sm"
-                :disabled="isChannelCheckActionRunning(`schedule:${row.id}`)"
+                class="btn btn-secondary btn-sm h-8 px-2"
+                :disabled="groupScheduleActionDisabled(row)"
                 :title="groupScheduleActionTitle(row)"
                 @click="handleGroupScheduleAction(row)"
               >
@@ -1126,11 +1259,13 @@
           </template>
 
           <template #cell-status="{ row }">
-            <span class="badge" :class="groupStatusClass(row.status)">{{ groupStatusLabel(row.status) }}</span>
+            <div class="w-[64px]">
+              <span class="badge" :class="groupStatusClass(row.status)">{{ groupStatusLabel(row.status) }}</span>
+            </div>
           </template>
 
           <template #cell-last_seen_at="{ row }">
-            <div class="min-w-[150px] text-xs text-gray-500 dark:text-dark-400">{{ formatDateTime(row.last_seen_at) }}</div>
+            <div class="w-[118px] whitespace-normal text-xs text-gray-500 dark:text-dark-400">{{ formatDateTime(row.last_seen_at) }}</div>
           </template>
 
           <template #empty>
@@ -1172,7 +1307,9 @@
           </div>
           <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
             <div class="text-xs text-gray-500 dark:text-dark-400">倍率</div>
-            <div class="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatMultiplier(provisionGroup?.effective_rate_multiplier) }}</div>
+            <div class="mt-2" :class="rateMultiplierTextClass(provisionGroup?.effective_rate_multiplier, channelProtocolFromProviderFamily(provisionGroup?.provider_family))">
+              {{ formatMultiplier(provisionGroup?.effective_rate_multiplier) }}
+            </div>
           </div>
         </div>
 
@@ -1299,13 +1436,15 @@
             </div>
             <div>
               <div class="text-xs text-gray-500 dark:text-dark-400">倍率</div>
-              <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ formatMultiplier(channelScheduleSnapshot?.effective_rate_multiplier) }}</div>
+              <div class="mt-1" :class="rateMultiplierTextClass(channelScheduleSnapshot?.effective_rate_multiplier, channelProtocol(channelScheduleSnapshot))">
+                {{ formatMultiplier(channelScheduleSnapshot?.effective_rate_multiplier) }}
+              </div>
             </div>
             <div>
               <div class="text-xs text-gray-500 dark:text-dark-400">本地账号</div>
               <div class="mt-1">
-                <span class="badge" :class="channelHasLocalBinding(channelScheduleSnapshot) ? 'badge-success' : 'badge-warning'">
-                  {{ channelHasLocalBinding(channelScheduleSnapshot) ? `已绑定 #${channelScheduleSnapshot?.local_sub2api_account_id}` : '未绑定' }}
+                <span class="badge" :class="channelScheduleLocalAccountBadgeClass">
+                  {{ channelScheduleLocalAccountLabel }}
                 </span>
               </div>
             </div>
@@ -1746,7 +1885,7 @@ const suppliers = ref<Supplier[]>([])
 const supplierGroups = ref<SupplierGroup[]>([])
 const supplierKeys = ref<SupplierKey[]>([])
 const supplierCostSnapshots = ref<Record<number, SupplierCostSnapshot | undefined>>({})
-const supplierBestChannels = ref<Record<number, SupplierChannelCheckSnapshot | undefined>>({})
+const supplierBestChannels = ref<Record<number, SupplierChannelCheckSnapshot[] | undefined>>({})
 const supplierChannelChecks = ref<Record<number, SupplierChannelCheckSnapshot | undefined>>({})
 const activeProvisionJob = ref<SupplierProvisionJob | null>(null)
 const localAccounts = ref<LocalSub2APIAccount[]>([])
@@ -1776,6 +1915,7 @@ type ChannelStatusWindow = 'pulse' | '7d' | '15d' | '30d'
 type ChannelScheduleStepStatus = 'done' | 'pending' | 'warning'
 type ChannelScheduleStepIcon = 'beaker' | 'key' | 'link' | 'play' | 'check' | 'clock' | 'exclamationTriangle'
 type ScheduleListStatusFilter = '' | 'scheduled' | 'paused' | 'risky' | 'untested'
+type ChannelProtocol = 'openai' | 'claude' | 'gemini' | 'other'
 
 interface ChannelScheduleStep {
   key: string
@@ -1823,6 +1963,7 @@ const repairError = ref('')
 const lastProbe = ref<SupplierSessionProbeResult | null>(null)
 const rowLoginSupplierID = ref<number | null>(null)
 const rowChannelCheckSupplierID = ref<number | null>(null)
+const quickStatusSupplierID = ref<number | null>(null)
 const channelCheckActionKey = ref('')
 let provisionJobTimer: ReturnType<typeof window.setTimeout> | undefined
 let channelStatusAutoRefreshTimer: ReturnType<typeof window.setInterval> | undefined
@@ -1838,6 +1979,8 @@ const filters = reactive({
   runtime_status: '' as '' | SupplierRuntimeStatus,
   health_status: '' as '' | SupplierHealthStatus
 })
+const channelProtocolFilter = ref<ChannelProtocol | ''>('openai')
+const channelProtocolFilterLabel = computed(() => channelProtocolFilter.value ? channelProtocolLabel(channelProtocolFilter.value) : '协议')
 
 const pagination = reactive({
   page: 1,
@@ -1873,7 +2016,8 @@ const form = reactive({
   browser_login_password: '',
   browser_login_token: '',
   balance_yuan: 0,
-  balance_currency: 'CNY',
+  balance_currency: 'USD',
+  recharge_multiplier: 1,
   browser_login_enabled: true,
   notes: ''
 })
@@ -1922,29 +2066,32 @@ const scheduleListBindings = ref<SupplierAccount[]>([])
 const scheduleListLocalAccounts = ref<Record<number, LocalSub2APIAccount | undefined>>({})
 const scheduleListChannelChecks = ref<Record<string, SupplierChannelCheckSnapshot | undefined>>({})
 
+interface LoadBestChannelChecksOptions {
+  replace?: boolean
+}
+
 const columns: Column[] = [
   { key: 'select', label: '', class: 'w-10' },
   { key: 'name', label: '供应商', sortable: true },
-  { key: 'best_channel', label: '有效低倍率渠道' },
-  { key: 'cost', label: '成本概览', class: 'text-right' },
-  { key: 'status', label: '状态' },
+  { key: 'best_channel', label: '有效低倍率渠道', class: 'w-[312px] max-w-[312px]' },
+  { key: 'balance_cents', label: '余额 / 成本', sortable: true },
+  { key: 'status', label: '状态', class: 'w-[202px] max-w-[202px]' },
   { key: 'kind_type', label: '归类 / 类型' },
   { key: 'credential', label: '采集凭据' },
-  { key: 'session', label: '供应商会话' },
   { key: 'created_at', label: '创建时间', sortable: true },
   { key: 'actions', label: '操作', class: 'text-right' }
 ]
 
 const groupColumns: Column[] = [
-  { key: 'name', label: '分组' },
-  { key: 'provider_family', label: '平台' },
-  { key: 'rate', label: '倍率', class: 'text-right' },
-  { key: 'limits', label: '限制' },
-  { key: 'account', label: 'Key / 本地账号' },
-  { key: 'channel_check', label: '检测' },
-  { key: 'status', label: '状态' },
-  { key: 'last_seen_at', label: '最后同步', sortable: true },
-  { key: 'group_actions', label: '操作', class: 'text-right' }
+  { key: 'name', label: '分组', class: 'w-[214px] max-w-[214px]' },
+  { key: 'provider_family', label: '平台', class: 'w-[96px] max-w-[96px]' },
+  { key: 'rate', label: '倍率', class: 'w-[110px] max-w-[110px] text-right' },
+  { key: 'limits', label: '限制', class: 'w-[106px] max-w-[106px]' },
+  { key: 'account', label: 'Key / 本地账号', class: 'w-[274px] max-w-[274px]' },
+  { key: 'channel_check', label: '检测', class: 'w-[214px] max-w-[214px]' },
+  { key: 'status', label: '状态', class: 'w-[88px] max-w-[88px]' },
+  { key: 'last_seen_at', label: '最后同步', sortable: true, class: 'w-[142px] max-w-[142px]' },
+  { key: 'group_actions', label: '操作', class: 'w-[114px] max-w-[114px] text-right' }
 ]
 
 const scheduleListColumns: Column[] = [
@@ -2085,6 +2232,20 @@ const channelSchedulePrimaryIcon = computed<'key' | 'ban' | 'beaker' | 'play'>((
   return 'play'
 })
 
+const channelScheduleLocalAccountLabel = computed(() => {
+  const snapshot = channelScheduleSnapshot.value
+  if (!channelHasLocalBinding(snapshot)) return '未绑定'
+  if (snapshot?.local_account_schedulable) return `已调度 #${snapshot.local_sub2api_account_id}`
+  return `待校验 #${snapshot?.local_sub2api_account_id}`
+})
+
+const channelScheduleLocalAccountBadgeClass = computed(() => {
+  const snapshot = channelScheduleSnapshot.value
+  if (!channelHasLocalBinding(snapshot)) return 'badge-warning'
+  if (snapshot?.local_account_schedulable) return 'badge-success'
+  return 'badge-warning'
+})
+
 const channelScheduleSteps = computed<ChannelScheduleStep[]>(() => {
   const snapshot = channelScheduleSnapshot.value
   if (!snapshot) {
@@ -2115,6 +2276,7 @@ const channelScheduleSteps = computed<ChannelScheduleStep[]>(() => {
 
   const available = channelIsAvailable(snapshot)
   const hasLocalAccount = channelHasLocalBinding(snapshot)
+  const localAccountScheduled = Boolean(snapshot.local_account_schedulable)
   return [
     {
       key: 'probe',
@@ -2128,19 +2290,23 @@ const channelScheduleSteps = computed<ChannelScheduleStep[]>(() => {
     {
       key: 'local-account',
       label: '本地账号',
-      description: hasLocalAccount
-        ? `已绑定本地账号 #${snapshot.local_sub2api_account_id}。`
-        : '会先开通供应商 Key，并创建或绑定本地 Sub2API 账号。',
-      status: hasLocalAccount ? 'done' : 'pending',
+      description: localAccountScheduled
+        ? `本地账号 #${snapshot.local_sub2api_account_id} 已经参与调度。`
+        : hasLocalAccount
+          ? `检测快照记录了本地账号 #${snapshot.local_sub2api_account_id}，加入调度时会实时校验并修复绑定。`
+          : '会先开通供应商 Key，并创建或绑定本地 Sub2API 账号。',
+      status: localAccountScheduled ? 'done' : hasLocalAccount ? 'warning' : 'pending',
       icon: 'key'
     },
     {
       key: 'local-group',
       label: '本地分组绑定',
-      description: hasLocalAccount
-        ? '加入调度时自动校验并补齐本地分组绑定。'
-        : '本地账号准备完成后自动绑定到对应调度分组。',
-      status: snapshot.local_account_schedulable ? 'done' : 'pending',
+      description: localAccountScheduled
+        ? '本地账号已经绑定到对应调度分组。'
+        : hasLocalAccount
+          ? '尚未确认本地分组绑定有效，点击加入调度会重新校验。'
+          : '本地账号准备完成后自动绑定到对应调度分组。',
+      status: localAccountScheduled ? 'done' : hasLocalAccount ? 'warning' : 'pending',
       icon: 'link'
     },
     {
@@ -2199,7 +2365,7 @@ const currentBalanceAmountText = computed(() => {
   const balance = currentBalanceValue.value
   if (!balance) return currentBalanceFailureMessage.value ? '无法读取' : '-'
   if (balance.fallback) return '无法读取'
-  return formatMoney(balance.balance_cents, balance.currency || 'USD')
+  return formatBalanceMoney(balance.balance_cents, balance.currency || 'USD')
 })
 
 const currentBalanceAmountClass = computed(() => {
@@ -2346,12 +2512,43 @@ function yuanFromCents(value: number): number {
   return Number(((value || 0) / 100).toFixed(2))
 }
 
+function normalizeRechargeMultiplierForForm(value?: number | null): number {
+  const multiplier = Number(value || 0)
+  return Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
+}
+
 function formatMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
-    currency: currency || 'CNY',
+    currency: currency || 'USD',
+    currencyDisplay: 'narrowSymbol',
     minimumFractionDigits: 2
   }).format((cents || 0) / 100)
+}
+
+function formatBalanceMoney(cents: number, currency: string): string {
+  const normalized = normalizeBalanceAmountForDisplay(cents, currency)
+  return formatMoney(normalized.cents, normalized.currency)
+}
+
+function normalizeBalanceAmountForDisplay(cents: number, currency: string): { cents: number; currency: string } {
+  const normalizedCurrency = (currency || '').trim().toUpperCase()
+  if (normalizedCurrency === 'QTA') {
+    return {
+      cents: Math.round(Number(cents || 0) / 500000),
+      currency: 'USD'
+    }
+  }
+  if (normalizedCurrency === '' || normalizedCurrency === 'CNY' || normalizedCurrency.length !== 3) {
+    return {
+      cents: Number(cents || 0),
+      currency: 'USD'
+    }
+  }
+  return {
+    cents: Number(cents || 0),
+    currency: normalizedCurrency
+  }
 }
 
 function formatDateTime(value?: string | null): string {
@@ -2375,6 +2572,15 @@ function formatMultiplier(value?: number | null): string {
   return `${value.toFixed(4).replace(/\.?0+$/, '')}x`
 }
 
+function rateMultiplierTextClass(value?: number | null, protocol?: ChannelProtocol, size: 'normal' | 'compact' = 'normal'): string {
+  const sizeClass = size === 'compact' ? 'text-lg' : 'text-xl'
+  const base = `inline-flex items-center justify-end rounded-md px-1.5 py-0.5 ${sizeClass} font-extrabold leading-tight ring-1 whitespace-nowrap`
+  if (protocol === 'openai' && typeof value === 'number' && Number.isFinite(value) && value > 0.1) {
+    return `${base} bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:ring-rose-800/60`
+  }
+  return `${base} bg-green-50 text-green-800 ring-green-200 dark:bg-green-950/50 dark:text-green-300 dark:ring-green-800/60`
+}
+
 function formatLatency(value?: number | null): string {
   if (typeof value !== 'number' || value <= 0) return '-'
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}s`
@@ -2386,6 +2592,7 @@ function formatUSDLimit(value?: number | null): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: 'USD',
+    currencyDisplay: 'narrowSymbol',
     maximumFractionDigits: 2
   }).format(value)
 }
@@ -2421,6 +2628,14 @@ function groupPlatform(value?: string): GroupPlatform {
 
 function groupPlatformFromProvider(value?: string): GroupPlatform {
   return groupPlatform(value)
+}
+
+function channelProtocolFromProviderFamily(value?: string): ChannelProtocol {
+  const platform = groupPlatform(value)
+  if (platform === 'openai') return 'openai'
+  if (platform === 'anthropic') return 'claude'
+  if (platform === 'gemini') return 'gemini'
+  return 'other'
 }
 
 function providerLabel(value?: string): string {
@@ -2467,8 +2682,138 @@ function supplierCostSnapshot(supplierID: number): SupplierCostSnapshot | undefi
   return supplierCostSnapshots.value[supplierID]
 }
 
+function preferredSupplierCostSnapshots(supplierItems: Supplier[], snapshots: SupplierCostSnapshot[]): Record<number, SupplierCostSnapshot | undefined> {
+  const suppliersByID = new Map(supplierItems.map((supplier) => [supplier.id, supplier]))
+  const selected: Record<number, SupplierCostSnapshot | undefined> = {}
+  for (const snapshot of snapshots) {
+    const current = selected[snapshot.supplier_id]
+    if (!current || shouldUseCostSnapshot(snapshot, current, suppliersByID.get(snapshot.supplier_id))) {
+      selected[snapshot.supplier_id] = snapshot
+    }
+  }
+  return selected
+}
+
+function shouldUseCostSnapshot(candidate: SupplierCostSnapshot, current: SupplierCostSnapshot, supplier?: Supplier): boolean {
+  const candidateScore = costSnapshotCurrencyScore(candidate.currency, supplier)
+  const currentScore = costSnapshotCurrencyScore(current.currency, supplier)
+  if (candidateScore !== currentScore) return candidateScore > currentScore
+  return new Date(candidate.captured_at).getTime() > new Date(current.captured_at).getTime()
+}
+
+function costSnapshotCurrencyScore(currency: string, supplier?: Supplier): number {
+  const value = (currency || '').toUpperCase()
+  if (value === 'USD') return 3
+  if (supplier && value === (supplier.balance_currency || '').toUpperCase()) return 2
+  return 1
+}
+
 function supplierBestChannel(supplierID: number): SupplierChannelCheckSnapshot | undefined {
-  return supplierBestChannels.value[supplierID]
+  return supplierBestChannelVariants(supplierID)[0]
+}
+
+function supplierAllBestChannelVariants(supplierID: number): SupplierChannelCheckSnapshot[] {
+  return [...(supplierBestChannels.value[supplierID] || [])].sort(compareChannelProtocolSnapshots)
+}
+
+function supplierBestChannelVariants(supplierID: number): SupplierChannelCheckSnapshot[] {
+  const items = supplierAllBestChannelVariants(supplierID)
+  if (!channelProtocolFilter.value) return items
+  return items.filter((item) => channelProtocol(item) === channelProtocolFilter.value)
+}
+
+function supplierBestChannelTooltip(supplierID: number): string {
+  const items = supplierAllBestChannelVariants(supplierID)
+  if (items.length === 0) return ''
+  return items.map((item) => [
+    `${channelProtocolLabel(channelProtocol(item))}：${item.group_name || '-'}`,
+    `倍率 ${formatMultiplier(item.effective_rate_multiplier)}`,
+    `首 Token ${formatLatency(item.first_token_ms)}`,
+    `总耗时 ${formatLatency(item.duration_ms)}`,
+    `状态 ${channelProbeStatusLabel(item.probe_status)}`,
+    item.local_account_schedulable ? '已入调度' : '未入调度',
+    `检测时间 ${formatDateTime(item.captured_at)}`,
+    item.error_message ? `错误 ${item.error_message}` : ''
+  ].filter(Boolean).join(' · ')).join('\n')
+}
+
+function supplierAvailableChannelProtocolLabels(supplierID: number): string {
+  const protocols = new Set(supplierAllBestChannelVariants(supplierID).map((item) => channelProtocol(item)))
+  const labels = [...protocols]
+    .sort((a, b) => channelProtocolPriority(a) - channelProtocolPriority(b))
+    .map((item) => channelProtocolLabel(item))
+  return labels.join(' / ') || '-'
+}
+
+function channelProtocol(snapshot?: SupplierChannelCheckSnapshot): ChannelProtocol {
+  if (!snapshot) return 'other'
+  const provider = (snapshot.provider_family || '').trim().toLowerCase()
+  if (provider === 'openai') return 'openai'
+  if (provider === 'anthropic') return 'claude'
+  if (provider === 'gemini') return 'gemini'
+  const haystack = [
+    snapshot.provider_family,
+    snapshot.group_name,
+    snapshot.channel_name,
+    snapshot.channel_provider,
+    snapshot.primary_model,
+    snapshot.probe_model
+  ].join(' ').toLowerCase()
+  if (haystack.includes('anthropic') || haystack.includes('claude')) return 'claude'
+  if (haystack.includes('gemini') || haystack.includes('google')) return 'gemini'
+  if (haystack.includes('openai') || haystack.includes('gpt') || haystack.includes('chatgpt') || /\bo[34]\b/.test(haystack)) return 'openai'
+  return 'other'
+}
+
+function channelProtocolLabel(protocol: ChannelProtocol): string {
+  return {
+    openai: 'OpenAI',
+    claude: 'Claude',
+    gemini: 'Gemini',
+    other: '其他'
+  }[protocol]
+}
+
+function channelProtocolBadgeClass(protocol: ChannelProtocol): string {
+  return {
+    openai: 'badge-primary',
+    claude: 'badge-purple',
+    gemini: 'badge-success',
+    other: 'badge-gray'
+  }[protocol]
+}
+
+function channelProtocolPriority(protocol: ChannelProtocol): number {
+  return {
+    openai: 0,
+    claude: 1,
+    gemini: 2,
+    other: 3
+  }[protocol]
+}
+
+function compareChannelProtocolSnapshots(a: SupplierChannelCheckSnapshot, b: SupplierChannelCheckSnapshot): number {
+  const protocolDelta = channelProtocolPriority(channelProtocol(a)) - channelProtocolPriority(channelProtocol(b))
+  if (protocolDelta !== 0) return protocolDelta
+  const availableDelta = Number(channelIsAvailable(b)) - Number(channelIsAvailable(a))
+  if (availableDelta !== 0) return availableDelta
+  const schedulableDelta = Number(b.local_account_schedulable) - Number(a.local_account_schedulable)
+  if (schedulableDelta !== 0) return schedulableDelta
+  const rateDelta = Number(a.effective_rate_multiplier || 0) - Number(b.effective_rate_multiplier || 0)
+  if (rateDelta !== 0) return rateDelta
+  return new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime()
+}
+
+function upsertSupplierBestChannelSnapshot(snapshot: SupplierChannelCheckSnapshot) {
+  const existing = supplierBestChannels.value[snapshot.supplier_id] || []
+  const protocol = channelProtocol(snapshot)
+  supplierBestChannels.value = {
+    ...supplierBestChannels.value,
+    [snapshot.supplier_id]: [
+      ...existing.filter((item) => channelProtocol(item) !== protocol),
+      snapshot
+    ].sort(compareChannelProtocolSnapshots)
+  }
 }
 
 function groupChannelCheck(groupID: number): SupplierChannelCheckSnapshot | undefined {
@@ -2572,23 +2917,28 @@ function groupScheduleActionLabel(group: SupplierGroup): string {
   const check = groupChannelCheck(group.id)
   if (!groupHasLocalBinding(group)) return '先开通'
   if (check?.local_account_schedulable) return '暂停'
-  if (!channelIsAvailable(check)) return '复测'
-  return '校验加入'
+  return '加入'
 }
 
-function groupScheduleActionIcon(group: SupplierGroup): 'key' | 'ban' | 'beaker' | 'play' {
+function groupScheduleActionIcon(group: SupplierGroup): 'key' | 'ban' | 'play' {
   const check = groupChannelCheck(group.id)
   if (!groupHasLocalBinding(group)) return 'key'
   if (check?.local_account_schedulable) return 'ban'
-  if (!channelIsAvailable(check)) return 'beaker'
   return 'play'
+}
+
+function groupScheduleActionDisabled(group: SupplierGroup): boolean {
+  if (isChannelCheckActionRunning(`schedule:${group.id}`)) return true
+  const check = groupChannelCheck(group.id)
+  if (check?.local_account_schedulable) return false
+  return !groupHasLocalBinding(group) || !channelIsAvailable(check)
 }
 
 function groupScheduleActionTitle(group: SupplierGroup): string {
   const check = groupChannelCheck(group.id)
   if (!groupHasLocalBinding(group)) return '先开通第三方 Key 和本地 Sub2API 账号'
   if (check?.local_account_schedulable) return '暂停该渠道对应本地账号参与调度'
-  if (!channelIsAvailable(check)) return '该渠道当前不可用或未通过真实探测，请先复测'
+  if (!channelIsAvailable(check)) return '该渠道当前不可用或未通过真实探测，请先复测通过后再加入调度'
   return '校验本地分组绑定后，将该渠道对应本地账号加入调度'
 }
 
@@ -2603,6 +2953,29 @@ function costDeltaClass(supplierID: number): string {
   const delta = supplierBalanceDeltaCents(supplierCostSnapshot(supplierID))
   if (delta === null || delta === 0) return 'text-emerald-600 dark:text-emerald-400'
   return 'text-rose-600 dark:text-rose-400'
+}
+
+function supplierBalanceLabel(supplier: Supplier): string {
+  if (supplier.balance_cents <= 0) return '余额不足'
+  if (!supplier.balance_updated_at) return '未读取'
+  return '余额有效'
+}
+
+function supplierBalanceBadgeClass(supplier: Supplier): string {
+  if (supplier.balance_cents <= 0) return 'badge-danger'
+  if (!supplier.balance_updated_at) return 'badge-warning'
+  return 'badge-success'
+}
+
+function supplierBalanceAmountClass(supplier: Supplier): string {
+  if (supplier.balance_cents <= 0) return 'text-rose-600 dark:text-rose-300'
+  if (!supplier.balance_updated_at) return 'text-amber-700 dark:text-amber-300'
+  return 'text-gray-900 dark:text-gray-100'
+}
+
+function supplierBalanceUpdatedLabel(supplier: Supplier): string {
+  if (!supplier.balance_updated_at) return '未记录余额时间'
+  return formatDateTime(supplier.balance_updated_at)
 }
 
 function supplierSwitchStateLabel(supplier: Supplier): string {
@@ -2977,8 +3350,8 @@ async function loadSuppliers() {
       listSupplierCostSnapshots({ page: 1, page_size: 200 })
     ])
     suppliers.value = result.items
-    supplierCostSnapshots.value = Object.fromEntries(costResult.items.map((item) => [item.supplier_id, item]))
-    await loadBestChannelChecks(result.items.map((item) => item.id))
+    supplierCostSnapshots.value = preferredSupplierCostSnapshots(result.items, costResult.items)
+    await loadBestChannelChecks(result.items.map((item) => item.id), { replace: true })
     pagination.total = result.total || 0
     pagination.pages = result.pages || 0
     pagination.page = result.page || pagination.page
@@ -2992,16 +3365,32 @@ async function loadSuppliers() {
   }
 }
 
-async function loadBestChannelChecks(supplierIds: number[] = suppliers.value.map((item) => item.id)) {
+async function loadBestChannelChecks(supplierIds: number[] = suppliers.value.map((item) => item.id), options: LoadBestChannelChecksOptions = {}) {
   if (supplierIds.length === 0) {
-    supplierBestChannels.value = {}
+    if (options.replace) {
+      supplierBestChannels.value = {}
+    }
     return
   }
   try {
     const result = await listSupplierBestChannelChecks(supplierIds)
-    supplierBestChannels.value = Object.fromEntries(result.items.map((item) => [item.supplier_id, item])) as Record<number, SupplierChannelCheckSnapshot>
+    const next = options.replace ? {} : { ...supplierBestChannels.value }
+    for (const supplierID of supplierIds) {
+      delete next[supplierID]
+    }
+    for (const item of result.items) {
+      const existing = next[item.supplier_id] || []
+      const protocol = channelProtocol(item)
+      next[item.supplier_id] = [
+        ...existing.filter((snapshot) => channelProtocol(snapshot) !== protocol),
+        item
+      ].sort(compareChannelProtocolSnapshots)
+    }
+    supplierBestChannels.value = next
   } catch {
-    supplierBestChannels.value = {}
+    if (options.replace) {
+      supplierBestChannels.value = {}
+    }
   }
 }
 
@@ -3262,6 +3651,7 @@ function resetFilters() {
   filters.type = ''
   filters.runtime_status = ''
   filters.health_status = ''
+  channelProtocolFilter.value = 'openai'
   moreMenuOpen.value = false
 }
 
@@ -3280,7 +3670,8 @@ function resetForm() {
   form.browser_login_password = ''
   form.browser_login_token = ''
   form.balance_yuan = 0
-  form.balance_currency = 'CNY'
+  form.balance_currency = 'USD'
+  form.recharge_multiplier = 1
   form.browser_login_enabled = true
   form.notes = ''
 }
@@ -3300,7 +3691,8 @@ function fillForm(supplier: Supplier) {
   form.browser_login_password = ''
   form.browser_login_token = ''
   form.balance_yuan = yuanFromCents(supplier.balance_cents)
-  form.balance_currency = supplier.balance_currency || 'CNY'
+  form.balance_currency = supplier.balance_currency || 'USD'
+  form.recharge_multiplier = normalizeRechargeMultiplierForForm(supplier.recharge_multiplier)
   form.browser_login_enabled = supplier.credential.browser_login_enabled
   form.notes = supplier.notes || ''
 }
@@ -3338,7 +3730,8 @@ function buildPayload() {
     browser_login_password: form.browser_login_password || undefined,
     browser_login_token: form.browser_login_token || undefined,
     balance_cents: centsFromYuan(form.balance_yuan),
-    balance_currency: form.balance_currency || 'CNY',
+    balance_currency: form.balance_currency || 'USD',
+    recharge_multiplier: normalizeRechargeMultiplierForForm(form.recharge_multiplier),
     browser_login_enabled: form.browser_login_enabled,
     notes: form.notes || undefined
   }
@@ -3595,10 +3988,7 @@ function mergeChannelCheckSnapshots(items: SupplierChannelCheckSnapshot[]) {
   supplierChannelChecks.value = next
   const best = items.find((item) => item.recommended)
   if (best) {
-    supplierBestChannels.value = {
-      ...supplierBestChannels.value,
-      [best.supplier_id]: best
-    }
+    upsertSupplierBestChannelSnapshot(best)
   }
 }
 
@@ -3767,7 +4157,7 @@ async function handleGroupScheduleAction(group: SupplierGroup) {
     return
   }
   if (!channelIsAvailable(check)) {
-    await probeGroupChannel(group)
+    appStore.showWarning('请先复测通过，再加入本地调度')
     return
   }
   await setGroupChannelScheduling(group, true)
@@ -3806,10 +4196,7 @@ async function setBestChannelScheduling(supplier: Supplier, schedulable: boolean
     const snapshot = schedulable
       ? await enableSupplierChannelScheduling(supplier.id, current.supplier_group_id)
       : await pauseSupplierChannelScheduling(supplier.id, current.supplier_group_id)
-    supplierBestChannels.value = {
-      ...supplierBestChannels.value,
-      [supplier.id]: snapshot
-    }
+    upsertSupplierBestChannelSnapshot(snapshot)
     if (groupsSupplier.value?.id === supplier.id) {
       supplierChannelChecks.value = {
         ...supplierChannelChecks.value,
@@ -3819,6 +4206,7 @@ async function setBestChannelScheduling(supplier: Supplier, schedulable: boolean
     appStore.showSuccess(schedulable ? '已加入本地调度' : '已暂停本地调度')
   } catch (error) {
     appStore.showError((error as { message?: string }).message || (schedulable ? '加入调度失败' : '暂停调度失败'))
+    await loadBestChannelChecks([supplier.id])
   } finally {
     if (channelCheckActionKey.value === actionKey) {
       channelCheckActionKey.value = ''
@@ -3875,13 +4263,11 @@ async function probeAndScheduleBestChannel(supplier: Supplier, snapshot: Supplie
       return
     }
     const scheduled = await enableSupplierChannelScheduling(supplier.id, snapshot.supplier_group_id)
-    supplierBestChannels.value = {
-      ...supplierBestChannels.value,
-      [supplier.id]: scheduled
-    }
+    upsertSupplierBestChannelSnapshot(scheduled)
     appStore.showSuccess('渠道复测通过，已加入本地调度')
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '复测并加入调度失败')
+    await loadBestChannelChecks([supplier.id])
   } finally {
     if (channelCheckActionKey.value === actionKey) {
       channelCheckActionKey.value = ''
@@ -3935,13 +4321,11 @@ async function quickProvisionBestChannel(supplier: Supplier, snapshot: SupplierC
       return
     }
     const scheduled = await enableSupplierChannelScheduling(supplier.id, snapshot.supplier_group_id)
-    supplierBestChannels.value = {
-      ...supplierBestChannels.value,
-      [supplier.id]: scheduled
-    }
+    upsertSupplierBestChannelSnapshot(scheduled)
     appStore.showSuccess('已开通账号并加入本地调度')
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '开通账号并加入调度失败')
+    await loadBestChannelChecks([supplier.id])
   } finally {
     if (channelCheckActionKey.value === actionKey) {
       channelCheckActionKey.value = ''
@@ -4312,6 +4696,67 @@ async function submitStatus() {
   }
 }
 
+function handleQuickRuntimeStatusChange(supplier: Supplier, event: Event) {
+  const select = event.target as HTMLSelectElement
+  void quickUpdateSupplierStatus(supplier, { runtime_status: select.value as SupplierRuntimeStatus }, select)
+}
+
+function handleQuickHealthStatusChange(supplier: Supplier, event: Event) {
+  const select = event.target as HTMLSelectElement
+  void quickUpdateSupplierStatus(supplier, { health_status: select.value as SupplierHealthStatus }, select)
+}
+
+async function quickUpdateSupplierStatus(
+  supplier: Supplier,
+  patch: Partial<Pick<Supplier, 'runtime_status' | 'health_status'>>,
+  select?: HTMLSelectElement
+) {
+  const nextRuntimeStatus = patch.runtime_status || supplier.runtime_status
+  const nextHealthStatus = patch.health_status || supplier.health_status
+  if (nextRuntimeStatus === supplier.runtime_status && nextHealthStatus === supplier.health_status) return
+  if (quickStatusSupplierID.value === supplier.id) {
+    resetQuickStatusSelect(supplier, patch, select)
+    return
+  }
+
+  quickStatusSupplierID.value = supplier.id
+  try {
+    const updated = await updateSupplierStatus(supplier.id, {
+      runtime_status: nextRuntimeStatus,
+      health_status: nextHealthStatus
+    })
+    replaceSupplier(updated)
+    appStore.showSuccess('状态已更新')
+  } catch (error) {
+    resetQuickStatusSelect(supplier, patch, select)
+    appStore.showError((error as { message?: string }).message || '更新状态失败')
+  } finally {
+    if (quickStatusSupplierID.value === supplier.id) {
+      quickStatusSupplierID.value = null
+    }
+  }
+}
+
+function resetQuickStatusSelect(
+  supplier: Supplier,
+  patch: Partial<Pick<Supplier, 'runtime_status' | 'health_status'>>,
+  select?: HTMLSelectElement
+) {
+  if (!select) return
+  select.value = patch.runtime_status ? supplier.runtime_status : supplier.health_status
+}
+
+function replaceSupplier(updated: Supplier) {
+  suppliers.value = suppliers.value.map((item) => item.id === updated.id ? updated : item)
+  if (editingSupplier.value?.id === updated.id) editingSupplier.value = updated
+  if (sessionSupplier.value?.id === updated.id) sessionSupplier.value = updated
+  if (channelStatusSupplier.value?.id === updated.id) channelStatusSupplier.value = updated
+  if (groupsSupplier.value?.id === updated.id) groupsSupplier.value = updated
+  if (channelScheduleSupplier.value?.id === updated.id) channelScheduleSupplier.value = updated
+  if (deletingSupplier.value?.id === updated.id) deletingSupplier.value = updated
+  if (rowActionsMenuSupplier.value?.id === updated.id) rowActionsMenuSupplier.value = updated
+}
+
 function openDeleteDialog(supplier: Supplier) {
   closeRowActionsMenu()
   bulkDeleteMode.value = false
@@ -4486,5 +4931,13 @@ onBeforeUnmount(cleanupTimers)
 
 .row-action-menu-icon {
   @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md;
+}
+
+.status-quick-select {
+  @apply h-6 cursor-pointer appearance-none rounded-full border-0 py-0.5 pl-2.5 pr-5 text-xs font-medium outline-none ring-1 ring-transparent transition focus:ring-primary-400 disabled:cursor-wait disabled:opacity-60;
+}
+
+.status-quick-select option {
+  @apply bg-white text-gray-900 dark:bg-dark-800 dark:text-gray-100;
 }
 </style>
