@@ -991,6 +991,161 @@ export interface SchedulerStatus {
   queue: string
 }
 
+export interface SchedulerCenterStatus {
+  enabled: boolean
+  worker_status: 'running' | 'paused' | 'degraded' | 'down' | string
+  queue: string
+  interval_seconds: number
+  running_steps: number
+  queued_steps: number
+  failed_steps: number
+  overdue_plans: number
+  open_actions: number
+  last_run_at?: string | null
+  next_run_at?: string | null
+}
+
+export interface SchedulerPlan {
+  id: string
+  name: string
+  task_type: string
+  task_types?: ExtensionTaskType[] | string[]
+  status: 'enabled' | 'paused' | 'disabled' | string
+  scope: string
+  frequency_label: string
+  interval_seconds: number
+  window_minutes: number
+  misfire_policy: string
+  concurrency_policy: string
+  high_cost: boolean
+  description: string
+  last_run_at?: string | null
+  last_success_at?: string | null
+  issue_count: number
+  last_issue_at?: string | null
+  last_issue?: string
+  next_run_at?: string | null
+}
+
+export interface SchedulerPlanConfig {
+  status: 'enabled' | 'paused' | 'disabled'
+  scope: string
+  interval_seconds: number
+  window_minutes: number
+  misfire_policy: 'fire_once' | 'backfill' | 'skip' | string
+  concurrency_policy: 'forbid' | 'allow' | string
+}
+
+export interface SchedulerRunSummary {
+  id: string
+  legacy_run_id?: string
+  trigger_type: string
+  task_type: string
+  status: 'queued' | 'running' | 'succeeded' | 'partial_succeeded' | 'retryable_failed' | 'dead' | 'cancelled' | 'skipped' | string
+  requested_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  supplier_count: number
+  total_steps: number
+  succeeded_steps: number
+  failed_steps: number
+  skipped_steps: number
+  duration_ms: number
+  error_code?: string
+  error_message?: string
+}
+
+export interface SchedulerStepRecord {
+  id: number
+  run_id: string
+  supplier_id: number
+  supplier_name: string
+  task_type: ExtensionTaskType | string
+  action: string
+  status: 'queued' | 'running' | 'succeeded' | 'skipped' | 'retryable_failed' | 'manual_required' | 'dead' | 'cancelled' | string
+  schedule_key: string
+  extension_task_id?: number
+  result_count: number
+  reason?: string
+  attempts: number
+  max_attempts: number
+  next_attempt_at?: string | null
+  locked_by?: string
+  locked_until?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface SchedulerRunDetail {
+  run: SchedulerRunSummary
+  steps: SchedulerStepRecord[]
+}
+
+export interface SchedulerSupplierStatus {
+  supplier_id: number
+  supplier_name: string
+  supplier_type: string
+  runtime_status: string
+  health_status: string
+  balance_cents: number
+  balance_currency: string
+  completion_percent: number
+  session_status: string
+  balance_status: string
+  group_status: string
+  rate_status: string
+  billing_status: string
+  channel_status: string
+  schedule_status: string
+  last_error?: string
+  recommended_action?: string
+}
+
+export interface SchedulerSupplierChecklistItem {
+  key: string
+  label: string
+  status: string
+  description: string
+  evidence?: string
+  recommended_action?: string
+  last_checked_at?: string | null
+}
+
+export interface SchedulerSupplierChecklist {
+  supplier_id: number
+  supplier_name: string
+  supplier_type: string
+  completion_percent: number
+  recommended_action?: string
+  items: SchedulerSupplierChecklistItem[]
+}
+
+export interface SchedulerAction {
+  id: string
+  supplier_id?: number
+  supplier_name?: string
+  severity: 'info' | 'warning' | 'critical' | string
+  status: 'open' | 'investigating' | 'ready_to_execute' | 'executing' | 'verifying' | 'resolved' | 'ignored' | string
+  type: string
+  title: string
+  reason: string
+  recommended_operation: string
+  created_at: string
+  updated_at?: string
+  resolved_at?: string | null
+}
+
+export interface SchedulerSettings {
+  enabled: boolean
+  default_supplier_concurrency: number
+  channel_checks_enabled: boolean
+  channel_check_daily_budget_tokens: number
+  first_token_slow_threshold_ms: number
+  total_latency_slow_threshold_ms: number
+  default_enabled_task_types: string[]
+  high_cost_task_types: string[]
+}
+
 export interface ExtensionManifestInfo {
   name: string
   version: string
@@ -1399,14 +1554,105 @@ export async function getSchedulerStatus(): Promise<SchedulerStatus> {
   return data
 }
 
+export async function getSchedulerCenterStatus(): Promise<SchedulerCenterStatus> {
+  const { data } = await apiClient.get<SchedulerCenterStatus>('/admin-plus/scheduler/center/status')
+  return data
+}
+
+export async function listSchedulerPlans(): Promise<SchedulerPlan[]> {
+  const { data } = await apiClient.get<SchedulerPlan[]>('/admin-plus/scheduler/plans')
+  return data
+}
+
+export async function updateSchedulerPlanStatus(id: string, status: 'enabled' | 'paused' | 'disabled'): Promise<SchedulerPlan> {
+  const { data } = await apiClient.patch<SchedulerPlan>(`/admin-plus/scheduler/plans/${id}/status`, { status })
+  return data
+}
+
+export async function updateSchedulerPlanConfig(id: string, payload: SchedulerPlanConfig): Promise<SchedulerPlan> {
+  const { data } = await apiClient.put<SchedulerPlan>(`/admin-plus/scheduler/plans/${id}`, payload)
+  return data
+}
+
+export async function createSchedulerRun(payload: {
+  mode?: string
+  supplier_id?: number
+  task_types?: ExtensionTaskType[]
+  window_minutes?: number
+  dry_run?: boolean
+}): Promise<SchedulerRunSummary> {
+  const { data } = await apiClient.post<SchedulerRunSummary>('/admin-plus/scheduler/runs', payload)
+  return data
+}
+
+export async function listSchedulerRuns(params?: { limit?: number }): Promise<SchedulerRunSummary[]> {
+  const { data } = await apiClient.get<SchedulerRunSummary[]>('/admin-plus/scheduler/runs', { params })
+  return data
+}
+
+export async function getSchedulerRunDetail(id: string): Promise<SchedulerRunDetail> {
+  const { data } = await apiClient.get<SchedulerRunDetail>(`/admin-plus/scheduler/runs/${id}`)
+  return data
+}
+
+export async function cancelSchedulerRun(id: string): Promise<SchedulerRunSummary> {
+  const { data } = await apiClient.post<SchedulerRunSummary>(`/admin-plus/scheduler/runs/${id}/cancel`)
+  return data
+}
+
+export async function retrySchedulerRunFailedSteps(id: string): Promise<SchedulerRunDetail> {
+  const { data } = await apiClient.post<SchedulerRunDetail>(`/admin-plus/scheduler/runs/${id}/retry-failed`)
+  return data
+}
+
+export async function retrySchedulerStep(id: number): Promise<SchedulerStepRecord> {
+  const { data } = await apiClient.post<SchedulerStepRecord>(`/admin-plus/scheduler/steps/${id}/retry`)
+  return data
+}
+
+export async function cancelSchedulerStep(id: number): Promise<SchedulerStepRecord> {
+  const { data } = await apiClient.post<SchedulerStepRecord>(`/admin-plus/scheduler/steps/${id}/cancel`)
+  return data
+}
+
+export async function listSchedulerSupplierStatuses(): Promise<SchedulerSupplierStatus[]> {
+  const { data } = await apiClient.get<SchedulerSupplierStatus[]>('/admin-plus/scheduler/suppliers/status')
+  return data
+}
+
+export async function getSchedulerSupplierChecklist(id: number): Promise<SchedulerSupplierChecklist> {
+  const { data } = await apiClient.get<SchedulerSupplierChecklist>(`/admin-plus/scheduler/suppliers/${id}/checklist`)
+  return data
+}
+
+export async function listSchedulerActions(): Promise<SchedulerAction[]> {
+  const { data } = await apiClient.get<SchedulerAction[]>('/admin-plus/scheduler/actions')
+  return data
+}
+
+export async function updateSchedulerActionStatus(id: string, status: 'resolved' | 'ignored' | 'investigating'): Promise<SchedulerAction> {
+  const { data } = await apiClient.patch<SchedulerAction>(`/admin-plus/scheduler/actions/${id}/status`, { status })
+  return data
+}
+
+export async function getSchedulerSettings(): Promise<SchedulerSettings> {
+  const { data } = await apiClient.get<SchedulerSettings>('/admin-plus/scheduler/settings')
+  return data
+}
+
+export async function updateSchedulerSettings(payload: SchedulerSettings): Promise<SchedulerSettings> {
+  const { data } = await apiClient.put<SchedulerSettings>('/admin-plus/scheduler/settings', payload)
+  return data
+}
+
 export async function runScheduler(payload: {
   mode?: string
   supplier_id?: number
   task_types?: ExtensionTaskType[]
   window_minutes?: number
   dry_run?: boolean
-}): Promise<SchedulerRun> {
-  const { data } = await apiClient.post<SchedulerRun>('/admin-plus/scheduler/run', payload)
+}): Promise<SchedulerRun | SchedulerRunSummary> {
+  const { data } = await apiClient.post<SchedulerRun | SchedulerRunSummary>('/admin-plus/scheduler/run', payload)
   return data
 }
 
@@ -1534,6 +1780,23 @@ export const adminPlusAPI = {
   extensionPackageURL,
   downloadExtensionPackage,
   getSchedulerStatus,
+  getSchedulerCenterStatus,
+  listSchedulerPlans,
+  updateSchedulerPlanConfig,
+  updateSchedulerPlanStatus,
+  createSchedulerRun,
+  listSchedulerRuns,
+  getSchedulerRunDetail,
+  cancelSchedulerRun,
+  retrySchedulerRunFailedSteps,
+  retrySchedulerStep,
+  cancelSchedulerStep,
+  listSchedulerSupplierStatuses,
+  getSchedulerSupplierChecklist,
+  listSchedulerActions,
+  updateSchedulerActionStatus,
+  getSchedulerSettings,
+  updateSchedulerSettings,
   runScheduler,
   claimExtensionTask,
   getExtensionTaskBrowserCredential,

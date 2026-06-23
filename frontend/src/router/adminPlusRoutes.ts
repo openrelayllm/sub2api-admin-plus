@@ -68,10 +68,14 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     meta: adminMeta('账号/Key 绑定')
   },
   {
+    path: '/admin/scheduler',
+    name: 'AdminPlusSchedulerCenter',
+    component: () => import('@/views/admin/scheduler/SchedulerCenterView.vue'),
+    meta: adminMeta('调度中心')
+  },
+  {
     path: '/admin/collection/scheduler',
-    name: 'AdminPlusCollectionScheduler',
-    component: () => import('@/views/admin/operations/SchedulerView.vue'),
-    meta: adminMeta('任务调度')
+    redirect: redirectWithQuery('/admin/scheduler')
   },
   {
     path: '/admin/collection/plugin-tasks',
@@ -171,7 +175,7 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
   },
   {
     path: '/admin/operations/scheduler',
-    redirect: redirectWithQuery('/admin/collection/scheduler')
+    redirect: redirectWithQuery('/admin/scheduler')
   },
   {
     path: '/admin/operations/extension-tasks',

@@ -140,6 +140,35 @@ func TestServiceListBestReturnsBestChannelPerProtocol(t *testing.T) {
 	require.Equal(t, "gemini", snapshotProtocolKey(items[2]))
 }
 
+func TestServiceListBestPrefersCurrentLowestCandidate(t *testing.T) {
+	repo := newFakeChannelCheckRepository()
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	repo.candidates = []*Candidate{
+		fakeCandidate(7, 101, 0.04, 201, false),
+		fakeCandidate(7, 102, 0.1, 202, true),
+	}
+	staleLowest := fakeSnapshot(1, 7, 101, "openai", "limited", 0.04, false, now)
+	staleLowest.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusNoLocalAccount
+	staleLowest.ErrorClass = "local_account_missing"
+	staleLowest.ErrorMessage = "local Sub2API account binding is missing"
+	repo.snapshots = []*adminplusdomain.SupplierChannelCheckSnapshot{
+		staleLowest,
+		fakeSnapshot(2, 7, 102, "openai", "plus", 0.1, true, now.Add(time.Second)),
+	}
+	svc := NewService(repo, nil, nil, nil)
+	svc.now = func() time.Time { return now.Add(2 * time.Second) }
+
+	items, err := svc.ListBest(context.Background(), []int64{7})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(101), items[0].SupplierGroupID)
+	require.Equal(t, 0.04, items[0].EffectiveRateMultiplier)
+	require.Equal(t, int64(201), items[0].LocalSub2APIAccountID)
+	require.Equal(t, adminplusdomain.SupplierChannelProbeStatusUntested, items[0].ProbeStatus)
+	require.Empty(t, items[0].ErrorMessage)
+}
+
 type fakeChannelCheckRepository struct {
 	nextID           int64
 	candidates       []*Candidate

@@ -288,11 +288,11 @@ const adminNavItems = computed((): NavItem[] => [
     ]
   },
   {
-    path: '/admin/collection/scheduler',
-    label: '采集监控',
+    path: '/admin/scheduler',
+    label: '调度中心',
     icon: OperationsIcon,
     children: [
-      { path: '/admin/collection/scheduler', label: '任务调度', icon: OperationsIcon },
+      { path: '/admin/scheduler', label: '工作台', icon: OperationsIcon },
       { path: '/admin/collection/sessions', label: '采集会话', icon: OperationsIcon }
     ]
   },

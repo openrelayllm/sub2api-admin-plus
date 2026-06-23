@@ -61,13 +61,14 @@ Admin Plus 既是第三方供应商的下游用户，也是本地 Sub2API 服务
 6. 充值订单是资金进入，兑换记录是额度或权益进入，使用记录是成本或收入消耗明细，余额快照是校验点。
 7. Admin Plus 供应商 `/usage` 采集统一命名为 `usage-costs`，不能继续用旧 `billing` 语义承载完整财务成本。
 8. Chrome 插件只做浏览器会话兜底，不解析订单、兑换、usage 并直接上传业务事实。
-9. 成本同步必须异步化：HTTP 请求只创建任务并返回 `202 Accepted + job_id`，真实采集由 Admin Plus Worker 执行。
-10. 异步对账复用 `supplier_provision_jobs`、`supplier_provision_steps`、`admin_plus_outbox_events` 和 Worker 底座；当前表名保留兼容，语义收口为 Admin Plus 运营作业底座，不新增第二套成本任务表。
+9. 成本同步必须接入调度中心：HTTP 请求只创建 scheduler run 并返回 `202 Accepted + run_id`，真实采集由 Admin Plus Scheduler Worker 执行。
+10. 异步对账复用 `docs/roadmap/scheduler/README.md` 定义的 plan/run/step/attempt/outbox 模型；账务事实仍写入 billing/accounts 领域表，调度中心只负责触发、运行、重试和审计。
 
 治理分类：
 
-- `current`：`/admin/finance/costs`、`/admin/finance/usage-costs`、`/admin/finance/local-usage`；`admin_plus_supplier_funding_transactions`、`admin_plus_supplier_entitlement_transactions`、`admin_plus_supplier_usage_cost_lines`、`admin_plus_supplier_cost_ledger_entries`、`admin_plus_supplier_cost_snapshots`；后端 `costs` 和 `usagecosts` 服务；`supplier_provision_jobs`、`supplier_provision_steps`、`admin_plus_outbox_events`、`processed_events`、`supplier_provision_attempts` 作为统一 Admin Plus 异步作业底座。
-- `compat`：`POST /api/v1/admin-plus/suppliers/:id/costs/sync` 保留路径但只提交 `sync_supplier_costs` 任务，不再在请求线程内执行第三方采集。
+- `current`：`/admin/finance/costs`、`/admin/finance/usage-costs`、`/admin/finance/local-usage`；`admin_plus_supplier_funding_transactions`、`admin_plus_supplier_entitlement_transactions`、`admin_plus_supplier_usage_cost_lines`、`admin_plus_supplier_cost_ledger_entries`、`admin_plus_supplier_cost_snapshots`；后端 `costs` 和 `usagecosts` 服务。
+- `current-target`：成本同步、账单补采、usage 补采和成本对账由调度中心 plan/run/step/attempt/outbox 触发和审计，详见 `docs/roadmap/scheduler/README.md`。
+- `compat`：`POST /api/v1/admin-plus/suppliers/:id/costs/sync` 保留路径但只提交 scheduler run，不再在请求线程内执行第三方采集。
 - `compat`：`/admin/operations/billing` 仅重定向到 `/admin/finance/costs`，不承载独立业务逻辑或独立存储。
 - `deprecated`：只用供应商 `/usage` 推导完整成本；插件解析订单、兑换、usage 并直接上传财务事实；HTTP 请求线程内串行调用供应商订单、兑换、usage 和余额接口。
 - `dead`：`/admin/finance/billing`、`/admin/finance/reconciliation`、`/api/v1/admin-plus/reconciliation/run`、旧后端 `billing/reconciliation` 应用和 handler、旧前端 `BillingReconciliationView`；直接修改历史账务事实修正余额。
@@ -130,8 +131,8 @@ Admin Plus 既是第三方供应商的下游用户，也是本地 Sub2API 服务
 1. 管理员进入“财务 / 成本对账”。
 2. 选择供应商和日期范围。
 3. 点击“同步成本”。
-4. 后端创建 `sync_supplier_costs` 异步任务，写入 outbox，并立即返回 `job_id`。
-5. 前端轮询任务状态，展示排队、运行、成功或失败。
+4. 后端通过调度中心创建 `supplier.costs.reconcile` 或 `supplier.funding_orders.sync` / `supplier.redeem_orders.sync` / `supplier.usage_costs.sync` run，写入 outbox，并立即返回 `run_id`。
+5. 前端轮询 scheduler run/step 状态，展示排队、运行、成功或失败。
 6. Worker 读取充值订单、兑换记录、usage 使用记录和余额快照。
 7. Worker 归一化外部事实并幂等写入事实表。
 8. Worker 生成成本台账分录并刷新供应商成本快照。
@@ -329,9 +330,9 @@ Provider Adapter 不应暴露 Sub2API 专属业务名，接口按账务事实分
 
 ```mermaid
 flowchart TD
-  A[管理员触发同步成本] --> A1[API 创建 sync_supplier_costs job 和 outbox]
-  A1 --> A2[前端获得 job_id 并轮询]
-  A1 --> W[Worker claim job]
+  A[管理员触发同步成本] --> A1[API 创建 scheduler run/steps 和 outbox]
+  A1 --> A2[前端获得 run_id 并轮询]
+  A1 --> W[Scheduler Worker claim step]
   W --> B{供应商会话是否可用}
   B -- 缺失/过期 --> B1[任务标记 session_required]
   B -- 解密失败 --> B2[任务标记 SUPPLIER_SESSION_DECRYPT_FAILED]
@@ -350,7 +351,7 @@ flowchart TD
   K --> L{预期余额与实际余额是否一致}
   L -- 是 --> M[标记已对平]
   L -- 否 --> N[生成 balance_delta 异常]
-  M --> O[任务 succeeded]
+  M --> O[run succeeded]
   N --> O
   O --> P[前端刷新成本数据]
 ```
@@ -418,18 +419,18 @@ sequenceDiagram
   participant Admin as 管理员
   participant UI as Admin Plus 前端
   participant API as Admin Plus API
-  participant Jobs as Admin Plus Jobs
-  participant Worker as Admin Plus Worker
+  participant Scheduler as Scheduler Service
+  participant Worker as Scheduler Worker
   participant Adapter as Provider Adapter
   participant Supplier as 上游供应商
   participant Ledger as 成本台账
 
   Admin->>UI: 点击同步成本
   UI->>API: POST /suppliers/:id/costs/sync
-  API->>Jobs: 创建 sync_supplier_costs job + outbox
-  API-->>UI: 202 Accepted + job_id
-  UI->>API: GET /supplier-provision-jobs/:job_id
-  Jobs->>Worker: Worker claim job
+  API->>Scheduler: 创建 supplier.costs.reconcile run + steps + outbox
+  API-->>UI: 202 Accepted + run_id
+  UI->>API: GET /scheduler/runs/:run_id
+  Scheduler->>Worker: Worker claim steps
   Worker->>Adapter: ProbeFinanceCapabilities
   Adapter->>Supplier: 非破坏性能力探测
   Supplier-->>Adapter: 能力矩阵
@@ -447,9 +448,9 @@ sequenceDiagram
   Supplier-->>Adapter: 余额事实
   Worker->>Ledger: 幂等写入事实并追加台账
   Ledger-->>Worker: 快照和异常
-  Worker->>Jobs: job succeeded / retryable_failed / dead
-  UI->>API: GET /supplier-provision-jobs/:job_id
-  API-->>UI: 任务结果
+  Worker->>Scheduler: run succeeded / partial_succeeded / retryable_failed / dead
+  UI->>API: GET /scheduler/runs/:run_id
+  API-->>UI: run/step 结果
   UI->>API: GET 成本快照/交易/台账
 ```
 
@@ -780,7 +781,7 @@ P2 后续下游收入总览字段：
 
 ```http
 POST /api/v1/admin-plus/suppliers/:id/costs/sync
-GET  /api/v1/admin-plus/supplier-provision-jobs/:job_id
+GET  /api/v1/admin-plus/scheduler/runs/:run_id
 GET  /api/v1/admin-plus/costs/suppliers?page=1&page_size=50
 GET  /api/v1/admin-plus/suppliers/:id/costs/summary
 GET  /api/v1/admin-plus/suppliers/:id/funding-transactions?page=1&page_size=50
@@ -788,7 +789,7 @@ GET  /api/v1/admin-plus/suppliers/:id/entitlement-transactions?page=1&page_size=
 GET  /api/v1/admin-plus/suppliers/:id/cost-ledger?page=1&page_size=50
 ```
 
-`POST /suppliers/:id/costs/sync` 是兼容路径，语义已经从“同步执行”收口为“提交异步任务”。请求线程只做鉴权、参数校验、幂等键处理和任务创建，不直接访问第三方供应商接口。
+`POST /suppliers/:id/costs/sync` 是兼容路径，语义从“同步执行”收口为“提交调度中心 run”。请求线程只做鉴权、参数校验、幂等键处理和 run 创建，不直接访问第三方供应商接口。
 
 ### 16.2 P1 已实现 API：供应商 usage 消耗
 
@@ -815,21 +816,21 @@ GET  /api/v1/admin-plus/usage-costs/lines?supplier_id=123&page=1&page_size=50
 
 ```json
 {
-  "job_id": 913,
+  "run_id": 913,
   "status": "queued",
-  "job_type": "sync_supplier_costs",
+  "task_type": "supplier.costs.reconcile",
   "supplier_id": 123,
-  "poll_url": "/api/v1/admin-plus/supplier-provision-jobs/913",
-  "mode": "async_job"
+  "poll_url": "/api/v1/admin-plus/scheduler/runs/913",
+  "mode": "scheduler_run"
 }
 ```
 
-任务完成后的 `GET /supplier-provision-jobs/:job_id` 响应在 `result_snapshot` 中保存同步摘要：
+任务完成后的 `GET /scheduler/runs/:run_id` 响应在 `result_snapshot` 中保存同步摘要：
 
 ```json
 {
   "id": 913,
-  "job_type": "sync_supplier_costs",
+  "task_type": "supplier.costs.reconcile",
   "status": "succeeded",
   "supplier_id": 123,
   "result_snapshot": {
@@ -1270,11 +1271,11 @@ time_bucket + model + token_count + api_key_fingerprint + amount_cents
 | 用例 | 操作 | 预期 |
 |------|------|------|
 | 空数据 | 打开成本对账页 | 显示空态和同步入口 |
-| 提交同步 | 点击同步成本 | 返回 `job_id`，显示任务排队/运行状态，禁用重复提交 |
-| 同步中 | Worker 正在执行任务 | 前端轮询 `GET /supplier-provision-jobs/:job_id` 并展示进度 |
-| 同步成功 | job 进入 `succeeded` | 自动刷新成本快照、充值订单、兑换记录和台账 |
-| 同步失败 | job 进入 `retryable_failed`/`dead` | 展示任务错误码和错误信息，不展示假成功数据 |
-| 会话解密失败 | 使用错误或自动生成的加密密钥启动 | job 记录 `SUPPLIER_SESSION_DECRYPT_FAILED`，提示重新直登，不吞成泛化 `internal error` |
+| 提交同步 | 点击同步成本 | 返回 `run_id`，显示任务排队/运行状态，禁用重复提交 |
+| 同步中 | Worker 正在执行任务 | 前端轮询 `GET /scheduler/runs/:run_id` 并展示进度 |
+| 同步成功 | run 进入 `succeeded` | 自动刷新成本快照、充值订单、兑换记录和台账 |
+| 同步失败 | run 进入 `retryable_failed`/`dead` | 展示任务错误码和错误信息，不展示假成功数据 |
+| 会话解密失败 | 使用错误或自动生成的加密密钥启动 | step 记录 `SUPPLIER_SESSION_DECRYPT_FAILED`，提示重新直登，不吞成泛化 `internal error` |
 | 部分成功 | usage 成功，订单失败 | 显示部分成功和失败能力 |
 | 成本明细切换 | 切换充值、兑换、台账页签 | 页面只展示上游成本事实，不混入下游收入 |
 | 旧页面 | 打开 `/admin/operations/billing` | 重定向到成本对账，不宣称旧账单对账 |
@@ -1298,9 +1299,9 @@ time_bucket + model + token_count + api_key_fingerprint + amount_cents
 11. `/admin/operations/billing` 兼容重定向到 `/admin/finance/costs`，不能继续宣称旧账单对账。
 12. `/admin/finance/billing` 和 `/admin/finance/reconciliation` 不再作为当前路由注册。
 13. 点击同一财务分组二级导航不关闭展开状态，点击其他一级、其他类型二级或主动关闭才收起。
-14. `POST /suppliers/:id/costs/sync` 返回 `202 Accepted + job_id`，不在请求线程中调用第三方供应商接口。
-15. `sync_supplier_costs` 任务由统一 Admin Plus Worker 执行，成功后 `result_snapshot` 包含 funding、entitlement、usage、ledger 和 snapshot 摘要。
-16. 成本页通过任务轮询驱动刷新，不依赖同步接口直接返回财务事实。
+14. `POST /suppliers/:id/costs/sync` 返回 `202 Accepted + run_id`，不在请求线程中调用第三方供应商接口。
+15. `supplier.costs.reconcile` run 由 Scheduler Worker 执行，成功后 `result_snapshot` 包含 funding、entitlement、usage、ledger 和 snapshot 摘要。
+16. 成本页通过 scheduler run 轮询驱动刷新，不依赖同步接口直接返回财务事实。
 
 ### 23.2 P2-P4 后续验收标准
 
@@ -1330,14 +1331,14 @@ time_bucket + model + token_count + api_key_fingerprint + amount_cents
 - 删除 `/admin/finance/billing` 和 `/admin/finance/reconciliation` 当前路由；只保留 `/admin/operations/billing` 到成本对账的兼容重定向。
 - 更新 Sidebar 二级导航展开行为。
 
-### P1.1：成本同步异步化（当前实施）
+### P1.1：成本同步接入调度中心（当前实施）
 
-- 复用 `supplier_provision_jobs`、`supplier_provision_steps`、`admin_plus_outbox_events` 和 Worker，新增 `sync_supplier_costs` 任务类型。
-- `POST /suppliers/:id/costs/sync` 只创建任务并返回 `202 Accepted + job_id`。
-- Worker 调用现有 `costs.Service.Sync` 完成只读采集、幂等落库、台账生成和快照刷新。
-- 成本页轮询 `GET /supplier-provision-jobs/:job_id`，任务完成后刷新成本数据。
-- 保留现有成本查询接口作为财务事实查询入口，任务 `result_snapshot` 只保存运营摘要。
-- 不新增独立成本任务表，不让同步请求线程继续承载第三方长链路。
+- 成本同步、账单补采和 usage 补采迁入调度中心 plan/run/step/attempt/outbox 模型。
+- `POST /suppliers/:id/costs/sync` 作为兼容入口，只创建 scheduler run 并返回 `202 Accepted + run_id`。
+- Scheduler Worker 调用现有 `costs.Service.Sync` 完成只读采集、幂等落库、台账生成和快照刷新。
+- 成本页轮询 `GET /scheduler/runs/:run_id`，任务完成后刷新成本数据。
+- 保留现有成本查询接口作为财务事实查询入口，run `result_snapshot` 只保存运营摘要。
+- 不让同步请求线程继续承载第三方长链路。
 
 ### P2：下游收入 MVP（后续）
 

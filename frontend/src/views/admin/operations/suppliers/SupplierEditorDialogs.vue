@@ -65,7 +65,7 @@
       </label>
       <label class="block">
         <span class="input-label">充值倍率</span>
-        <input v-model.number="form.recharge_multiplier" type="number" min="0.000001" step="0.01" class="input" placeholder="1" />
+        <input v-model.number="form.recharge_multiplier" type="number" min="0.000001" step="any" class="input" placeholder="1" />
       </label>
     </div>
 

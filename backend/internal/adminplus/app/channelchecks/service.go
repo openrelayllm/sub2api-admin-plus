@@ -223,15 +223,34 @@ func (s *Service) ListBest(ctx context.Context, supplierIDs []int64) ([]*adminpl
 		return nil, err
 	}
 	bySupplier := make(map[int64][]*adminplusdomain.SupplierChannelCheckSnapshot)
+	latestByGroup := make(map[supplierGroupKey]*adminplusdomain.SupplierChannelCheckSnapshot)
 	for _, snapshot := range snapshots {
 		if snapshot == nil {
 			continue
 		}
 		bySupplier[snapshot.SupplierID] = append(bySupplier[snapshot.SupplierID], snapshot)
+		key := supplierGroupKey{supplierID: snapshot.SupplierID, groupID: snapshot.SupplierGroupID}
+		if current := latestByGroup[key]; current == nil || snapshotNewer(snapshot, current) {
+			latestByGroup[key] = snapshot
+		}
 	}
-	out := make([]*adminplusdomain.SupplierChannelCheckSnapshot, 0, len(bySupplier))
-	for _, items := range bySupplier {
-		for _, protocolItems := range groupSnapshotsByProtocol(items) {
+	out := make([]*adminplusdomain.SupplierChannelCheckSnapshot, 0, len(normalized))
+	now := s.now().UTC()
+	for _, supplierID := range normalized {
+		candidates, err := s.repo.ListCandidates(ctx, supplierID)
+		if err != nil {
+			return nil, err
+		}
+		candidates = filterCandidates(candidates, 0)
+		if len(candidates) > 0 {
+			for _, protocolItems := range groupSnapshotsByProtocol(projectCandidateSnapshots(candidates, latestByGroup, now)) {
+				if selected := chooseLowestCurrent(protocolItems); selected != nil {
+					out = append(out, selected)
+				}
+			}
+			continue
+		}
+		for _, protocolItems := range groupSnapshotsByProtocol(bySupplier[supplierID]) {
 			if selected := chooseBestOrLatest(protocolItems); selected != nil {
 				out = append(out, selected)
 			}
@@ -252,6 +271,11 @@ func (s *Service) ListBest(ctx context.Context, supplierIDs []int64) ([]*adminpl
 		return out[i].ID < out[j].ID
 	})
 	return out, nil
+}
+
+type supplierGroupKey struct {
+	supplierID int64
+	groupID    int64
 }
 
 func (s *Service) SetScheduling(ctx context.Context, supplierID int64, supplierGroupID int64, schedulable bool) (*adminplusdomain.SupplierChannelCheckSnapshot, error) {
@@ -527,6 +551,62 @@ func chooseBestOrLatest(items []*adminplusdomain.SupplierChannelCheckSnapshot) *
 	return items[0]
 }
 
+func chooseLowestCurrent(items []*adminplusdomain.SupplierChannelCheckSnapshot) *adminplusdomain.SupplierChannelCheckSnapshot {
+	if len(items) == 0 {
+		return nil
+	}
+	sortSnapshotsForBest(items)
+	return items[0]
+}
+
+func projectCandidateSnapshots(candidates []*Candidate, latestByGroup map[supplierGroupKey]*adminplusdomain.SupplierChannelCheckSnapshot, capturedAt time.Time) []*adminplusdomain.SupplierChannelCheckSnapshot {
+	out := make([]*adminplusdomain.SupplierChannelCheckSnapshot, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		key := supplierGroupKey{supplierID: candidate.SupplierID, groupID: candidate.SupplierGroupID}
+		out = append(out, projectCandidateSnapshot(candidate, latestByGroup[key], capturedAt))
+	}
+	return out
+}
+
+func projectCandidateSnapshot(candidate *Candidate, latest *adminplusdomain.SupplierChannelCheckSnapshot, capturedAt time.Time) *adminplusdomain.SupplierChannelCheckSnapshot {
+	var snapshot adminplusdomain.SupplierChannelCheckSnapshot
+	if latest != nil {
+		snapshot = *latest
+	} else {
+		snapshot = *baseSnapshot(candidate, nil, capturedAt)
+		snapshot.CreatedAt = capturedAt
+	}
+	snapshot.SupplierID = candidate.SupplierID
+	snapshot.SupplierGroupID = candidate.SupplierGroupID
+	snapshot.SupplierKeyID = candidate.SupplierKeyID
+	snapshot.SupplierAccountID = candidate.SupplierAccountID
+	snapshot.LocalSub2APIAccountID = candidate.LocalSub2APIAccountID
+	snapshot.ExternalGroupID = candidate.ExternalGroupID
+	snapshot.GroupName = candidate.GroupName
+	snapshot.ProviderFamily = candidate.ProviderFamily
+	snapshot.EffectiveRateMultiplier = candidate.EffectiveRateMultiplier
+	snapshot.LocalAccountSchedulable = candidate.LocalAccountSchedulable
+	if latest == nil {
+		snapshot.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusUntested
+		if candidate.SupplierAccountID <= 0 || candidate.LocalSub2APIAccountID <= 0 {
+			snapshot.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusNoLocalAccount
+			snapshot.ErrorClass = "local_account_missing"
+			snapshot.ErrorMessage = "local Sub2API account binding is missing"
+		}
+		return &snapshot
+	}
+	if latest.ProbeStatus == adminplusdomain.SupplierChannelProbeStatusNoLocalAccount && candidate.SupplierAccountID > 0 && candidate.LocalSub2APIAccountID > 0 {
+		snapshot.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusUntested
+		snapshot.Recommended = false
+		snapshot.ErrorClass = ""
+		snapshot.ErrorMessage = ""
+	}
+	return &snapshot
+}
+
 func groupSnapshotsByProtocol(items []*adminplusdomain.SupplierChannelCheckSnapshot) map[string][]*adminplusdomain.SupplierChannelCheckSnapshot {
 	out := make(map[string][]*adminplusdomain.SupplierChannelCheckSnapshot)
 	for _, item := range items {
@@ -542,6 +622,14 @@ func groupSnapshotsByProtocol(items []*adminplusdomain.SupplierChannelCheckSnaps
 func snapshotProtocolKey(item *adminplusdomain.SupplierChannelCheckSnapshot) string {
 	if item == nil {
 		return "other"
+	}
+	switch strings.ToLower(strings.TrimSpace(item.ProviderFamily)) {
+	case "openai":
+		return "openai"
+	case "anthropic":
+		return "claude"
+	case "gemini":
+		return "gemini"
 	}
 	haystack := strings.ToLower(strings.Join([]string{
 		item.ProviderFamily,
@@ -594,6 +682,16 @@ func sortSnapshotsForBest(items []*adminplusdomain.SupplierChannelCheckSnapshot)
 		}
 		return items[i].ID < items[j].ID
 	})
+}
+
+func snapshotNewer(candidate *adminplusdomain.SupplierChannelCheckSnapshot, current *adminplusdomain.SupplierChannelCheckSnapshot) bool {
+	if current == nil {
+		return true
+	}
+	if !candidate.CapturedAt.Equal(current.CapturedAt) {
+		return candidate.CapturedAt.After(current.CapturedAt)
+	}
+	return candidate.ID > current.ID
 }
 
 func normalizeSupplierIDs(ids []int64) []int64 {

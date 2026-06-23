@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,6 +112,21 @@ func TestMigrationChecksumCompatibilityRules_CoverEditedUpgradeCompatibilityMigr
 		require.NotEmpty(t, rule.fileChecksum)
 		require.NotEmpty(t, rule.acceptedDBChecksum)
 	}
+}
+
+func TestMigrationChecksumCompatibilityRules_CoverSchedulerCenterIncrementalSplit(t *testing.T) {
+	const (
+		name             = "175_admin_plus_scheduler_center.sql"
+		legacyDBChecksum = "ffd2356073bb30037b3bfde6675c6d72b3a35ad10a0ae6961346f2118d834a20"
+	)
+
+	content, err := fs.ReadFile(migrations.FS, name)
+	require.NoError(t, err)
+
+	currentChecksum := migrationChecksum(string(content))
+	require.Equal(t, "53ea16d8a622175df1d19ac85a42c8c567ad600bcfe572d83227b8e50f6c86c5", currentChecksum)
+	require.True(t, isMigrationChecksumCompatible(name, legacyDBChecksum, currentChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, "unexpected-db-checksum", currentChecksum))
 }
 
 func TestEnsureAtlasBaselineAligned(t *testing.T) {

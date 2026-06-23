@@ -2,7 +2,10 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -15,10 +18,13 @@ import (
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
+	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	usagecostsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/usagecosts"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 const (
@@ -41,6 +47,7 @@ type RunInput struct {
 }
 
 type Service struct {
+	repo               Repository
 	supplierService    *suppliersapp.Service
 	extensionService   *extensionapp.Service
 	groupSyncer        GroupSyncer
@@ -50,7 +57,37 @@ type Service struct {
 	healthSyncer       HealthSyncer
 	usageCostSyncer    UsageCostSyncer
 	channelChecker     ChannelChecker
+	sessionRefresher   SessionRefresher
 	now                func() time.Time
+	recentRunsMu       sync.Mutex
+	recentRuns         []adminplusdomain.SchedulerRunSummary
+}
+
+type Repository interface {
+	SaveRun(ctx context.Context, run adminplusdomain.SchedulerRunSummary, steps []adminplusdomain.ScheduledTask) error
+	ListRuns(ctx context.Context, limit int) ([]adminplusdomain.SchedulerRunSummary, error)
+	GetRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerRunSummary, error)
+	ListSteps(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerStepRecord, error)
+	RetryStep(ctx context.Context, stepID int64, retryAt time.Time) (*adminplusdomain.SchedulerStepRecord, error)
+	CancelStep(ctx context.Context, stepID int64, cancelledAt time.Time) (*adminplusdomain.SchedulerStepRecord, error)
+	CancelRun(ctx context.Context, runID string, cancelledAt time.Time) (*adminplusdomain.SchedulerRunSummary, error)
+	RetryFailedSteps(ctx context.Context, runID string, retryAt time.Time) (int, error)
+	SavePlans(ctx context.Context, plans []adminplusdomain.SchedulerPlan) error
+	ListPlans(ctx context.Context) ([]adminplusdomain.SchedulerPlan, error)
+	UpdatePlanStatus(ctx context.Context, planID, status string) (*adminplusdomain.SchedulerPlan, error)
+	UpdatePlanConfig(ctx context.Context, planID string, config adminplusdomain.SchedulerPlanConfig) (*adminplusdomain.SchedulerPlan, error)
+	PlanStats(ctx context.Context, plans []adminplusdomain.SchedulerPlan) (map[string]adminplusdomain.SchedulerPlanStats, error)
+	SupplierLatestSteps(ctx context.Context) (map[int64]map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord, error)
+	ClaimDuePlan(ctx context.Context, now time.Time) (*adminplusdomain.SchedulerPlan, error)
+	SaveSettings(ctx context.Context, settings adminplusdomain.SchedulerSettings) error
+	LoadSettings(ctx context.Context) (*adminplusdomain.SchedulerSettings, error)
+	UpsertActions(ctx context.Context, actions []adminplusdomain.SchedulerAction) error
+	ListActions(ctx context.Context) ([]adminplusdomain.SchedulerAction, error)
+	UpdateActionStatus(ctx context.Context, actionID, status string, resolvedAt *time.Time) (*adminplusdomain.SchedulerAction, error)
+	StepStats(ctx context.Context) (running int, queued int, failed int, err error)
+	ClaimStep(ctx context.Context, workerID string, lease time.Duration) (*adminplusdomain.SchedulerStepRecord, error)
+	CompleteStep(ctx context.Context, stepID int64, status string, resultCount int, reason string, finishedAt time.Time) error
+	RefreshRunStatus(ctx context.Context, runID string, finishedAt time.Time) error
 }
 
 type GroupSyncer interface {
@@ -81,6 +118,40 @@ type ChannelChecker interface {
 	Check(ctx context.Context, in channelchecksapp.CheckInput) (*channelchecksapp.CheckResult, error)
 }
 
+type SessionRefresher interface {
+	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
+	Login(ctx context.Context, in sessionsapp.LoginInput) (*sessionsapp.LoginResult, error)
+}
+
+type stepFailureReason struct {
+	Stage        string `json:"stage"`
+	Code         string `json:"code,omitempty"`
+	Message      string `json:"message,omitempty"`
+	Action       string `json:"action,omitempty"`
+	Outcome      string `json:"outcome,omitempty"`
+	LoginCode    string `json:"login_code,omitempty"`
+	LoginMessage string `json:"login_message,omitempty"`
+	Suggestion   string `json:"suggestion,omitempty"`
+	RawError     string `json:"raw_error,omitempty"`
+}
+
+func ProvideService(
+	repo Repository,
+	supplierService *suppliersapp.Service,
+	extensionService *extensionapp.Service,
+	groupSyncer GroupSyncer,
+	rateSyncer RateSyncer,
+	balanceSyncer BalanceSyncer,
+	announcementSyncer AnnouncementSyncer,
+	healthSyncer HealthSyncer,
+	usageCostSyncer UsageCostSyncer,
+	channelChecker ChannelChecker,
+	sessionRefresher SessionRefresher,
+) *Service {
+	return NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer, channelChecker).
+		WithSessionRefresher(sessionRefresher)
+}
+
 func NewService(supplierService *suppliersapp.Service, extensionService *extensionapp.Service) *Service {
 	return &Service{
 		supplierService:  supplierService,
@@ -108,6 +179,30 @@ func NewServiceWithDependencies(
 	service.healthSyncer = healthSyncer
 	service.usageCostSyncer = usageCostSyncer
 	service.channelChecker = channelChecker
+	return service
+}
+
+func (s *Service) WithSessionRefresher(refresher SessionRefresher) *Service {
+	if s != nil {
+		s.sessionRefresher = refresher
+	}
+	return s
+}
+
+func NewServiceWithDependenciesAndRepository(
+	repo Repository,
+	supplierService *suppliersapp.Service,
+	extensionService *extensionapp.Service,
+	groupSyncer GroupSyncer,
+	rateSyncer RateSyncer,
+	balanceSyncer BalanceSyncer,
+	announcementSyncer AnnouncementSyncer,
+	healthSyncer HealthSyncer,
+	usageCostSyncer UsageCostSyncer,
+	channelChecker ChannelChecker,
+) *Service {
+	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer, channelChecker)
+	service.repo = repo
 	return service
 }
 
@@ -160,7 +255,88 @@ func (s *Service) Run(ctx context.Context, in RunInput) (*adminplusdomain.Schedu
 			run.Items = append(run.Items, item)
 		}
 	}
+	if err := s.rememberRun(ctx, run); err != nil {
+		return nil, err
+	}
 	return run, nil
+}
+
+func (s *Service) EnqueueRun(ctx context.Context, in RunInput) (*adminplusdomain.SchedulerRunSummary, error) {
+	if in.Now.IsZero() {
+		in.Now = s.now().UTC()
+	} else {
+		in.Now = in.Now.UTC()
+	}
+	mode := strings.TrimSpace(in.Mode)
+	if mode == "" {
+		mode = "manual"
+	}
+	windowMinutes := in.WindowMinutes
+	if windowMinutes <= 0 {
+		windowMinutes = defaultWindowMinutes
+	}
+	taskTypes := normalizeTaskTypes(in.TaskTypes)
+	run := &adminplusdomain.SchedulerRun{
+		RunID:       fmt.Sprintf("%s-%d", mode, in.Now.UnixNano()),
+		Mode:        mode,
+		DryRun:      in.DryRun,
+		RequestedAt: in.Now,
+		TaskTypes:   taskTypes,
+		Items:       make([]adminplusdomain.ScheduledTask, 0),
+	}
+
+	suppliers, err := s.supplierService.List(ctx, suppliersapp.SupplierFilter{})
+	if err != nil {
+		return nil, err
+	}
+	for _, supplier := range suppliers {
+		if supplier == nil {
+			continue
+		}
+		if in.SupplierID > 0 && supplier.ID != in.SupplierID {
+			continue
+		}
+		for _, taskType := range taskTypes {
+			item := s.planSupplierTask(supplier, taskType, windowMinutes, in.Now)
+			if item.Reason != "" {
+				run.SkippedCount++
+			} else {
+				run.EligibleCount++
+			}
+			run.Items = append(run.Items, item)
+		}
+	}
+	requestedAt := in.Now.UTC()
+	summary := adminplusdomain.SchedulerRunSummary{
+		ID:             strings.ReplaceAll(run.RunID, ":", "-"),
+		LegacyRunID:    run.RunID,
+		TriggerType:    mode,
+		TaskType:       schedulerRunTaskLabel(taskTypes),
+		Status:         "queued",
+		RequestedAt:    requestedAt,
+		SupplierCount:  schedulerRunSupplierCount(run.Items),
+		TotalSteps:     len(run.Items),
+		SucceededSteps: 0,
+		FailedSteps:    0,
+		SkippedSteps:   run.SkippedCount,
+	}
+	if len(run.Items) == 0 {
+		summary.Status = "skipped"
+		finishedAt := requestedAt
+		summary.FinishedAt = &finishedAt
+	}
+	if s.repo != nil {
+		if err := s.repo.SaveRun(ctx, summary, run.Items); err != nil {
+			return nil, err
+		}
+	}
+	s.recentRunsMu.Lock()
+	s.recentRuns = append(s.recentRuns, summary)
+	if len(s.recentRuns) > 100 {
+		s.recentRuns = append([]adminplusdomain.SchedulerRunSummary{}, s.recentRuns[len(s.recentRuns)-100:]...)
+	}
+	s.recentRunsMu.Unlock()
+	return &summary, nil
 }
 
 func (s *Service) Status() adminplusdomain.SchedulerStatus {
@@ -169,6 +345,570 @@ func (s *Service) Status() adminplusdomain.SchedulerStatus {
 		IntervalSeconds: int64(schedulerInterval().Seconds()),
 		Queue:           "admin_plus_extension_tasks",
 	}
+}
+
+func (s *Service) CenterStatus(ctx context.Context) adminplusdomain.SchedulerCenterStatus {
+	settings := s.Settings(ctx)
+	runs := s.ListRuns(ctx, 20)
+	plans := s.ListPlans(ctx)
+	now := s.now().UTC()
+	var lastRunAt *time.Time
+	var nextRunAt *time.Time
+	failedSteps := 0
+	runningSteps := 0
+	queuedSteps := 0
+	overduePlans := 0
+	for idx := range runs {
+		run := runs[idx]
+		if lastRunAt == nil || run.RequestedAt.After(*lastRunAt) {
+			value := run.RequestedAt
+			lastRunAt = &value
+		}
+		failedSteps += run.FailedSteps
+	}
+	for idx := range plans {
+		plan := plans[idx]
+		if plan.Status != "enabled" || plan.NextRunAt == nil {
+			continue
+		}
+		candidate := *plan.NextRunAt
+		if !candidate.After(now) {
+			overduePlans++
+			candidate = now
+		}
+		if nextRunAt == nil || candidate.Before(*nextRunAt) {
+			value := candidate
+			nextRunAt = &value
+		}
+	}
+	if s.repo != nil {
+		if running, queued, failed, err := s.repo.StepStats(ctx); err == nil {
+			runningSteps = running
+			queuedSteps = queued
+			failedSteps = failed
+		}
+	}
+	if nextRunAt == nil {
+		value := now.Add(schedulerInterval())
+		nextRunAt = &value
+	}
+	workerStatus := "running"
+	if !schedulerWorkerEnabled() {
+		workerStatus = "down"
+	} else if s.repo == nil {
+		workerStatus = "degraded"
+	}
+	return adminplusdomain.SchedulerCenterStatus{
+		Enabled:         settings.Enabled,
+		WorkerStatus:    workerStatus,
+		Queue:           "admin_plus_scheduler_runs",
+		IntervalSeconds: int64(schedulerInterval().Seconds()),
+		RunningSteps:    runningSteps,
+		QueuedSteps:     queuedSteps,
+		FailedSteps:     failedSteps,
+		OverduePlans:    overduePlans,
+		OpenActions:     len(s.ListActions(ctx)),
+		LastRunAt:       lastRunAt,
+		NextRunAt:       nextRunAt,
+	}
+}
+
+func (s *Service) ListPlans(ctx context.Context) []adminplusdomain.SchedulerPlan {
+	plans := s.defaultPlans()
+	if s.repo != nil {
+		_ = s.repo.SavePlans(ctx, plans)
+		if stored, err := s.repo.ListPlans(ctx); err == nil && len(stored) > 0 {
+			return s.attachPlanStats(ctx, stored)
+		}
+	}
+	return s.attachPlanStats(ctx, plans)
+}
+
+func (s *Service) UpdatePlanStatus(ctx context.Context, planID, status string) (*adminplusdomain.SchedulerPlan, error) {
+	planID = strings.TrimSpace(planID)
+	status = strings.TrimSpace(status)
+	if planID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_ID_REQUIRED", "scheduler plan id is required")
+	}
+	if status != "enabled" && status != "paused" && status != "disabled" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_STATUS_INVALID", "scheduler plan status is invalid")
+	}
+	if s.repo == nil {
+		for _, plan := range s.defaultPlans() {
+			if plan.ID == planID {
+				plan.Status = status
+				return &plan, nil
+			}
+		}
+		return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_PLAN_NOT_FOUND", "scheduler plan not found")
+	}
+	_ = s.repo.SavePlans(ctx, s.defaultPlans())
+	plan, err := s.repo.UpdatePlanStatus(ctx, planID, status)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_PLAN_NOT_FOUND", "scheduler plan not found")
+	}
+	return plan, err
+}
+
+func (s *Service) UpdatePlanConfig(ctx context.Context, planID string, config adminplusdomain.SchedulerPlanConfig) (*adminplusdomain.SchedulerPlan, error) {
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_ID_REQUIRED", "scheduler plan id is required")
+	}
+	normalized, err := normalizePlanConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if s.repo == nil {
+		for _, plan := range s.defaultPlans() {
+			if plan.ID != planID {
+				continue
+			}
+			applyPlanConfig(&plan, normalized, s.now().UTC())
+			return &plan, nil
+		}
+		return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_PLAN_NOT_FOUND", "scheduler plan not found")
+	}
+	_ = s.repo.SavePlans(ctx, s.defaultPlans())
+	plan, err := s.repo.UpdatePlanConfig(ctx, planID, normalized)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_PLAN_NOT_FOUND", "scheduler plan not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	enriched := s.attachPlanStats(ctx, []adminplusdomain.SchedulerPlan{*plan})
+	return &enriched[0], nil
+}
+
+func (s *Service) ListRuns(ctx context.Context, limit int) []adminplusdomain.SchedulerRunSummary {
+	if limit <= 0 {
+		limit = 20
+	}
+	if s.repo != nil {
+		runs, err := s.repo.ListRuns(ctx, limit)
+		if err == nil {
+			return runs
+		}
+	}
+	s.recentRunsMu.Lock()
+	defer s.recentRunsMu.Unlock()
+	if len(s.recentRuns) == 0 {
+		return []adminplusdomain.SchedulerRunSummary{}
+	}
+	if len(s.recentRuns) < limit {
+		limit = len(s.recentRuns)
+	}
+	out := make([]adminplusdomain.SchedulerRunSummary, 0, limit)
+	for i := len(s.recentRuns) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, s.recentRuns[i])
+	}
+	return out
+}
+
+func (s *Service) GetRunDetail(ctx context.Context, runID string) (*adminplusdomain.SchedulerRunDetail, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_RUN_ID_REQUIRED", "scheduler run id is required")
+	}
+	if s.repo != nil {
+		run, err := s.repo.GetRun(ctx, runID)
+		if err == sql.ErrNoRows {
+			return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_RUN_NOT_FOUND", "scheduler run not found")
+		}
+		if err != nil {
+			return nil, err
+		}
+		steps, err := s.repo.ListSteps(ctx, runID, 500)
+		if err != nil {
+			return nil, err
+		}
+		return &adminplusdomain.SchedulerRunDetail{Run: *run, Steps: steps}, nil
+	}
+	for _, run := range s.ListRuns(ctx, 100) {
+		if run.ID == runID {
+			return &adminplusdomain.SchedulerRunDetail{Run: run, Steps: []adminplusdomain.SchedulerStepRecord{}}, nil
+		}
+	}
+	return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_RUN_NOT_FOUND", "scheduler run not found")
+}
+
+func (s *Service) ListSteps(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerStepRecord, error) {
+	if s.repo == nil {
+		return []adminplusdomain.SchedulerStepRecord{}, nil
+	}
+	return s.repo.ListSteps(ctx, strings.TrimSpace(runID), limit)
+}
+
+func (s *Service) RetryStep(ctx context.Context, stepID int64) (*adminplusdomain.SchedulerStepRecord, error) {
+	if stepID <= 0 {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_STEP_ID_REQUIRED", "scheduler step id is required")
+	}
+	if s.repo == nil {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_REPOSITORY_REQUIRED", "scheduler step retry requires persistent scheduler repository")
+	}
+	retryAt := s.now().UTC()
+	step, err := s.repo.RetryStep(ctx, stepID, retryAt)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_STEP_NOT_RETRYABLE", "scheduler step is not retryable")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.RefreshRunStatus(ctx, step.RunID, retryAt); err != nil {
+		return nil, err
+	}
+	return step, nil
+}
+
+func (s *Service) CancelStep(ctx context.Context, stepID int64) (*adminplusdomain.SchedulerStepRecord, error) {
+	if stepID <= 0 {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_STEP_ID_REQUIRED", "scheduler step id is required")
+	}
+	if s.repo == nil {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_REPOSITORY_REQUIRED", "scheduler step cancel requires persistent scheduler repository")
+	}
+	cancelledAt := s.now().UTC()
+	step, err := s.repo.CancelStep(ctx, stepID, cancelledAt)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_STEP_NOT_CANCELLABLE", "scheduler step is not cancellable")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.RefreshRunStatus(ctx, step.RunID, cancelledAt); err != nil {
+		return nil, err
+	}
+	return step, nil
+}
+
+func (s *Service) CancelRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerRunSummary, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_RUN_ID_REQUIRED", "scheduler run id is required")
+	}
+	if s.repo == nil {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_REPOSITORY_REQUIRED", "scheduler run cancel requires persistent scheduler repository")
+	}
+	run, err := s.repo.CancelRun(ctx, runID, s.now().UTC())
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_RUN_NOT_CANCELLABLE", "scheduler run is not cancellable")
+	}
+	return run, err
+}
+
+func (s *Service) RetryFailedSteps(ctx context.Context, runID string) (*adminplusdomain.SchedulerRunDetail, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_RUN_ID_REQUIRED", "scheduler run id is required")
+	}
+	if s.repo == nil {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_REPOSITORY_REQUIRED", "scheduler retry failed requires persistent scheduler repository")
+	}
+	retryAt := s.now().UTC()
+	affected, err := s.repo.RetryFailedSteps(ctx, runID, retryAt)
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_RUN_NO_RETRYABLE_STEPS", "scheduler run has no retryable steps")
+	}
+	if err := s.repo.RefreshRunStatus(ctx, runID, retryAt); err != nil {
+		return nil, err
+	}
+	return s.GetRunDetail(ctx, runID)
+}
+
+func (s *Service) ListSupplierStatuses(ctx context.Context) ([]adminplusdomain.SchedulerSupplierStatus, error) {
+	suppliers, err := s.supplierService.List(ctx, suppliersapp.SupplierFilter{})
+	if err != nil {
+		return nil, err
+	}
+	latestSteps := map[int64]map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord{}
+	if s.repo != nil {
+		if values, err := s.repo.SupplierLatestSteps(ctx); err == nil {
+			latestSteps = values
+		}
+	}
+	out := make([]adminplusdomain.SchedulerSupplierStatus, 0, len(suppliers))
+	for _, supplier := range suppliers {
+		if supplier == nil {
+			continue
+		}
+		out = append(out, schedulerSupplierStatus(supplier, latestSteps[supplier.ID]))
+	}
+	return out, nil
+}
+
+func (s *Service) GetSupplierChecklist(ctx context.Context, supplierID int64) (*adminplusdomain.SchedulerSupplierChecklist, error) {
+	if supplierID <= 0 {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_SUPPLIER_ID_REQUIRED", "scheduler supplier id is required")
+	}
+	supplier, err := s.supplierService.Get(ctx, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	latestSteps := map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord{}
+	if s.repo != nil {
+		if values, err := s.repo.SupplierLatestSteps(ctx); err == nil {
+			latestSteps = values[supplier.ID]
+		}
+	}
+	status := schedulerSupplierStatus(supplier, latestSteps)
+	items := schedulerSupplierChecklistItems(supplier, status)
+	return &adminplusdomain.SchedulerSupplierChecklist{
+		SupplierID:        supplier.ID,
+		SupplierName:      supplier.Name,
+		SupplierType:      string(supplier.Type),
+		CompletionPercent: schedulerChecklistCompletionPercent(items),
+		RecommendedAction: status.RecommendedAction,
+		Items:             items,
+	}, nil
+}
+
+func (s *Service) ListActions(ctx context.Context) []adminplusdomain.SchedulerAction {
+	generated := s.generateActions(ctx)
+	if s.repo != nil {
+		_ = s.repo.UpsertActions(ctx, generated)
+		if stored, err := s.repo.ListActions(ctx); err == nil {
+			return stored
+		}
+	}
+	return generated
+}
+
+func (s *Service) ResolveAction(ctx context.Context, actionID, status string) (*adminplusdomain.SchedulerAction, error) {
+	actionID = strings.TrimSpace(actionID)
+	status = strings.TrimSpace(status)
+	if actionID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_ACTION_ID_REQUIRED", "scheduler action id is required")
+	}
+	if status != "resolved" && status != "ignored" && status != "investigating" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_ACTION_STATUS_INVALID", "scheduler action status is invalid")
+	}
+	now := s.now().UTC()
+	var resolvedAt *time.Time
+	if status == "resolved" || status == "ignored" {
+		resolvedAt = &now
+	}
+	if s.repo != nil {
+		_ = s.repo.UpsertActions(ctx, s.generateActions(ctx))
+		action, err := s.repo.UpdateActionStatus(ctx, actionID, status, resolvedAt)
+		if err == sql.ErrNoRows {
+			return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_ACTION_NOT_FOUND", "scheduler action not found")
+		}
+		return action, err
+	}
+	for _, action := range s.generateActions(ctx) {
+		if action.ID == actionID {
+			action.Status = status
+			action.UpdatedAt = now
+			action.ResolvedAt = resolvedAt
+			return &action, nil
+		}
+	}
+	return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_ACTION_NOT_FOUND", "scheduler action not found")
+}
+
+func (s *Service) generateActions(ctx context.Context) []adminplusdomain.SchedulerAction {
+	suppliers, err := s.supplierService.List(ctx, suppliersapp.SupplierFilter{})
+	if err != nil {
+		return []adminplusdomain.SchedulerAction{}
+	}
+	now := s.now().UTC()
+	actions := make([]adminplusdomain.SchedulerAction, 0)
+	for _, supplier := range suppliers {
+		if supplier == nil {
+			continue
+		}
+		if supplier.HealthStatus == adminplusdomain.SupplierHealthStatusCredentialInvalid {
+			actions = append(actions, schedulerAction(now, supplier, "critical", "supplier.session.refresh", "会话凭据失效", "供应商凭据失效，账单、余额和分组采集会失败。", "刷新会话"))
+			continue
+		}
+		if supplier.RuntimeStatus == adminplusdomain.SupplierRuntimeStatusDisabled || supplier.HealthStatus == adminplusdomain.SupplierHealthStatusPaused {
+			actions = append(actions, schedulerAction(now, supplier, "warning", "supplier.resume_or_review", "供应商未参与自动化", "供应商已停用或暂停，调度中心会跳过相关任务。", "检查供应商状态"))
+			continue
+		}
+		if strings.TrimSpace(supplier.DashboardURL) == "" && strings.TrimSpace(supplier.APIBaseURL) == "" {
+			actions = append(actions, schedulerAction(now, supplier, "critical", "supplier.configure_url", "缺少供应商地址", "缺少 Dashboard/API URL，Provider Adapter 无法执行采集。", "补充供应商地址"))
+			continue
+		}
+		if supplier.BalanceCents <= 0 {
+			actions = append(actions, schedulerAction(now, supplier, "warning", "supplier.recharge", "供应商余额不足", "余额不可用时不会进入自动切换候选。", "刷新余额或充值"))
+		}
+	}
+	return actions
+}
+
+func (s *Service) Settings(ctx context.Context) adminplusdomain.SchedulerSettings {
+	defaults := s.defaultSettings()
+	if s.repo != nil {
+		if stored, err := s.repo.LoadSettings(ctx); err == nil && stored != nil {
+			return normalizeSettings(*stored, defaults)
+		}
+		_ = s.repo.SaveSettings(ctx, defaults)
+	}
+	return defaults
+}
+
+func (s *Service) UpdateSettings(ctx context.Context, settings adminplusdomain.SchedulerSettings) (adminplusdomain.SchedulerSettings, error) {
+	normalized := normalizeSettings(settings, s.defaultSettings())
+	if s.repo != nil {
+		if err := s.repo.SaveSettings(ctx, normalized); err != nil {
+			return normalized, err
+		}
+	}
+	return normalized, nil
+}
+
+func (s *Service) defaultSettings() adminplusdomain.SchedulerSettings {
+	return adminplusdomain.SchedulerSettings{
+		Enabled:                       schedulerEnabled(),
+		DefaultSupplierConcurrency:    1,
+		ChannelChecksEnabled:          channelChecksSchedulerEnabled(),
+		ChannelCheckDailyBudgetTokens: 0,
+		FirstTokenSlowThresholdMS:     3000,
+		TotalLatencySlowThresholdMS:   15000,
+		DefaultEnabledTaskTypes: []string{
+			"supplier.balance.sync",
+			"supplier.groups.sync",
+			"supplier.rates.sync",
+			"supplier.funding_orders.sync",
+			"supplier.redeem_orders.sync",
+			"supplier.usage_costs.sync",
+			"supplier.announcements.sync",
+			"supplier.session.probe",
+		},
+		HighCostTaskTypes: []string{
+			"supplier.channels.check",
+			"local.sub2api.schedule.ensure",
+			"local.sub2api.schedule.remove_invalid",
+		},
+	}
+}
+
+func normalizeSettings(settings, defaults adminplusdomain.SchedulerSettings) adminplusdomain.SchedulerSettings {
+	if settings.DefaultSupplierConcurrency <= 0 {
+		settings.DefaultSupplierConcurrency = defaults.DefaultSupplierConcurrency
+	}
+	if settings.FirstTokenSlowThresholdMS <= 0 {
+		settings.FirstTokenSlowThresholdMS = defaults.FirstTokenSlowThresholdMS
+	}
+	if settings.TotalLatencySlowThresholdMS <= 0 {
+		settings.TotalLatencySlowThresholdMS = defaults.TotalLatencySlowThresholdMS
+	}
+	if len(settings.DefaultEnabledTaskTypes) == 0 {
+		settings.DefaultEnabledTaskTypes = defaults.DefaultEnabledTaskTypes
+	}
+	if len(settings.HighCostTaskTypes) == 0 {
+		settings.HighCostTaskTypes = defaults.HighCostTaskTypes
+	}
+	return settings
+}
+
+func (s *Service) ProcessNext(ctx context.Context, workerID string) (bool, error) {
+	if s.repo == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(workerID) == "" {
+		workerID = defaultWorkerID()
+	}
+	step, err := s.repo.ClaimStep(ctx, workerID, 5*time.Minute)
+	if err != nil || step == nil {
+		return false, err
+	}
+	finishedAt := s.now().UTC()
+	status, total, reason := s.executeClaimedStep(ctx, step, finishedAt)
+	if err := s.repo.CompleteStep(ctx, step.ID, status, total, reason, finishedAt); err != nil {
+		return true, err
+	}
+	if err := s.repo.RefreshRunStatus(ctx, step.RunID, finishedAt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (s *Service) EnqueueDuePlan(ctx context.Context) (bool, error) {
+	if s.repo == nil {
+		return false, nil
+	}
+	_ = s.repo.SavePlans(ctx, s.defaultPlans())
+	plan, err := s.repo.ClaimDuePlan(ctx, s.now().UTC())
+	if err != nil || plan == nil {
+		return false, err
+	}
+	taskTypes := schedulerPlanTaskTypes(*plan)
+	if len(taskTypes) == 0 {
+		return false, nil
+	}
+	_, err = s.EnqueueRun(ctx, RunInput{
+		Mode:          "plan:" + plan.ID,
+		TaskTypes:     taskTypes,
+		WindowMinutes: plan.WindowMinutes,
+	})
+	if err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (s *Service) executeClaimedStep(ctx context.Context, step *adminplusdomain.SchedulerStepRecord, now time.Time) (string, int, string) {
+	if step == nil {
+		return "dead", 0, "step_missing"
+	}
+	supplier, err := s.supplierService.Get(ctx, step.SupplierID)
+	if err != nil {
+		return "retryable_failed", 0, err.Error()
+	}
+	item := adminplusdomain.ScheduledTask{
+		SupplierID:   step.SupplierID,
+		SupplierName: step.SupplierName,
+		TaskType:     step.TaskType,
+		Action:       step.Action,
+		ScheduleKey:  step.ScheduleKey,
+		TaskID:       step.ExtensionTaskID,
+	}
+	if reason := ineligibleReason(supplier, step.TaskType); reason != "" {
+		return "skipped", 0, reason
+	}
+	if item.Action == actionDirectSync {
+		s.syncSupplierTaskWithSessionRefresh(ctx, supplier, step.TaskType, now, &item)
+	} else {
+		task, created, err := s.extensionService.CreateTaskIfAbsent(ctx, extensionapp.CreateTaskInput{
+			SupplierID:  supplier.ID,
+			Type:        step.TaskType,
+			ScheduleKey: step.ScheduleKey,
+			Priority:    taskPriority(step.TaskType),
+			MaxAttempts: 3,
+			Payload: map[string]any{
+				"source":        "scheduler",
+				"mode":          "worker",
+				"task_type":     string(step.TaskType),
+				"schedule_key":  step.ScheduleKey,
+				"supplier_id":   supplier.ID,
+				"supplier_name": supplier.Name,
+				"supplier_type": string(supplier.Type),
+				"dashboard_url": supplier.DashboardURL,
+				"api_base_url":  supplier.APIBaseURL,
+			},
+		})
+		if err != nil {
+			item.Reason = err.Error()
+		} else if task != nil {
+			item.TaskID = task.ID
+			item.Created = created
+			if !created {
+				item.Reason = "duplicate"
+			}
+		}
+	}
+	if item.Reason != "" {
+		if item.Reason == "duplicate" {
+			return "skipped", item.Total, item.Reason
+		}
+		return stepFailureStatus(item.Reason), item.Total, item.Reason
+	}
+	return "succeeded", item.Total, ""
 }
 
 func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, mode string, windowMinutes int, now time.Time, dryRun bool) adminplusdomain.ScheduledTask {
@@ -188,7 +928,7 @@ func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusd
 		return item
 	}
 	if item.Action == actionDirectSync {
-		s.syncSupplierTask(ctx, supplier, taskType, now, &item)
+		s.syncSupplierTaskWithSessionRefresh(ctx, supplier, taskType, now, &item)
 		return item
 	}
 	task, created, err := s.extensionService.CreateTaskIfAbsent(ctx, extensionapp.CreateTaskInput{
@@ -222,6 +962,104 @@ func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusd
 		item.Reason = "duplicate"
 	}
 	return item
+}
+
+func (s *Service) planSupplierTask(supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, windowMinutes int, now time.Time) adminplusdomain.ScheduledTask {
+	item := adminplusdomain.ScheduledTask{
+		SupplierID:   supplier.ID,
+		SupplierName: supplier.Name,
+		TaskType:     taskType,
+		Action:       actionForTaskType(taskType),
+	}
+	if reason := ineligibleReason(supplier, taskType); reason != "" {
+		item.Reason = reason
+		return item
+	}
+	bucket := scheduleBucket(taskType, now, windowMinutes)
+	item.ScheduleKey = fmt.Sprintf("scheduler:%s:supplier:%d:%s", taskType, supplier.ID, bucket)
+	return item
+}
+
+func (s *Service) syncSupplierTaskWithSessionRefresh(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, now time.Time, item *adminplusdomain.ScheduledTask) {
+	if !taskNeedsSession(taskType) || s.sessionRefresher == nil {
+		s.syncSupplierTask(ctx, supplier, taskType, now, item)
+		return
+	}
+	ok, refreshed := s.ensureSupplierSession(ctx, supplier, taskType, item)
+	if !ok {
+		return
+	}
+	s.syncSupplierTask(ctx, supplier, taskType, now, item)
+	if item.Reason == "" || refreshed || !isSessionRefreshableReason(item.Reason) {
+		return
+	}
+	previousReason := item.Reason
+	item.Reason = ""
+	item.Synced = false
+	item.Total = 0
+	if s.refreshSupplierSession(ctx, supplier, taskType, item, "session_refresh_after_sync", previousReason) {
+		s.syncSupplierTask(ctx, supplier, taskType, now, item)
+	}
+}
+
+func (s *Service) ensureSupplierSession(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, item *adminplusdomain.ScheduledTask) (bool, bool) {
+	_, err := s.sessionRefresher.DecryptedProbeInput(ctx, supplier.ID)
+	if err == nil {
+		return true, false
+	}
+	if !isSessionRefreshableError(err) {
+		return true, false
+	}
+	return s.refreshSupplierSession(ctx, supplier, taskType, item, "session_precheck", err.Error()), true
+}
+
+func (s *Service) refreshSupplierSession(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, item *adminplusdomain.ScheduledTask, stage string, previousReason string) bool {
+	if !supplier.Credential.BrowserLoginEnabled || (!supplier.Credential.BrowserLoginUsernameConfigured && !supplier.Credential.BrowserLoginTokenConfigured) {
+		item.Reason = encodeStepFailure(stepFailureReason{
+			Stage:      stage,
+			Code:       reasonCodeFromText(previousReason),
+			Message:    "supplier session is unavailable",
+			Action:     "direct_login",
+			Outcome:    "manual_required",
+			Suggestion: "开启供应商登录并配置账号密码或 access token 后重试。",
+			RawError:   trimLimit(previousReason, 900),
+		})
+		return false
+	}
+	login, loginErr := s.sessionRefresher.Login(ctx, sessionsapp.LoginInput{
+		SupplierID: supplier.ID,
+		LoginContext: map[string]any{
+			"source":          "scheduler",
+			"task_type":       string(taskType),
+			"scheduler_stage": stage,
+		},
+	})
+	if loginErr != nil {
+		item.Reason = encodeStepFailure(stepFailureReason{
+			Stage:        stage,
+			Code:         reasonCodeFromText(previousReason),
+			Message:      "supplier session is unavailable",
+			Action:       "direct_login",
+			Outcome:      loginFailureOutcome(loginErr),
+			LoginCode:    infraerrors.Reason(loginErr),
+			LoginMessage: firstNonEmpty(infraerrors.Message(loginErr), "supplier direct login failed"),
+			Suggestion:   loginFailureSuggestion(loginErr),
+			RawError:     trimLimit(loginErr.Error(), 900),
+		})
+		return false
+	}
+	if login == nil || login.Session == nil {
+		item.Reason = encodeStepFailure(stepFailureReason{
+			Stage:      stage,
+			Code:       reasonCodeFromText(previousReason),
+			Message:    "supplier session is unavailable",
+			Action:     "direct_login",
+			Outcome:    "failed",
+			Suggestion: "自动登录没有返回可用会话，请手动一键登录或使用插件采集会话。",
+		})
+		return false
+	}
+	return true
 }
 
 func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, now time.Time, item *adminplusdomain.ScheduledTask) {
@@ -330,6 +1168,622 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 		return
 	}
 	item.Synced = true
+}
+
+func (s *Service) rememberRun(ctx context.Context, run *adminplusdomain.SchedulerRun) error {
+	if run == nil {
+		return nil
+	}
+	requestedAt := run.RequestedAt.UTC()
+	finishedAt := s.now().UTC()
+	summary := adminplusdomain.SchedulerRunSummary{
+		ID:             strings.ReplaceAll(run.RunID, ":", "-"),
+		LegacyRunID:    run.RunID,
+		TriggerType:    run.Mode,
+		TaskType:       schedulerRunTaskLabel(run.TaskTypes),
+		Status:         schedulerRunStatus(run),
+		RequestedAt:    requestedAt,
+		StartedAt:      &requestedAt,
+		FinishedAt:     &finishedAt,
+		SupplierCount:  schedulerRunSupplierCount(run.Items),
+		TotalSteps:     len(run.Items),
+		SucceededSteps: schedulerRunSucceededSteps(run.Items),
+		FailedSteps:    schedulerRunFailedSteps(run.Items),
+		SkippedSteps:   run.SkippedCount,
+		DurationMS:     finishedAt.Sub(requestedAt).Milliseconds(),
+	}
+	if summary.FailedSteps > 0 {
+		summary.ErrorCode = "SCHEDULER_STEP_FAILED"
+		summary.ErrorMessage = "存在失败或跳过的调度步骤"
+	}
+	if s.repo != nil {
+		if err := s.repo.SaveRun(ctx, summary, run.Items); err != nil {
+			return err
+		}
+	}
+	s.recentRunsMu.Lock()
+	defer s.recentRunsMu.Unlock()
+	s.recentRuns = append(s.recentRuns, summary)
+	if len(s.recentRuns) > 100 {
+		s.recentRuns = append([]adminplusdomain.SchedulerRunSummary{}, s.recentRuns[len(s.recentRuns)-100:]...)
+	}
+	return nil
+}
+
+func (s *Service) defaultPlans() []adminplusdomain.SchedulerPlan {
+	now := s.now().UTC()
+	return []adminplusdomain.SchedulerPlan{
+		plan("supplier.balance.sync", "余额同步", "supplier.balance.sync", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance}, "enabled", "全部启用供应商", 10*time.Minute, 10, "fire_once", "forbid", false, "读取供应商用户侧余额并刷新余额快照", now),
+		plan("supplier.groups.sync", "分组同步", "supplier.groups.sync", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchGroups}, "enabled", "全部启用供应商", time.Hour, 10, "fire_once", "forbid", false, "同步供应商分组、渠道和协议投影", now),
+		plan("supplier.rates.sync", "倍率同步", "supplier.rates.sync", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchRates}, "enabled", "全部启用供应商", time.Hour, 10, "fire_once", "forbid", false, "同步使用倍率、充值倍率和有效倍率", now),
+		plan("supplier.costs.reconcile", "成本对账", "supplier.costs.reconcile", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance, adminplusdomain.ExtensionTaskTypeFetchUsageCosts, adminplusdomain.ExtensionTaskTypeFetchAnnouncements}, "enabled", "全部启用供应商", time.Hour, 60, "backfill", "forbid", false, "采集充值入口、usage 和余额并刷新成本台账", now),
+		plan("supplier.session.probe", "会话探测", "supplier.session.probe", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchHealth}, "enabled", "全部启用供应商", 30*time.Minute, 30, "fire_once", "forbid", false, "探测供应商会话和只读 capability", now),
+		plan("supplier.channels.check", "渠道健康检测", "supplier.channels.check", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCheckChannels}, "paused", "按供应商启用", 0, 10, "skip", "forbid", true, "使用真实模型请求检测渠道可用性、首 token 和总耗时", now),
+		plan("local.sub2api.schedule.ensure", "加入本地调度", "local.sub2api.schedule.ensure", nil, "paused", "智能动作触发", 0, 10, "skip", "forbid", true, "将低倍率且可用的供应商渠道加入本地 Lime/Sub2API 调度", now),
+	}
+}
+
+func (s *Service) attachPlanStats(ctx context.Context, plans []adminplusdomain.SchedulerPlan) []adminplusdomain.SchedulerPlan {
+	if len(plans) == 0 {
+		return plans
+	}
+	if s.repo != nil {
+		if stats, err := s.repo.PlanStats(ctx, plans); err == nil {
+			for idx := range plans {
+				stat, ok := stats[plans[idx].ID]
+				if !ok {
+					continue
+				}
+				plans[idx].LastSuccessAt = stat.LastSuccessAt
+				plans[idx].IssueCount = stat.IssueCount
+				plans[idx].LastIssueAt = stat.LastIssueAt
+				plans[idx].LastIssue = stat.LastIssue
+			}
+			return plans
+		}
+	}
+	runs := s.ListRuns(context.Background(), 100)
+	for idx := range plans {
+		for runIdx := range runs {
+			run := runs[runIdx]
+			if run.TaskType != plans[idx].TaskType && !strings.Contains(run.TaskType, plans[idx].TaskType) {
+				continue
+			}
+			value := run.RequestedAt
+			plans[idx].LastRunAt = &value
+			if run.Status == "succeeded" {
+				plans[idx].LastSuccessAt = &value
+			} else if run.FailedSteps > 0 {
+				plans[idx].IssueCount += run.FailedSteps
+				plans[idx].LastIssue = run.ErrorMessage
+				plans[idx].LastIssueAt = &value
+			}
+			break
+		}
+	}
+	return plans
+}
+
+func plan(id, name, taskType string, taskTypes []adminplusdomain.ExtensionTaskType, status, scope string, interval time.Duration, windowMinutes int, misfire, concurrency string, highCost bool, description string, now time.Time) adminplusdomain.SchedulerPlan {
+	taskTypeValues := make([]string, 0, len(taskTypes))
+	for _, value := range taskTypes {
+		taskTypeValues = append(taskTypeValues, string(value))
+	}
+	var nextRunAt *time.Time
+	if status == "enabled" && interval > 0 {
+		value := now.Add(interval)
+		nextRunAt = &value
+	}
+	return adminplusdomain.SchedulerPlan{
+		ID:                id,
+		Name:              name,
+		TaskType:          taskType,
+		TaskTypes:         taskTypeValues,
+		Status:            status,
+		Scope:             scope,
+		FrequencyLabel:    frequencyLabel(interval),
+		IntervalSeconds:   int64(interval.Seconds()),
+		WindowMinutes:     windowMinutes,
+		MisfirePolicy:     misfire,
+		ConcurrencyPolicy: concurrency,
+		HighCost:          highCost,
+		Description:       description,
+		NextRunAt:         nextRunAt,
+	}
+}
+
+func schedulerPlanTaskTypes(plan adminplusdomain.SchedulerPlan) []adminplusdomain.ExtensionTaskType {
+	if len(plan.TaskTypes) == 0 {
+		return nil
+	}
+	values := make([]adminplusdomain.ExtensionTaskType, 0, len(plan.TaskTypes))
+	for _, raw := range plan.TaskTypes {
+		taskType := adminplusdomain.ExtensionTaskType(strings.TrimSpace(raw))
+		if taskType.Valid() {
+			values = append(values, taskType)
+		}
+	}
+	return normalizeTaskTypes(values)
+}
+
+func frequencyLabel(interval time.Duration) string {
+	if interval <= 0 {
+		return "手动"
+	}
+	if interval%time.Hour == 0 {
+		return fmt.Sprintf("%d 小时", int(interval/time.Hour))
+	}
+	if interval%time.Minute == 0 {
+		return fmt.Sprintf("%d 分钟", int(interval/time.Minute))
+	}
+	return fmt.Sprintf("%d 秒", int(interval/time.Second))
+}
+
+func normalizePlanConfig(config adminplusdomain.SchedulerPlanConfig) (adminplusdomain.SchedulerPlanConfig, error) {
+	config.Status = strings.TrimSpace(config.Status)
+	config.Scope = strings.TrimSpace(config.Scope)
+	config.MisfirePolicy = strings.TrimSpace(config.MisfirePolicy)
+	config.ConcurrencyPolicy = strings.TrimSpace(config.ConcurrencyPolicy)
+	if config.Status != "enabled" && config.Status != "paused" && config.Status != "disabled" {
+		return config, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_STATUS_INVALID", "scheduler plan status is invalid")
+	}
+	if config.IntervalSeconds < 0 || config.IntervalSeconds > int64((30*24*time.Hour).Seconds()) {
+		return config, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_INTERVAL_INVALID", "scheduler plan interval is invalid")
+	}
+	if config.IntervalSeconds > 0 && config.IntervalSeconds < int64(time.Minute.Seconds()) {
+		return config, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_INTERVAL_INVALID", "scheduler plan interval must be at least one minute")
+	}
+	if config.WindowMinutes <= 0 || config.WindowMinutes > 24*60 {
+		return config, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_WINDOW_INVALID", "scheduler plan window is invalid")
+	}
+	switch config.MisfirePolicy {
+	case "fire_once", "backfill", "skip":
+	default:
+		return config, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_MISFIRE_INVALID", "scheduler plan misfire policy is invalid")
+	}
+	switch config.ConcurrencyPolicy {
+	case "forbid", "allow":
+	default:
+		return config, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_PLAN_CONCURRENCY_INVALID", "scheduler plan concurrency policy is invalid")
+	}
+	if config.Scope == "" {
+		config.Scope = "全部启用供应商"
+	}
+	return config, nil
+}
+
+func applyPlanConfig(plan *adminplusdomain.SchedulerPlan, config adminplusdomain.SchedulerPlanConfig, now time.Time) {
+	plan.Status = config.Status
+	plan.Scope = config.Scope
+	plan.IntervalSeconds = config.IntervalSeconds
+	plan.WindowMinutes = config.WindowMinutes
+	plan.MisfirePolicy = config.MisfirePolicy
+	plan.ConcurrencyPolicy = config.ConcurrencyPolicy
+	plan.FrequencyLabel = frequencyLabel(time.Duration(config.IntervalSeconds) * time.Second)
+	if config.Status == "enabled" && config.IntervalSeconds > 0 {
+		next := now.Add(time.Duration(config.IntervalSeconds) * time.Second)
+		plan.NextRunAt = &next
+	} else {
+		plan.NextRunAt = nil
+	}
+}
+
+func schedulerSupplierStatus(supplier *adminplusdomain.Supplier, latestSteps map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord) adminplusdomain.SchedulerSupplierStatus {
+	sessionStatus := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchHealth, "not_checked")
+	lastError := ""
+	recommendedAction := ""
+	if supplier.HealthStatus == adminplusdomain.SupplierHealthStatusCredentialInvalid {
+		sessionStatus = "failed"
+		lastError = "credential_invalid"
+		recommendedAction = "刷新供应商会话"
+	} else if strings.TrimSpace(supplier.DashboardURL) == "" && strings.TrimSpace(supplier.APIBaseURL) == "" {
+		sessionStatus = "missing_url"
+		lastError = "supplier_url_missing"
+		recommendedAction = "补充供应商地址"
+	}
+	balanceStatus := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchBalance, "not_checked")
+	if balanceStatus == "not_checked" && supplier.BalanceUpdatedAt != nil {
+		balanceStatus = "ok"
+	}
+	if supplier.BalanceCents <= 0 {
+		balanceStatus = "empty"
+		if recommendedAction == "" {
+			recommendedAction = "刷新余额或充值"
+		}
+	}
+	groupStatus := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchGroups, "not_checked")
+	rateStatus := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchRates, "not_checked")
+	billingStatus := billingStatusFromLatest(latestSteps)
+	channelStatus := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeCheckChannels, "not_checked")
+	scheduleStatus := "manual"
+	if supplier.RuntimeStatus == adminplusdomain.SupplierRuntimeStatusDisabled {
+		groupStatus = "skipped"
+		rateStatus = "skipped"
+		billingStatus = "skipped"
+		channelStatus = "skipped"
+		scheduleStatus = "paused"
+		lastError = "supplier_disabled"
+		recommendedAction = "恢复供应商后再启用自动化"
+	}
+	out := adminplusdomain.SchedulerSupplierStatus{
+		SupplierID:        supplier.ID,
+		SupplierName:      supplier.Name,
+		SupplierType:      string(supplier.Type),
+		RuntimeStatus:     string(supplier.RuntimeStatus),
+		HealthStatus:      string(supplier.HealthStatus),
+		BalanceCents:      supplier.BalanceCents,
+		BalanceCurrency:   supplier.BalanceCurrency,
+		SessionStatus:     sessionStatus,
+		BalanceStatus:     balanceStatus,
+		GroupStatus:       groupStatus,
+		RateStatus:        rateStatus,
+		BillingStatus:     billingStatus,
+		ChannelStatus:     channelStatus,
+		ScheduleStatus:    scheduleStatus,
+		LastError:         lastError,
+		RecommendedAction: recommendedAction,
+	}
+	out.CompletionPercent = schedulerChecklistCompletionPercent(schedulerSupplierChecklistItems(supplier, out))
+	return out
+}
+
+func taskStatusFromLatest(latestSteps map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord, taskType adminplusdomain.ExtensionTaskType, fallback string) string {
+	if len(latestSteps) == 0 {
+		return fallback
+	}
+	step, ok := latestSteps[taskType]
+	if !ok {
+		return fallback
+	}
+	switch step.Status {
+	case "succeeded", "skipped":
+		return "ready"
+	case "queued", "running":
+		return step.Status
+	case "retryable_failed", "manual_required", "dead":
+		return "failed"
+	default:
+		return string(step.Status)
+	}
+}
+
+func billingStatusFromLatest(latestSteps map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord) string {
+	usage := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchUsageCosts, "not_checked")
+	announcements := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchAnnouncements, "not_checked")
+	if usage == "failed" || announcements == "failed" {
+		return "failed"
+	}
+	if usage == "ready" || announcements == "ready" {
+		return "ready"
+	}
+	if usage == "running" || announcements == "running" {
+		return "running"
+	}
+	if usage == "queued" || announcements == "queued" {
+		return "queued"
+	}
+	return "not_checked"
+}
+
+func schedulerSupplierChecklistItems(supplier *adminplusdomain.Supplier, status adminplusdomain.SchedulerSupplierStatus) []adminplusdomain.SchedulerSupplierChecklistItem {
+	updatedAt := supplier.UpdatedAt
+	items := []adminplusdomain.SchedulerSupplierChecklistItem{
+		checklistItem("basic", "基础信息", checklistStatus(supplier.Name != "" && supplier.Type != ""), "供应商名称和类型已配置", supplier.Name, "补充供应商基础信息", &updatedAt),
+		checklistItem("url", "Dashboard/API URL", checklistURLStatus(supplier), "Provider Adapter 需要可访问地址执行采集", firstNonEmpty(supplier.DashboardURL, supplier.APIBaseURL), "补充供应商地址", &updatedAt),
+		checklistItem("session", "会话可用", status.SessionStatus, "会话状态决定余额、分组和账单采集是否可执行", string(supplier.HealthStatus), "刷新供应商会话", &updatedAt),
+		checklistItem("balance", "余额可采集", status.BalanceStatus, "余额影响是否进入自动切换候选", formatSupplierBalance(supplier.BalanceCents, supplier.BalanceCurrency), "刷新余额或充值", supplier.BalanceUpdatedAt),
+		checklistItem("recharge_rate", "充值倍率", checklistStatus(supplier.RechargeMultiplier > 0), "用于将显示额度换算为实际支付成本", fmt.Sprintf("%.4g", supplier.RechargeMultiplier), "设置或重新采集充值倍率", &updatedAt),
+		checklistItem("recharge_entry", "充值入口", checklistStatus(strings.TrimSpace(supplier.ThirdPartyRechargeURL) != "" || strings.TrimSpace(supplier.LocalRechargeURL) != ""), "对账需要保存第三方和本地充值入口", firstNonEmpty(supplier.ThirdPartyRechargeURL, supplier.LocalRechargeURL), "采集公告/充值入口", &updatedAt),
+		checklistItem("groups", "分组同步", status.GroupStatus, "同步供应商分组、渠道和协议投影", status.GroupStatus, "同步分组", &updatedAt),
+		checklistItem("rates", "使用倍率", status.RateStatus, "同步渠道使用倍率并计算有效倍率", status.RateStatus, "同步倍率", &updatedAt),
+		checklistItem("billing", "账务采集", status.BillingStatus, "充值、兑换和 usage 采集为成本对账提供事实", status.BillingStatus, "运行成本对账", &updatedAt),
+		checklistItem("channels", "渠道检测", status.ChannelStatus, "渠道检测会消耗 token，默认需要人工启用", status.ChannelStatus, "开启渠道检测或单次检测", &updatedAt),
+		checklistItem("schedule", "Lime/OpenAI 调度", status.ScheduleStatus, "可用低倍率渠道应能加入本地调度分组", status.ScheduleStatus, "加入本地调度", &updatedAt),
+	}
+	if supplier.RuntimeStatus == adminplusdomain.SupplierRuntimeStatusDisabled {
+		for idx := range items {
+			if items[idx].Status == "ready" || items[idx].Status == "ok" {
+				items[idx].Status = "skipped"
+				items[idx].RecommendedAction = "恢复供应商后再检查"
+			}
+		}
+	}
+	return items
+}
+
+func schedulerChecklistCompletionPercent(items []adminplusdomain.SchedulerSupplierChecklistItem) int {
+	if len(items) == 0 {
+		return 0
+	}
+	completed := 0
+	for _, item := range items {
+		if item.Status == "ready" || item.Status == "ok" || item.Status == "enabled" {
+			completed++
+		}
+	}
+	return completed * 100 / len(items)
+}
+
+func checklistItem(key, label, status, description, evidence, action string, checkedAt *time.Time) adminplusdomain.SchedulerSupplierChecklistItem {
+	return adminplusdomain.SchedulerSupplierChecklistItem{
+		Key:               key,
+		Label:             label,
+		Status:            status,
+		Description:       description,
+		Evidence:          strings.TrimSpace(evidence),
+		RecommendedAction: action,
+		LastCheckedAt:     checkedAt,
+	}
+}
+
+func checklistStatus(ok bool) string {
+	if ok {
+		return "ready"
+	}
+	return "missing"
+}
+
+func checklistURLStatus(supplier *adminplusdomain.Supplier) string {
+	if strings.TrimSpace(supplier.DashboardURL) != "" || strings.TrimSpace(supplier.APIBaseURL) != "" {
+		return "ready"
+	}
+	return "missing_url"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func taskNeedsSession(taskType adminplusdomain.ExtensionTaskType) bool {
+	switch taskType {
+	case adminplusdomain.ExtensionTaskTypeFetchGroups,
+		adminplusdomain.ExtensionTaskTypeFetchRates,
+		adminplusdomain.ExtensionTaskTypeFetchBalance,
+		adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+		adminplusdomain.ExtensionTaskTypeFetchHealth,
+		adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
+		adminplusdomain.ExtensionTaskTypeCheckChannels:
+		return true
+	default:
+		return false
+	}
+}
+
+func stepFailureStatus(reason string) string {
+	if stepFailureNeedsManual(reason) {
+		return "manual_required"
+	}
+	return "retryable_failed"
+}
+
+func stepFailureNeedsManual(reason string) bool {
+	var payload stepFailureReason
+	if json.Unmarshal([]byte(strings.TrimSpace(reason)), &payload) == nil {
+		if payload.Outcome == "manual_required" {
+			return true
+		}
+		return isManualRequiredLoginCode(payload.LoginCode)
+	}
+	return isManualRequiredLoginCode(reasonCodeFromText(reason))
+}
+
+func encodeStepFailure(reason stepFailureReason) string {
+	raw, err := json.Marshal(reason)
+	if err == nil {
+		return string(raw)
+	}
+	return strings.TrimSpace(firstNonEmpty(reason.LoginMessage, reason.Message, reason.RawError, reason.Code))
+}
+
+func isSessionRefreshableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isSessionRefreshableCode(infraerrors.Reason(err)) || isSessionRefreshableReason(err.Error())
+}
+
+func isSessionRefreshableReason(reason string) bool {
+	return isSessionRefreshableCode(reasonCodeFromText(reason))
+}
+
+func isSessionRefreshableCode(code string) bool {
+	switch strings.ToUpper(strings.TrimSpace(code)) {
+	case "SUPPLIER_SESSION_NOT_FOUND",
+		"SUPPLIER_SESSION_EXPIRED",
+		"SUPPLIER_SESSION_DECRYPT_FAILED",
+		"SUPPLIER_SESSION_PERMISSION_DENIED":
+		return true
+	default:
+		return false
+	}
+}
+
+func loginFailureOutcome(err error) string {
+	if isManualRequiredLoginCode(infraerrors.Reason(err)) {
+		return "manual_required"
+	}
+	if code := infraerrors.Code(err); code == http.StatusConflict || code == http.StatusUnauthorized || code == http.StatusForbidden {
+		return "manual_required"
+	}
+	return "failed"
+}
+
+func isManualRequiredLoginCode(code string) bool {
+	switch strings.ToUpper(strings.TrimSpace(code)) {
+	case "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED",
+		"LOGIN_CREDENTIAL_INVALID",
+		"LOGIN_CAPTCHA_REQUIRED",
+		"LOGIN_MFA_REQUIRED",
+		"BROWSER_FALLBACK_REQUIRED",
+		"BROWSER_CHALLENGE_REQUIRED",
+		"PASSWORD_LOGIN_DISABLED":
+		return true
+	default:
+		return false
+	}
+}
+
+func loginFailureSuggestion(err error) string {
+	switch strings.ToUpper(strings.TrimSpace(infraerrors.Reason(err))) {
+	case "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED":
+		return "补充供应商登录账号密码或 access token 后重试。"
+	case "LOGIN_CREDENTIAL_INVALID":
+		return "供应商登录凭据无效，请更新账号密码或 token 后重试。"
+	case "LOGIN_CAPTCHA_REQUIRED", "BROWSER_CHALLENGE_REQUIRED", "BROWSER_FALLBACK_REQUIRED":
+		return "供应商要求浏览器验证，请使用一键登录或插件采集会话后重试。"
+	case "LOGIN_MFA_REQUIRED":
+		return "供应商要求二次验证，请人工完成登录或使用插件采集会话。"
+	case "PASSWORD_LOGIN_DISABLED":
+		return "供应商关闭密码登录，请改用 token 或插件采集会话。"
+	default:
+		return "自动登录失败，请检查供应商地址、凭据和防护策略后重试。"
+	}
+}
+
+func reasonCodeFromText(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
+	}
+	var payload stepFailureReason
+	if json.Unmarshal([]byte(reason), &payload) == nil {
+		return firstNonEmpty(payload.LoginCode, payload.Code)
+	}
+	upper := strings.ToUpper(reason)
+	for _, marker := range []string{
+		"SUPPLIER_SESSION_NOT_FOUND",
+		"SUPPLIER_SESSION_EXPIRED",
+		"SUPPLIER_SESSION_DECRYPT_FAILED",
+		"SUPPLIER_SESSION_PERMISSION_DENIED",
+		"SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED",
+		"LOGIN_CREDENTIAL_INVALID",
+		"LOGIN_CAPTCHA_REQUIRED",
+		"LOGIN_MFA_REQUIRED",
+		"BROWSER_FALLBACK_REQUIRED",
+		"BROWSER_CHALLENGE_REQUIRED",
+		"PASSWORD_LOGIN_DISABLED",
+	} {
+		if strings.Contains(upper, marker) {
+			return marker
+		}
+	}
+	return ""
+}
+
+func trimLimit(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit]
+}
+
+func formatSupplierBalance(cents int64, currency string) string {
+	if currency == "" {
+		currency = "USD"
+	}
+	return fmt.Sprintf("%.2f %s", float64(cents)/100, currency)
+}
+
+func schedulerAction(now time.Time, supplier *adminplusdomain.Supplier, severity, actionType, title, reason, operation string) adminplusdomain.SchedulerAction {
+	return adminplusdomain.SchedulerAction{
+		ID:                   fmt.Sprintf("%s:%d", actionType, supplier.ID),
+		SupplierID:           supplier.ID,
+		SupplierName:         supplier.Name,
+		Severity:             severity,
+		Status:               "open",
+		Type:                 actionType,
+		Title:                title,
+		Reason:               reason,
+		RecommendedOperation: operation,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+}
+
+func schedulerRunTaskLabel(taskTypes []adminplusdomain.ExtensionTaskType) string {
+	if len(taskTypes) == 1 {
+		return schedulerTaskTypeLabel(taskTypes[0])
+	}
+	if len(taskTypes) == 0 {
+		return "supplier.balance.sync"
+	}
+	return "mixed"
+}
+
+func schedulerTaskTypeLabel(taskType adminplusdomain.ExtensionTaskType) string {
+	switch taskType {
+	case adminplusdomain.ExtensionTaskTypeFetchGroups:
+		return "supplier.groups.sync"
+	case adminplusdomain.ExtensionTaskTypeFetchRates:
+		return "supplier.rates.sync"
+	case adminplusdomain.ExtensionTaskTypeFetchBalance:
+		return "supplier.balance.sync"
+	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
+		return "supplier.announcements.sync"
+	case adminplusdomain.ExtensionTaskTypeFetchHealth:
+		return "supplier.session.probe"
+	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
+		return "supplier.usage_costs.sync"
+	case adminplusdomain.ExtensionTaskTypeCheckChannels:
+		return "supplier.channels.check"
+	case adminplusdomain.ExtensionTaskTypeCaptureSession:
+		return "supplier.session.capture"
+	default:
+		return string(taskType)
+	}
+}
+
+func schedulerRunStatus(run *adminplusdomain.SchedulerRun) string {
+	if run == nil {
+		return "unknown"
+	}
+	if len(run.Items) == 0 {
+		return "skipped"
+	}
+	if schedulerRunSucceededSteps(run.Items) == len(run.Items) {
+		return "succeeded"
+	}
+	if schedulerRunSucceededSteps(run.Items) > 0 {
+		return "partial_succeeded"
+	}
+	if run.DryRun {
+		return "succeeded"
+	}
+	return "retryable_failed"
+}
+
+func schedulerRunSupplierCount(items []adminplusdomain.ScheduledTask) int {
+	seen := map[int64]struct{}{}
+	for _, item := range items {
+		seen[item.SupplierID] = struct{}{}
+	}
+	return len(seen)
+}
+
+func schedulerRunSucceededSteps(items []adminplusdomain.ScheduledTask) int {
+	count := 0
+	for _, item := range items {
+		if item.Synced || (!item.Synced && item.Reason == "") {
+			count++
+		}
+	}
+	return count
+}
+
+func schedulerRunFailedSteps(items []adminplusdomain.ScheduledTask) int {
+	count := 0
+	for _, item := range items {
+		if item.Reason != "" && item.Reason != "duplicate" {
+			count++
+		}
+	}
+	return count
 }
 
 func normalizeTaskTypes(input []adminplusdomain.ExtensionTaskType) []adminplusdomain.ExtensionTaskType {
@@ -461,7 +1915,7 @@ func NewWorker(service *Service) *Worker {
 
 func ProvideWorker(service *Service) *Worker {
 	worker := NewWorker(service)
-	if schedulerEnabled() {
+	if schedulerWorkerEnabled() {
 		worker.Start(schedulerInterval())
 	}
 	return worker
@@ -474,13 +1928,32 @@ func (w *Worker) Start(interval time.Duration) {
 	w.started = true
 	go func() {
 		defer close(w.done)
-		timer := time.NewTimer(10 * time.Second)
+		timer := time.NewTimer(2 * time.Second)
+		nextPeriodic := time.Now().Add(10 * time.Second)
 		defer timer.Stop()
 		for {
 			select {
 			case <-timer.C:
-				_, _ = w.service.Run(context.Background(), RunInput{Mode: "periodic"})
-				timer.Reset(interval)
+				processed, _ := w.service.ProcessNext(context.Background(), defaultWorkerID())
+				if !processed && time.Now().After(nextPeriodic) && w.service.automaticSchedulingEnabled(context.Background()) {
+					if w.service.repo != nil {
+						processed, _ = w.service.EnqueueDuePlan(context.Background())
+						if processed {
+							nextPeriodic = time.Now().Add(500 * time.Millisecond)
+						} else {
+							nextPeriodic = time.Now().Add(interval)
+						}
+					} else {
+						_, _ = w.service.Run(context.Background(), RunInput{Mode: "periodic"})
+						processed = true
+						nextPeriodic = time.Now().Add(interval)
+					}
+				}
+				if processed {
+					timer.Reset(500 * time.Millisecond)
+				} else {
+					timer.Reset(5 * time.Second)
+				}
 			case <-w.stop:
 				return
 			}
@@ -498,8 +1971,17 @@ func (w *Worker) Stop() {
 	})
 }
 
+func (s *Service) automaticSchedulingEnabled(ctx context.Context) bool {
+	return s.Settings(ctx).Enabled
+}
+
 func schedulerEnabled() bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_PLUS_SCHEDULER_ENABLED")))
+	return value == "" || value == "1" || value == "true" || value == "yes"
+}
+
+func schedulerWorkerEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_PLUS_SCHEDULER_WORKER_ENABLED")))
 	return value == "" || value == "1" || value == "true" || value == "yes"
 }
 
@@ -518,4 +2000,12 @@ func schedulerInterval() time.Duration {
 func channelChecksSchedulerEnabled() bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_PLUS_CHANNEL_CHECKS_SCHEDULER_ENABLED")))
 	return value == "1" || value == "true" || value == "yes"
+}
+
+func defaultWorkerID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "scheduler-worker"
+	}
+	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }

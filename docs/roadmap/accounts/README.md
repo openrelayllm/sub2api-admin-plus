@@ -467,11 +467,13 @@ flowchart TD
 - 不得把本地 Sub2API `accounts.quota_used`、`usage_logs` 或本地 API Key quota 当成供应商余额。
 - 无余额供应商仍然可以监控费率和公告，但不能进入自动切换候选。
 
-### 9.1 通用采集调度流程
+### 9.1 调度中心通用采集流程
+
+供应商采集不再由单个页面同步执行。调度事实源迁到 `docs/roadmap/scheduler/README.md` 定义的调度中心：HTTP 只提交 run，Worker 异步执行 step，并把 run/step/attempt、错误码、重试和智能动作持久化。账号文档只定义 Provider Adapter 采集口径和业务写入边界。
 
 ```mermaid
 flowchart TD
-  A[Scheduler 生成采集任务] --> B[选择供应商或供应商账号]
+  A[调度中心创建 run/step] --> B[选择供应商或供应商账号]
   B --> C{是否存在有效供应商会话}
   C -- 否 --> C1{是否可后端直登}
   C1 -- 是 --> C2[Provider Adapter 执行直登]

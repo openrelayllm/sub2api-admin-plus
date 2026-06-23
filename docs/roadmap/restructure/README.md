@@ -34,6 +34,7 @@
 | `docs/sub2api-admin-plus-prd.md` | 产品目标、范围、用户故事、验收口径 | 保持高层，不继续塞过细实现 |
 | `docs/roadmap/accounts/README.md` | 供应商、分组、第三方 Key、本地账号绑定主流程 | 作为账号链路事实源 |
 | `docs/roadmap/accounts/ASYNC_PROVISIONING.md` | 账号开通、分组同步、真实 Sub2API 落地的异步任务、事件、队列和 UI/UX 治理 | 作为账号开通异步治理事实源 |
+| `docs/roadmap/scheduler/README.md` | 供应商采集、对账、会话、渠道检测、本地调度联动和异常处理的自动化 | 作为调度中心和供应商运营自动化事实源 |
 | `docs/roadmap/Chrome/README.md` | 插件兜底职责、会话包、插件状态机、安全边界 | 作为插件契约事实源 |
 | `docs/code-structure.md` | 代码目录、模块边界、开发顺序 | 后续按本计划更新 |
 | `docs/roadmap/restructure/README.md` | 重新梳理顺序、阶段验收、并行协作 | 本计划 |
@@ -205,15 +206,13 @@ flowchart TD
 - 供应商
   - 供应商管理
   - 账号/Key 绑定（修复/审计）
-- 采集监控
-  - 任务调度
+- 调度中心
+  - 工作台
   - 采集会话
-- 运营事件
-  - 公告
 - 财务对账
-  - 供应商账单
+  - 成本对账
+  - 用量消耗
   - 本地用量
-  - 对账结果
 页面原则：
 
 - 供应商管理页负责父级、会话、分组同步和分组行开通 Key/账号主流程。
@@ -357,7 +356,7 @@ P4/P5 最后收口：
 - `ReadRates(session)` 已落地：旧插件 `fetch_rates` 只保留 compat，不作为费率主路径。
 - `ReadBalance(session)` 已落地：`POST /api/v1/admin-plus/suppliers/:id/session/probe` 和调度中心显式 `fetch_balance` 都通过后端 `balances.SyncFromSession` 读取供应商用户侧 profile，并写入 `admin_plus_balance_snapshots` 与余额事件；不依赖插件上报已解析余额。
 - `ReadUsageCosts(session, date_range)` 已落地：`POST /api/v1/admin-plus/suppliers/:id/usage-costs/sync` 使用后端 Provider Adapter 优先读取供应商用户侧 `/api/v1/usage`，归一化后写入 `admin_plus_supplier_usage_cost_lines`；旧插件 `fetch_usage_costs` 只保留 compat。
-- 调度中心已收口：`/admin/collection/scheduler` 只显式调用后端 Provider Adapter / app service 执行业务采集；`/admin/collection/sessions` 只展示和创建 `capture_supplier_session` 会话上报任务；`/admin/collection/plugin-tasks` 仅作为 compat 重定向，不再作为导航入口或业务调度页。旧插件业务结果摄取仅作为兼容入口保留。
+- 调度中心升级方向已收口：`docs/roadmap/scheduler/README.md` 作为供应商运营自动化事实源，统一承载采集计划、运行审计、供应商 Checklist、智能动作、会话维护、渠道检测、账单/对账触发和本地调度联动；`/admin/collection/scheduler` 后续只作为兼容入口，目标入口为调度中心工作台。`/admin/collection/sessions` 只展示和创建 `capture_supplier_session` 会话上报任务；`/admin/collection/plugin-tasks` 仅作为 compat 重定向，不再作为导航入口或业务调度页。旧插件业务结果摄取仅作为兼容入口保留。
 - `CreateKey(session, group, params)` 基础链路已落地：供应商侧用户 Key 创建接口为 `/api/v1/keys`；第三方 Key 明文只在 Adapter -> Service -> 本地 Sub2API Admin API 的内存链路中流转，响应和 `provision_response` 不保存明文 key/token/secret。下一步必须迁到 Worker 内存链路，并禁止 job snapshot/outbox payload 保存明文。
 
 下一步仍未完成：
@@ -366,7 +365,7 @@ P4/P5 最后收口：
 - 第三方 Key 真实供应商联调、失败告警和操作审计。
 - Gateway Adapter 重构：`Sub2APIGateway` 边界、可配置 HTTP Adapter 和生产 fail-fast 守卫已落地；剩余工作是真实 E2E 验证，以及对历史 embedded fallback 产生的 Admin Plus 投影做一次 reconcile。
 - Saga 细粒度重构：`provision_all_group_keys` 已拆成每分组 step；下一阶段继续把单分组执行器拆成 `ensure_third_party_key`、`ensure_sub2api_group`、`ensure_sub2api_account`、`upsert_admin_plus_binding` 等显式 step。Redis consumer group 已用于 Worker 唤醒和 ack，业务去重仍必须依赖 DB claim、终态状态和外部幂等。
-- 账单同步与调度中心的周期触发、真实供应商联调和异常告警。
+- 账单同步与调度中心的周期触发、真实供应商联调、异常告警和智能动作闭环。
 
 - [x] 重排导航。
 - [ ] 完善所有列表分页和 CRUD UI。

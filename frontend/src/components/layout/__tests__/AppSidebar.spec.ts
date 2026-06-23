@@ -15,7 +15,7 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(componentSource).toContain("path: '/admin/settings'")
     expect(componentSource).toContain("path: '/admin/suppliers'")
     expect(componentSource).toContain("path: '/admin/supplier-bindings'")
-    expect(componentSource).toContain("path: '/admin/collection/scheduler'")
+    expect(componentSource).toContain("path: '/admin/scheduler'")
     expect(componentSource).toContain("path: '/admin/collection/sessions'")
     expect(componentSource).toContain("path: '/admin/finance/costs'")
     expect(componentSource).toContain("path: '/admin/finance/usage-costs'")
@@ -47,12 +47,12 @@ describe('AppSidebar Admin Plus navigation', () => {
 
   it('将业务页面收敛到当前三组导航下', () => {
     const suppliersGroupMatch = componentSource.match(/label: '供应商',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
-    const collectionGroupMatch = componentSource.match(/label: '采集监控',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
+    const collectionGroupMatch = componentSource.match(/label: '调度中心',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
     const financeGroupMatch = componentSource.match(/label: '财务对账',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
 
     expect(suppliersGroupMatch?.[1]).toContain("label: '供应商管理'")
     expect(suppliersGroupMatch?.[1]).toContain("label: '账号/Key 绑定'")
-    expect(collectionGroupMatch?.[1]).toContain("label: '任务调度'")
+    expect(collectionGroupMatch?.[1]).toContain("label: '工作台'")
     expect(collectionGroupMatch?.[1]).toContain("label: '采集会话'")
     expect(collectionGroupMatch?.[1]).not.toContain("label: '插件任务'")
     expect(componentSource).not.toContain("label: '运营事件'")
