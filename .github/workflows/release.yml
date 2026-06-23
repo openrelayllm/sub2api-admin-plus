@@ -187,7 +187,7 @@ jobs:
 
       # Update DockerHub description
       - name: Update DockerHub description
-        if: ${{ env.SIMPLE_RELEASE != 'true' && env.DOCKERHUB_USERNAME != '' }}
+        if: ${{ env.SIMPLE_RELEASE != 'true' && env.DOCKERHUB_USERNAME != '' && vars.UPDATE_DOCKERHUB_DESCRIPTION == 'true' }}
         continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:
