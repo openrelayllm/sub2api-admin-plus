@@ -215,4 +215,13 @@ func TestIsMigrationChecksumCompatible(t *testing.T) {
 		)
 		require.True(t, ok)
 	})
+
+	t.Run("179历史site catalog checksum可兼容当前目录模型版本", func(t *testing.T) {
+		ok := isMigrationChecksumCompatible(
+			"179_admin_plus_site_catalog.sql",
+			"64406d76c52af2dfc8689314b67a7154278b0c205f078f1966ec72b66a534926",
+			"1b57c451371ebed5326c9e347bc91f41c2281af4683c5f5f2799838683fdf1e8",
+		)
+		require.True(t, ok)
+	})
 }

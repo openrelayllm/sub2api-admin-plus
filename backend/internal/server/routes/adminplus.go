@@ -64,6 +64,7 @@ func RegisterAdminPlusRoutes(
 			siteDiscovery.PUT("/settings", h.AdminPlus.SiteDiscovery.UpdateSettings)
 			siteDiscovery.POST("/runs", h.AdminPlus.SiteDiscovery.Run)
 			siteDiscovery.POST("/runs/stream", h.AdminPlus.SiteDiscovery.RunStream)
+			siteDiscovery.POST("/items/classify/stream", h.AdminPlus.SiteDiscovery.ClassifyStream)
 			siteDiscovery.GET("/items", h.AdminPlus.SiteDiscovery.ListItems)
 			siteDiscovery.POST("/items/:id/import", h.AdminPlus.SiteDiscovery.ImportItem)
 			siteDiscovery.POST("/items/:id/register", h.AdminPlus.SiteDiscovery.RegisterItem)
@@ -77,6 +78,7 @@ func RegisterAdminPlusRoutes(
 			siteCatalog.GET("/sites/:id", h.AdminPlus.SiteCatalog.GetSite)
 			siteCatalog.GET("/categories", h.AdminPlus.SiteCatalog.ListCategories)
 			siteCatalog.GET("/tags", h.AdminPlus.SiteCatalog.ListTags)
+			siteCatalog.POST("/candidates/bulk-add/stream", h.AdminPlus.SiteCatalog.BulkAddDiscoveryCandidatesStream)
 			siteCatalog.POST("/candidates/:id/add", h.AdminPlus.SiteCatalog.AddDiscoveryCandidate)
 		}
 

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 )
@@ -137,6 +138,117 @@ func TestProbeSiteClassificationKnownInterfaces(t *testing.T) {
 				t.Fatalf("expected high confidence, got %.2f", result.Confidence)
 			}
 		})
+	}
+}
+
+func TestClassifyCandidatesStreamYieldsFastItemsBeforeSlowItems(t *testing.T) {
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer slowServer.Close()
+	fastServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/settings/public" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"code": 0,
+			"data": {
+				"version": "0.11.3",
+				"site_name": "Sub2API",
+				"api_base_url": "https://api.example.com",
+				"registration_enabled": true,
+				"table_default_page_size": 20
+			}
+		}`))
+	}))
+	defer fastServer.Close()
+
+	service := NewService(nil, nil, nil, nil, fastServer.Client())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	results := service.classifyCandidatesStream(ctx, []*adminplusdomain.SiteDiscoveryItem{
+		{Name: "slow", APIBaseURL: slowServer.URL},
+		{Name: "fast", APIBaseURL: fastServer.URL},
+	}, true, false)
+
+	select {
+	case item := <-results:
+		if item == nil {
+			t.Fatal("expected first classified item")
+		}
+		if item.APIBaseURL != fastServer.URL {
+			t.Fatalf("expected fast item first, got %s", item.APIBaseURL)
+		}
+		if item.ProviderType != adminplusdomain.SupplierTypeSub2API {
+			t.Fatalf("expected fast item classified as sub2api, got %s", item.ProviderType)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected fast item before slow endpoint timeout")
+	}
+}
+
+func TestProbeKnownProviderInterfacesTriesNewAPIWhenSub2APIEndpointIsSlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/settings/public":
+			<-r.Context().Done()
+		case "/api/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"success": true,
+				"data": {
+					"version": "v0.10.0",
+					"quota_per_unit": 500000,
+					"system_name": "New API",
+					"setup": false,
+					"register_enabled": true
+				}
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := NewService(nil, nil, nil, nil, server.Client())
+	result := service.probeKnownProviderInterfaces(context.Background(), &adminplusdomain.SiteDiscoveryItem{
+		APIBaseURL: server.URL,
+	})
+	if result.ProviderType != adminplusdomain.SupplierTypeNewAPI {
+		t.Fatalf("expected new-api after slow sub2api endpoint, got %s", result.ProviderType)
+	}
+}
+
+func TestClassifyCandidateDoesNotDowngradeExistingSupportedItem(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	service := NewService(nil, nil, nil, nil, server.Client())
+	item := &adminplusdomain.SiteDiscoveryItem{
+		Name:                     "existing supported",
+		APIBaseURL:               server.URL,
+		ProviderType:             adminplusdomain.SupplierTypeNewAPI,
+		ClassificationStatus:     adminplusdomain.SiteDiscoveryClassificationSupported,
+		ClassificationConfidence: 0.98,
+		ClassificationEvidence:   []string{"api:/api/status", "api:new_api_status"},
+	}
+	service.classifyCandidate(context.Background(), item, true, false)
+	if item.ProviderType != adminplusdomain.SupplierTypeNewAPI {
+		t.Fatalf("expected existing provider to be preserved, got %s", item.ProviderType)
+	}
+	if item.ClassificationStatus != adminplusdomain.SiteDiscoveryClassificationSupported {
+		t.Fatalf("expected supported status to be preserved, got %s", item.ClassificationStatus)
+	}
+}
+
+func TestClassifyCandidateNormalizesUnknownStatus(t *testing.T) {
+	service := NewService(nil, nil, nil, nil, nil)
+	item := &adminplusdomain.SiteDiscoveryItem{Name: "plain relay"}
+	service.classifyCandidate(context.Background(), item, false, false)
+	if item.ClassificationStatus != adminplusdomain.SiteDiscoveryClassificationUnknown {
+		t.Fatalf("expected unknown status, got %q", item.ClassificationStatus)
 	}
 }
 

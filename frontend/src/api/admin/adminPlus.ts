@@ -1080,6 +1080,13 @@ export interface SiteDiscoveryRunResult {
   items: SiteDiscoveryItem[]
 }
 
+export interface SiteDiscoveryClassifyResult {
+  total: number
+  supported_total: number
+  unknown_total: number
+  items: SiteDiscoveryItem[]
+}
+
 export type SiteDiscoveryRunProgressLevel = 'info' | 'success' | 'warning' | 'error'
 
 export interface SiteDiscoveryRunProgressEvent {
@@ -1091,6 +1098,7 @@ export interface SiteDiscoveryRunProgressEvent {
   run?: SiteDiscoveryRun
   item?: SiteDiscoveryItem
   result?: SiteDiscoveryRunResult
+  classify_result?: SiteDiscoveryClassifyResult
 }
 
 export type SiteCatalogStatus = 'draft' | 'reviewing' | 'published' | 'archived'
@@ -1190,6 +1198,43 @@ export interface AddDiscoveryCandidateToCatalogPayload {
   category_ids?: number[]
   tag_ids?: number[]
   links?: SiteCatalogLinkPayload[]
+}
+
+export interface BulkAddDiscoveryCandidatesPayload {
+  q?: string
+  provider_type?: 'new_api' | 'sub2api' | ''
+  import_status?: SiteDiscoveryImportStatus | ''
+  registration_status?: SupplierRegistrationStatus | ''
+  processed_status?: 'processed' | 'unprocessed' | ''
+  only_supported?: boolean
+  limit?: number
+  site_kind?: SiteCatalogKind
+  status?: SiteCatalogStatus
+  visibility?: SiteCatalogVisibility
+  recommendation_level?: SiteCatalogRecommendationLevel
+  recommendation_reason?: string
+  risk_level?: SiteCatalogRiskLevel
+  category_ids?: number[]
+  tag_ids?: number[]
+}
+
+export interface BulkAddDiscoveryCandidatesResult {
+  total: number
+  created: number
+  skipped: number
+  failed: number
+  sites?: SiteCatalogSite[]
+  errors?: Array<{ discovery_id: number; name: string; error: string }>
+}
+
+export interface BulkAddDiscoveryCandidatesProgressEvent {
+  type: 'started' | 'item_success' | 'item_skipped' | 'item_failed' | 'failed' | 'completed' | string
+  level?: SiteDiscoveryRunProgressLevel
+  message: string
+  current?: number
+  total?: number
+  item?: SiteCatalogSite
+  result?: BulkAddDiscoveryCandidatesResult
 }
 
 export interface SupplierRegistrationCredential {
@@ -2088,6 +2133,54 @@ export async function runSiteDiscoveryStream(
   }
 }
 
+export async function classifySiteDiscoveryItemsStream(
+  payload: {
+    q?: string
+    provider_type?: 'new_api' | 'sub2api' | ''
+    classification_status?: SiteDiscoveryClassificationStatus | ''
+    import_status?: SiteDiscoveryImportStatus | ''
+    registration_status?: SupplierRegistrationStatus | ''
+    processed_status?: 'processed' | 'unprocessed' | ''
+    probe_interfaces?: boolean
+    probe_sites?: boolean
+    limit?: number
+  },
+  onEvent: (event: SiteDiscoveryRunProgressEvent) => void
+): Promise<void> {
+  const baseURL = String(apiClient.defaults.baseURL || import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(`${baseURL}/admin-plus/site-discovery/items/classify/stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(payload || {})
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`批量识别启动失败：HTTP ${response.status}`)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      const text = line.trim()
+      if (!text) continue
+      onEvent(JSON.parse(text) as SiteDiscoveryRunProgressEvent)
+    }
+  }
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer.trim()) as SiteDiscoveryRunProgressEvent)
+  }
+}
+
 export async function listSiteDiscoveryItems(params?: {
   q?: string
   provider_type?: 'new_api' | 'sub2api' | ''
@@ -2152,6 +2245,44 @@ export async function listSiteCatalogTags(): Promise<{ items: SiteCatalogTag[] }
 export async function addDiscoveryCandidateToCatalog(id: number, payload: AddDiscoveryCandidateToCatalogPayload): Promise<SiteCatalogSite> {
   const { data } = await apiClient.post<SiteCatalogSite>(`/admin-plus/site-catalog/candidates/${id}/add`, payload)
   return data
+}
+
+export async function bulkAddDiscoveryCandidatesToCatalogStream(
+  payload: BulkAddDiscoveryCandidatesPayload,
+  onEvent: (event: BulkAddDiscoveryCandidatesProgressEvent) => void
+): Promise<void> {
+  const baseURL = String(apiClient.defaults.baseURL || import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(`${baseURL}/admin-plus/site-catalog/candidates/bulk-add/stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(payload || {})
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`批量加入目录启动失败：HTTP ${response.status}`)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      const text = line.trim()
+      if (!text) continue
+      onEvent(JSON.parse(text) as BulkAddDiscoveryCandidatesProgressEvent)
+    }
+  }
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer.trim()) as BulkAddDiscoveryCandidatesProgressEvent)
+  }
 }
 
 export async function generateActions(payload: {

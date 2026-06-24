@@ -84,6 +84,7 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 	"169_admin_plus_usage_cost_lines_compat.sql":              newMigrationChecksumCompatibilityRule("ddac0409aa304545d42845dcfcf775a91709bf128c193b907c5db06e8e546681", "b2993e7d06fdba5efd85f2738ef0b3521befa4c75e4c9f2ad27d697b2ec9c581"),
 	"175_admin_plus_scheduler_center.sql":                     newMigrationChecksumCompatibilityRule("53ea16d8a622175df1d19ac85a42c8c567ad600bcfe572d83227b8e50f6c86c5", "ffd2356073bb30037b3bfde6675c6d72b3a35ad10a0ae6961346f2118d834a20"),
 	"178_admin_plus_site_discovery.sql":                       newMigrationChecksumCompatibilityRule("86a1d255a31f3a7ce2824bfeca42b71e2778d2564b40693f7def006c77c310de", "459352b868de342155485bc43c849d207f3268473cfaf280c7dd02953f1a0500"),
+	"179_admin_plus_site_catalog.sql":                         newMigrationChecksumCompatibilityRule("1b57c451371ebed5326c9e347bc91f41c2281af4683c5f5f2799838683fdf1e8", "64406d76c52af2dfc8689314b67a7154278b0c205f078f1966ec72b66a534926"),
 }
 
 // ApplyMigrations 将嵌入的 SQL 迁移文件应用到指定的数据库。

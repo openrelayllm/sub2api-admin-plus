@@ -84,6 +84,44 @@ type AddDiscoveryCandidateInput struct {
 	Links                []SiteLinkInput                                `json:"links"`
 }
 
+type BulkAddDiscoveryCandidatesInput struct {
+	SiteKind             adminplusdomain.SiteCatalogKind                `json:"site_kind"`
+	Status               adminplusdomain.SiteCatalogStatus              `json:"status"`
+	Visibility           adminplusdomain.SiteCatalogVisibility          `json:"visibility"`
+	RecommendationLevel  adminplusdomain.SiteCatalogRecommendationLevel `json:"recommendation_level"`
+	RecommendationReason string                                         `json:"recommendation_reason"`
+	RiskLevel            adminplusdomain.SiteCatalogRiskLevel           `json:"risk_level"`
+	CategoryIDs          []int64                                        `json:"category_ids"`
+	TagIDs               []int64                                        `json:"tag_ids"`
+}
+
+type BulkAddDiscoveryCandidatesResult struct {
+	Total   int                                `json:"total"`
+	Created int                                `json:"created"`
+	Skipped int                                `json:"skipped"`
+	Failed  int                                `json:"failed"`
+	Sites   []*adminplusdomain.SiteCatalogSite `json:"sites,omitempty"`
+	Errors  []BulkAddDiscoveryCandidateError   `json:"errors,omitempty"`
+}
+
+type BulkAddDiscoveryCandidateError struct {
+	DiscoveryID int64  `json:"discovery_id"`
+	Name        string `json:"name"`
+	Error       string `json:"error"`
+}
+
+type BulkAddDiscoveryCandidateProgressEvent struct {
+	Type    string                            `json:"type"`
+	Level   string                            `json:"level,omitempty"`
+	Message string                            `json:"message"`
+	Current int                               `json:"current,omitempty"`
+	Total   int                               `json:"total,omitempty"`
+	Item    *adminplusdomain.SiteCatalogSite  `json:"item,omitempty"`
+	Result  *BulkAddDiscoveryCandidatesResult `json:"result,omitempty"`
+}
+
+type BulkAddDiscoveryCandidateEmitter func(BulkAddDiscoveryCandidateProgressEvent)
+
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo, now: time.Now}
 }
@@ -156,6 +194,80 @@ func (s *Service) AddDiscoveryCandidate(ctx context.Context, candidate *adminplu
 		in.Links = discoveryCandidateLinks(candidate)
 	}
 	return s.repo.AddDiscoveryCandidate(ctx, candidate, in)
+}
+
+func (s *Service) BulkAddDiscoveryCandidates(ctx context.Context, candidates []*adminplusdomain.SiteDiscoveryItem, in BulkAddDiscoveryCandidatesInput, emit BulkAddDiscoveryCandidateEmitter) (*BulkAddDiscoveryCandidatesResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("site catalog service is not configured")
+	}
+	result := &BulkAddDiscoveryCandidatesResult{
+		Total: len(candidates),
+		Sites: make([]*adminplusdomain.SiteCatalogSite, 0, len(candidates)),
+	}
+	emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{
+		Type:    "started",
+		Level:   "info",
+		Message: "批量加入目录已开始，共 " + stringFromInt64(int64(len(candidates))) + " 个候选",
+		Total:   len(candidates),
+	})
+	for i, candidate := range candidates {
+		current := i + 1
+		if candidate == nil || candidate.ID <= 0 {
+			result.Skipped++
+			emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_skipped", Level: "warning", Message: "候选为空，已跳过", Current: current, Total: len(candidates)})
+			continue
+		}
+		name := firstNonEmpty(candidate.Name, candidate.Host, candidate.RegisterURL)
+		if candidate.CatalogSiteID > 0 || candidate.ProcessStatus == adminplusdomain.SiteDiscoveryProcessAddedToCatalog {
+			result.Skipped++
+			emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_skipped", Level: "warning", Message: "已在目录中，跳过：" + name, Current: current, Total: len(candidates)})
+			continue
+		}
+		if candidate.ClassificationStatus != adminplusdomain.SiteDiscoveryClassificationSupported || (candidate.ProviderType != adminplusdomain.SupplierTypeNewAPI && candidate.ProviderType != adminplusdomain.SupplierTypeSub2API) {
+			result.Skipped++
+			emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_skipped", Level: "warning", Message: "未识别为支持类型，跳过：" + name, Current: current, Total: len(candidates)})
+			continue
+		}
+		site, err := s.AddDiscoveryCandidate(ctx, candidate, AddDiscoveryCandidateInput{
+			SiteKind:             in.SiteKind,
+			Status:               in.Status,
+			Visibility:           in.Visibility,
+			RecommendationLevel:  in.RecommendationLevel,
+			RecommendationReason: in.RecommendationReason,
+			RiskLevel:            in.RiskLevel,
+			CategoryIDs:          in.CategoryIDs,
+			TagIDs:               in.TagIDs,
+		})
+		if err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, BulkAddDiscoveryCandidateError{DiscoveryID: candidate.ID, Name: name, Error: err.Error()})
+			emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_failed", Level: "error", Message: "加入失败：" + name + " - " + err.Error(), Current: current, Total: len(candidates)})
+			continue
+		}
+		result.Created++
+		result.Sites = append(result.Sites, site)
+		emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_success", Level: "success", Message: "已加入目录：" + name, Current: current, Total: len(candidates), Item: site})
+	}
+	level := "success"
+	if result.Failed > 0 {
+		level = "warning"
+	}
+	emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{
+		Type:    "completed",
+		Level:   level,
+		Message: "批量加入完成：新增 " + stringFromInt64(int64(result.Created)) + "，跳过 " + stringFromInt64(int64(result.Skipped)) + "，失败 " + stringFromInt64(int64(result.Failed)),
+		Current: result.Total,
+		Total:   result.Total,
+		Result:  result,
+	})
+	return result, nil
+}
+
+func emitBulkAddProgress(emit BulkAddDiscoveryCandidateEmitter, event BulkAddDiscoveryCandidateProgressEvent) {
+	if emit == nil {
+		return
+	}
+	emit(event)
 }
 
 func (s *Service) ListCategories(ctx context.Context) ([]*adminplusdomain.SiteCatalogCategory, error) {

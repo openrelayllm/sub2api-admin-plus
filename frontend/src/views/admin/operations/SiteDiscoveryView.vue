@@ -13,7 +13,15 @@
             <Icon name="refresh" size="sm" />
             刷新
           </button>
-          <button type="button" class="btn btn-primary" :disabled="running" @click="runDiscoveryNow">
+          <button type="button" class="btn btn-secondary" :disabled="running || classifying || bulkAddingCatalog" @click="classifyAllItemsNow">
+            <Icon name="search" size="sm" />
+            {{ classifying ? '识别中...' : '一键识别全部' }}
+          </button>
+          <button type="button" class="btn btn-secondary" :disabled="running || classifying || bulkAddingCatalog" @click="bulkAddCatalogNow">
+            <Icon name="database" size="sm" />
+            {{ bulkAddingCatalog ? '加入中...' : '批量加入目录' }}
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="running || classifying || bulkAddingCatalog" @click="runDiscoveryNow">
             <Icon name="play" size="sm" />
             {{ running ? '采集中...' : '运行采集' }}
           </button>
@@ -64,9 +72,17 @@
                 <h2 class="text-lg font-semibold text-gray-900 dark:text-white">采集工作台</h2>
                 <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">当前默认采集第三方中转分区。</p>
               </div>
-              <button type="button" class="btn btn-primary btn-sm" :disabled="running" @click="runDiscoveryNow">
+              <div class="flex flex-wrap gap-2">
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="running || classifying || bulkAddingCatalog" @click="classifyAllItemsNow">
+                  {{ classifying ? '识别中...' : '一键识别全部' }}
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="running || classifying || bulkAddingCatalog" @click="bulkAddCatalogNow">
+                  {{ bulkAddingCatalog ? '加入中...' : '批量加入目录' }}
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" :disabled="running || classifying || bulkAddingCatalog" @click="runDiscoveryNow">
                 {{ running ? '采集中...' : '开始采集' }}
-              </button>
+                </button>
+              </div>
             </div>
             <div class="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_140px_140px_120px] lg:items-end">
               <label class="block">
@@ -94,7 +110,7 @@
                 <h2 class="text-lg font-semibold text-gray-900 dark:text-white">采集进度</h2>
                 <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ discoveryProgressLabel }}</p>
               </div>
-              <span class="badge" :class="running ? 'badge-warning' : 'badge-gray'">{{ running ? '运行中' : '空闲' }}</span>
+              <span class="badge" :class="running || classifying || bulkAddingCatalog ? 'badge-warning' : 'badge-gray'">{{ running ? '采集中' : classifying ? '识别中' : bulkAddingCatalog ? '加入目录中' : '空闲' }}</span>
             </div>
             <div class="p-5">
               <div class="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-800">
@@ -195,6 +211,15 @@
                 <button type="button" class="btn btn-sm" :class="processedFilterClass('unprocessed')" @click="setProcessedFilter('unprocessed')">未处理</button>
                 <button type="button" class="btn btn-sm" :class="processedFilterClass('processed')" @click="setProcessedFilter('processed')">已处理</button>
                 <button type="button" class="btn btn-sm" :class="processedFilterClass('')" @click="setProcessedFilter('')">全部</button>
+                <span class="mx-1 h-8 border-l border-gray-200 dark:border-dark-700"></span>
+                <button type="button" class="btn btn-sm" :class="providerFilterClass('new_api')" @click="setProviderFilter('new_api')">new-api</button>
+                <button type="button" class="btn btn-sm" :class="providerFilterClass('sub2api')" @click="setProviderFilter('sub2api')">sub2api</button>
+                <button type="button" class="btn btn-sm" :class="classificationFilterClass('unknown')" @click="setClassificationFilter('unknown')">未知</button>
+                <button type="button" class="btn btn-sm" :class="providerFilterClass('')" @click="clearTypeFilters">全部类型</button>
+                <span class="mx-1 h-8 border-l border-gray-200 dark:border-dark-700"></span>
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="running || classifying || bulkAddingCatalog" @click="bulkAddCatalogNow">
+                  {{ bulkAddingCatalog ? '加入中...' : '批量加入目录' }}
+                </button>
               </div>
             </div>
 
@@ -527,6 +552,8 @@ import { useAppStore } from '@/stores/app'
 import {
   getSiteDiscoverySettings,
   addDiscoveryCandidateToCatalog,
+  bulkAddDiscoveryCandidatesToCatalogStream,
+  classifySiteDiscoveryItemsStream,
   importSiteDiscoveryItem,
   listSiteCatalogCategories,
   listSiteCatalogTags,
@@ -595,6 +622,8 @@ const tabs: { value: SiteDiscoveryTab; label: string }[] = [
 const activeTab = ref<SiteDiscoveryTab>('dashboard')
 const loading = ref(false)
 const running = ref(false)
+const classifying = ref(false)
+const bulkAddingCatalog = ref(false)
 const savingSettings = ref(false)
 const busyItemID = ref<number | null>(null)
 const sourceURL = ref('https://api.daheiai.com/')
@@ -674,9 +703,11 @@ const discoveryProgressPercent = computed(() => {
   return Math.min(100, Math.round((discoveryProgress.current / discoveryProgress.total) * 100))
 })
 const discoveryProgressLabel = computed(() => {
+  if (bulkAddingCatalog.value) return '正在把已识别候选批量加入网址目录。'
+  if (classifying.value) return '正在通过接口批量判断 new-api / sub2api 类型。'
   if (running.value) return '正在采集、去重、分类并写入候选库。'
-  if (discoveryLogs.value.length > 0) return '最近一次采集日志。'
-  return '启动采集后显示实时进度和日志。'
+  if (discoveryLogs.value.length > 0) return '最近一次采集或识别日志。'
+  return '启动采集或一键识别后显示实时进度和日志。'
 })
 
 const activeTableItems = computed(() => {
@@ -847,6 +878,64 @@ async function runDiscoveryNow() {
   }
 }
 
+async function classifyAllItemsNow() {
+  classifying.value = true
+  resetDiscoveryProgress()
+  let failedMessage = ''
+  try {
+    await classifySiteDiscoveryItemsStream({
+      probe_interfaces: true,
+      probe_sites: probeSites.value
+    }, (event) => {
+      handleDiscoveryProgressEvent(event)
+      if (event.type === 'failed') failedMessage = event.message
+    })
+    if (failedMessage) throw new Error(failedMessage)
+    appStore.showSuccess('批量识别完成')
+    urlPagination.page = 1
+    await Promise.all([loadItems(), loadRegisteredItems(), loadRegistrationTasks(), loadRecommendations()])
+    activeTab.value = 'urls'
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  } finally {
+    classifying.value = false
+  }
+}
+
+async function bulkAddCatalogNow() {
+  bulkAddingCatalog.value = true
+  resetDiscoveryProgress()
+  let failedMessage = ''
+  try {
+    await bulkAddDiscoveryCandidatesToCatalogStream({
+      q: urlFilters.q || undefined,
+      provider_type: normalizeEmpty(urlFilters.provider_type) as 'new_api' | 'sub2api' | '',
+      import_status: normalizeEmpty(urlFilters.import_status) as never,
+      registration_status: normalizeEmpty(urlFilters.registration_status) as never,
+      processed_status: urlFilters.processed_status || 'unprocessed',
+      only_supported: true,
+      limit: 1000,
+      site_kind: 'api_relay',
+      status: 'draft',
+      visibility: 'public',
+      recommendation_level: 'none',
+      risk_level: 'unknown'
+    }, (event) => {
+      handleBulkAddCatalogProgressEvent(event)
+      if (event.type === 'failed') failedMessage = event.message
+    })
+    if (failedMessage) throw new Error(failedMessage)
+    appStore.showSuccess('批量加入目录完成')
+    urlPagination.page = 1
+    activeTab.value = 'urls'
+    await refreshActiveLists()
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  } finally {
+    bulkAddingCatalog.value = false
+  }
+}
+
 function resetDiscoveryProgress() {
   discoveryProgress.current = 0
   discoveryProgress.total = 0
@@ -861,6 +950,26 @@ function handleDiscoveryProgressEvent(event: SiteDiscoveryRunProgressEvent) {
     discoveryProgress.total = event.result.run.total
     discoveryProgress.current = event.result.run.total
   }
+  if (event.classify_result?.total) {
+    discoveryProgress.total = event.classify_result.total
+    discoveryProgress.current = event.classify_result.total
+  }
+  appendDiscoveryLog({
+    id: ++discoveryLogID,
+    level: event.level || discoveryLevelFromType(event.type),
+    message: event.message || event.type,
+    current: event.current,
+    total: event.total
+  })
+}
+
+function handleBulkAddCatalogProgressEvent(event: { type: string; level?: SiteDiscoveryRunProgressLevel; message: string; current?: number; total?: number; result?: { total: number } }) {
+  if (typeof event.total === 'number') discoveryProgress.total = event.total
+  if (typeof event.current === 'number') discoveryProgress.current = event.current
+  if (event.result?.total) {
+    discoveryProgress.total = event.result.total
+    discoveryProgress.current = event.result.total
+  }
   appendDiscoveryLog({
     id: ++discoveryLogID,
     level: event.level || discoveryLevelFromType(event.type),
@@ -873,7 +982,7 @@ function handleDiscoveryProgressEvent(event: SiteDiscoveryRunProgressEvent) {
 function discoveryLevelFromType(type: string): SiteDiscoveryRunProgressLevel {
   if (type === 'item_success' || type === 'completed') return 'success'
   if (type === 'item_skipped' || type === 'item_unknown') return 'warning'
-  if (type === 'failed') return 'error'
+  if (type === 'failed' || type === 'item_failed') return 'error'
   return 'info'
 }
 
@@ -1038,6 +1147,24 @@ function setProcessedFilter(value: 'processed' | 'unprocessed' | '') {
   resetURLPagination()
 }
 
+function setProviderFilter(value: 'new_api' | 'sub2api') {
+  urlFilters.provider_type = value
+  urlFilters.classification_status = ''
+  resetURLPagination()
+}
+
+function setClassificationFilter(value: 'unknown') {
+  urlFilters.provider_type = ''
+  urlFilters.classification_status = value
+  resetURLPagination()
+}
+
+function clearTypeFilters() {
+  urlFilters.provider_type = ''
+  urlFilters.classification_status = ''
+  resetURLPagination()
+}
+
 function resetRegisteredPagination() {
   registeredPagination.page = 1
   void loadRegisteredItems()
@@ -1176,6 +1303,14 @@ function isProcessed(item: SiteDiscoveryItem): boolean {
 
 function processedFilterClass(value: 'processed' | 'unprocessed' | ''): string {
   return urlFilters.processed_status === value ? 'btn-primary' : 'btn-secondary'
+}
+
+function providerFilterClass(value: 'new_api' | 'sub2api' | ''): string {
+  return urlFilters.provider_type === value && (!value || !urlFilters.classification_status) ? 'btn-primary' : 'btn-secondary'
+}
+
+function classificationFilterClass(value: 'unknown'): string {
+  return urlFilters.classification_status === value && !urlFilters.provider_type ? 'btn-primary' : 'btn-secondary'
 }
 
 function monitorLabel(value?: boolean | null): string {

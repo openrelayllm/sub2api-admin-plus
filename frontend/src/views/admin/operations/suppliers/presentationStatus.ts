@@ -451,19 +451,25 @@ export function attachPresentationStatus(ctx: any) {
       message.includes('cannot access user profile')
   }
 
-  function normalizeBalanceErrorMessage(message?: string): string {
-    const raw = String(message || '').trim()
+  function normalizeBalanceErrorMessage(errorOrMessage?: unknown): string {
+    const diagnostic = errorMetadataDiagnostic(errorOrMessage)
+    const raw = typeof errorOrMessage === 'string'
+      ? errorOrMessage.trim()
+      : errorMessage(errorOrMessage, '').trim()
     const lower = raw.toLowerCase()
     if (lower.includes('authorization header is required')) {
-      return '供应商 profile 接口要求 Authorization，但保存的会话没有带上 access token；请在供应商仪表盘页重新上报'
+      return withDiagnostic('供应商 profile 接口要求 Authorization，但保存的会话没有带上 access token；请在供应商仪表盘页重新上报', diagnostic)
     }
     if (lower.includes('invalid token') || lower.includes('invalid_auth_header')) {
-      return '保存的供应商 access token 已失效或格式不正确；请刷新供应商页面后重新上报'
+      return withDiagnostic('保存的供应商 access token 已失效或格式不正确；请刷新供应商页面后重新上报', diagnostic)
     }
     if (lower.includes('supplier session cannot access user profile') || lower.includes('cannot access user profile')) {
-      return '供应商会话无法读取用户资料或余额，请重新采集具备 Profile 权限的会话'
+      return withDiagnostic('供应商会话无法读取用户资料或余额，请重新采集具备 Profile 权限的会话', diagnostic)
     }
-    return raw || '读取当前余额失败'
+    if (lower.includes('supplier profile endpoint returned non-success status')) {
+      return withDiagnostic('供应商 profile 接口返回非成功状态，请根据状态码和响应内容判断是登录态过期、接口路径不匹配还是上游拦截', diagnostic)
+    }
+    return withDiagnostic(raw || '读取当前余额失败', diagnostic)
   }
 
   function errorMessage(error: unknown, fallback: string): string {

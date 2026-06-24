@@ -2,6 +2,7 @@ package providerrouter
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -45,7 +46,25 @@ func (r *Router) ProbeSub2APIUserProfile(ctx context.Context, in ports.SessionPr
 	if r == nil || r.sub2api == nil {
 		return nil, internalError()
 	}
-	return r.sub2api.ProbeSub2APIUserProfile(ctx, in)
+	probe, err := r.sub2api.ProbeSub2APIUserProfile(ctx, in)
+	if err == nil {
+		return probe, nil
+	}
+	if !shouldFallbackProfileProbeToNewAPI(err, in.Bundle) {
+		return nil, err
+	}
+	if r.newapi == nil {
+		return nil, err
+	}
+	fallbackProbe, fallbackErr := r.newapi.ProbeSub2APIUserProfile(ctx, in)
+	if fallbackErr != nil {
+		if hasNewAPISessionEvidence(in.Bundle) {
+			return nil, withProfileFallbackErrorDiagnostics(fallbackErr, err)
+		}
+		return nil, err
+	}
+	addProfileFallbackDiagnostics(fallbackProbe, err)
+	return fallbackProbe, nil
 }
 
 func (r *Router) ReadGroups(ctx context.Context, in ports.SessionProbeInput) (*ports.ReadGroupsResult, error) {
@@ -165,12 +184,19 @@ func providerTypeFromLogin(in ports.DirectLoginInput) string {
 }
 
 func providerTypeFromBundle(bundle map[string]any) string {
-	return normalizeProviderType(firstNonEmpty(
+	explicit := normalizeProviderType(firstNonEmpty(
 		stringValue(bundle, "provider_type"),
 		stringValue(bundle, "system_type"),
 		stringValueAt(bundle, "context", "provider_type"),
 		stringValueAt(bundle, "context", "system_type"),
 	))
+	if explicit != "" {
+		return explicit
+	}
+	if hasNewAPISessionEvidence(bundle) {
+		return "new_api"
+	}
+	return ""
 }
 
 func normalizeProviderType(value string) string {
@@ -223,4 +249,83 @@ func stringValueAt(in map[string]any, path ...string) string {
 		return strings.TrimSpace(value)
 	}
 	return ""
+}
+
+func shouldFallbackProfileProbeToNewAPI(err error, bundle map[string]any) bool {
+	reason := infraerrors.Reason(err)
+	if hasNewAPISessionEvidence(bundle) {
+		return reason != ""
+	}
+	switch reason {
+	case "SUPPLIER_SESSION_PROBE_HTML", "SUPPLIER_SESSION_PROBE_BAD_STATUS", "SUPPLIER_SESSION_PROFILE_INVALID":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasNewAPISessionEvidence(bundle map[string]any) bool {
+	if bundle == nil {
+		return false
+	}
+	requiredHeaders := mapValue(bundle, "required_headers")
+	if firstNonEmpty(
+		stringValue(requiredHeaders, "New-Api-User"),
+		stringValue(requiredHeaders, "New-API-User"),
+		stringValue(requiredHeaders, "new-api-user"),
+	) != "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(stringValue(bundle, "auth_header_name")), "New-Api-User")
+}
+
+func mapValue(in map[string]any, key string) map[string]any {
+	if in == nil {
+		return nil
+	}
+	if value, ok := in[key].(map[string]any); ok {
+		return value
+	}
+	return nil
+}
+
+func addProfileFallbackDiagnostics(probe *ports.SessionProbeResult, sub2apiErr error) {
+	if probe == nil {
+		return
+	}
+	if probe.Diagnostics == nil {
+		probe.Diagnostics = map[string]any{}
+	}
+	sub2apiAppErr := infraerrors.FromError(sub2apiErr)
+	probe.Diagnostics["fallback_from"] = "sub2api"
+	probe.Diagnostics["fallback_reason"] = sub2apiAppErr.Reason
+	probe.Diagnostics["fallback_message"] = sub2apiAppErr.Message
+	if endpoint := sub2apiAppErr.Metadata["endpoint"]; endpoint != "" {
+		probe.Diagnostics["fallback_endpoint"] = endpoint
+	}
+	if statusCode := sub2apiAppErr.Metadata["status_code"]; statusCode != "" {
+		probe.Diagnostics["fallback_status_code"] = statusCode
+	}
+}
+
+func withProfileFallbackErrorDiagnostics(err error, sub2apiErr error) error {
+	if err == nil {
+		return nil
+	}
+	var appErr *infraerrors.ApplicationError
+	if !errors.As(err, &appErr) {
+		return err
+	}
+	sub2apiAppErr := infraerrors.FromError(sub2apiErr)
+	metadata := make(map[string]string, len(appErr.Metadata)+4)
+	for key, value := range appErr.Metadata {
+		metadata[key] = value
+	}
+	metadata["fallback_from"] = "sub2api"
+	metadata["fallback_reason"] = sub2apiAppErr.Reason
+	metadata["fallback_message"] = sub2apiAppErr.Message
+	if endpoint := sub2apiAppErr.Metadata["endpoint"]; endpoint != "" {
+		metadata["fallback_endpoint"] = endpoint
+	}
+	return appErr.WithMetadata(metadata)
 }

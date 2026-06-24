@@ -25,7 +25,10 @@ const (
 	defaultLowRateThreshold    = 0.8
 	defaultDiscoveryFetchLimit = 8 << 20
 	defaultSiteProbeLimit      = 512 << 10
-	defaultSiteProbeWorkers    = 8
+	defaultSiteProbeWorkers    = 48
+	defaultInterfaceProbeTTL   = 3 * time.Second
+	defaultEndpointProbeTTL    = 1400 * time.Millisecond
+	defaultPageProbeTTL        = 2500 * time.Millisecond
 	defaultPasswordLength      = 20
 )
 
@@ -41,20 +44,40 @@ type RunInput struct {
 	Limit           int
 }
 
+type ClassifyInput struct {
+	Query                string
+	ProviderType         adminplusdomain.SupplierType
+	ClassificationStatus adminplusdomain.SiteDiscoveryClassificationStatus
+	ImportStatus         adminplusdomain.SiteDiscoveryImportStatus
+	RegistrationStatus   adminplusdomain.SupplierRegistrationStatus
+	ProcessedStatus      string
+	ProbeInterfaces      bool
+	ProbeSites           bool
+	Limit                int
+}
+
 type RunResult struct {
 	Run   *adminplusdomain.SiteDiscoveryRun    `json:"run"`
 	Items []*adminplusdomain.SiteDiscoveryItem `json:"items"`
 }
 
+type ClassifyResult struct {
+	Total          int                                  `json:"total"`
+	SupportedTotal int                                  `json:"supported_total"`
+	UnknownTotal   int                                  `json:"unknown_total"`
+	Items          []*adminplusdomain.SiteDiscoveryItem `json:"items"`
+}
+
 type RunProgressEvent struct {
-	Type    string                             `json:"type"`
-	Level   string                             `json:"level,omitempty"`
-	Message string                             `json:"message"`
-	Current int                                `json:"current,omitempty"`
-	Total   int                                `json:"total,omitempty"`
-	Run     *adminplusdomain.SiteDiscoveryRun  `json:"run,omitempty"`
-	Item    *adminplusdomain.SiteDiscoveryItem `json:"item,omitempty"`
-	Result  *RunResult                         `json:"result,omitempty"`
+	Type           string                             `json:"type"`
+	Level          string                             `json:"level,omitempty"`
+	Message        string                             `json:"message"`
+	Current        int                                `json:"current,omitempty"`
+	Total          int                                `json:"total,omitempty"`
+	Run            *adminplusdomain.SiteDiscoveryRun  `json:"run,omitempty"`
+	Item           *adminplusdomain.SiteDiscoveryItem `json:"item,omitempty"`
+	Result         *RunResult                         `json:"result,omitempty"`
+	ClassifyResult *ClassifyResult                    `json:"classify_result,omitempty"`
 }
 
 type RunProgressEmitter func(RunProgressEvent)
@@ -144,6 +167,89 @@ func (s *Service) RunWithProgress(ctx context.Context, in RunInput, emit RunProg
 	return s.run(ctx, in, emit)
 }
 
+func (s *Service) ClassifyWithProgress(ctx context.Context, in ClassifyInput, emit RunProgressEmitter) (*ClassifyResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("site discovery service is not configured")
+	}
+	if in.ProviderType != "" && in.ProviderType != adminplusdomain.SupplierTypeNewAPI && in.ProviderType != adminplusdomain.SupplierTypeSub2API {
+		return nil, badRequest("SITE_DISCOVERY_PROVIDER_TYPE_UNSUPPORTED", "only new_api and sub2api discovery filters are supported")
+	}
+	if in.ProcessedStatus != "" && in.ProcessedStatus != "processed" && in.ProcessedStatus != "unprocessed" {
+		return nil, badRequest("SITE_DISCOVERY_PROCESSED_STATUS_UNSUPPORTED", "processed status filter must be processed or unprocessed")
+	}
+	if in.Limit <= 0 || in.Limit > 10000 {
+		in.Limit = 10000
+	}
+	items, err := s.repo.ListItems(ctx, ListFilter{
+		Query:                strings.TrimSpace(in.Query),
+		ProviderType:         in.ProviderType,
+		ClassificationStatus: in.ClassificationStatus,
+		ImportStatus:         in.ImportStatus,
+		RegistrationStatus:   in.RegistrationStatus,
+		ProcessedStatus:      strings.TrimSpace(in.ProcessedStatus),
+		Limit:                in.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	total := len(items)
+	emitRunProgress(emit, RunProgressEvent{
+		Type:    "started",
+		Level:   "info",
+		Message: "批量识别已开始，共 " + stringFromInt64(int64(total)) + " 个候选网址",
+		Total:   total,
+	})
+	if total == 0 {
+		result := &ClassifyResult{}
+		emitRunProgress(emit, RunProgressEvent{
+			Type:           "completed",
+			Level:          "success",
+			Message:        "没有需要识别的候选网址",
+			Current:        0,
+			Total:          0,
+			ClassifyResult: result,
+		})
+		return result, nil
+	}
+	if in.ProbeInterfaces {
+		emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "正在通过 /api/status 与 /api/v1/settings/public 判断类型", Total: total})
+	}
+	if in.ProbeSites {
+		emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "已启用页面深度探测作为补充判断", Total: total})
+	}
+	classifyCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := &ClassifyResult{Total: total, Items: make([]*adminplusdomain.SiteDiscoveryItem, 0, total)}
+	current := 0
+	for item := range s.classifyCandidatesStream(classifyCtx, items, in.ProbeInterfaces, in.ProbeSites) {
+		current++
+		updated, err := s.repo.UpsertItem(ctx, item)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		if updated.ClassificationStatus == adminplusdomain.SiteDiscoveryClassificationSupported {
+			result.SupportedTotal++
+		} else {
+			result.UnknownTotal++
+		}
+		result.Items = append(result.Items, updated)
+		emitRunProgress(emit, siteDiscoveryClassifyProgressEvent(current, total, updated))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	emitRunProgress(emit, RunProgressEvent{
+		Type:           "completed",
+		Level:          "success",
+		Message:        "批量识别完成：" + stringFromInt64(int64(result.Total)) + " 个站点，支持 " + stringFromInt64(int64(result.SupportedTotal)) + " 个，未知 " + stringFromInt64(int64(result.UnknownTotal)) + " 个",
+		Current:        total,
+		Total:          total,
+		ClassifyResult: result,
+	})
+	return result, nil
+}
+
 func (s *Service) run(ctx context.Context, in RunInput, emit RunProgressEmitter) (*RunResult, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("site discovery service is not configured")
@@ -181,31 +287,34 @@ func (s *Service) run(ctx context.Context, in RunInput, emit RunProgressEmitter)
 	emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "采集源解析完成，发现 " + stringFromInt64(int64(len(candidates))) + " 个候选网址", Run: run, Total: len(candidates)})
 	monitor := s.fetchMonitorData(ctx, sourceURL)
 	if in.ProbeInterfaces {
-		emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "正在通过公开接口进行二次分类", Run: run, Total: len(candidates)})
+		emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "正在通过公开接口进行二次分类并写入候选库", Run: run, Total: len(candidates)})
 	} else {
-		emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "已关闭接口类型识别，仅使用索引特征", Run: run, Total: len(candidates)})
+		emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "info", Message: "已关闭接口类型识别，正在使用索引特征写入候选库", Run: run, Total: len(candidates)})
 	}
-	s.classifyCandidates(ctx, candidates, in.ProbeInterfaces, in.ProbeSites)
-	emitRunProgress(emit, RunProgressEvent{Type: "log", Level: "success", Message: "二次分类完成", Run: run, Total: len(candidates)})
+	classifyCtx, cancelClassify := context.WithCancel(ctx)
+	defer cancelClassify()
 	items := make([]*adminplusdomain.SiteDiscoveryItem, 0, len(candidates))
 	supported := 0
 	imported := 0
-	for i := range candidates {
-		item := candidates[i]
+	for _, item := range candidates {
 		item.RunID = run.ID
 		item.SourceURL = sourceURL
 		if m := monitor[item.SourceSiteID]; m != nil {
 			applyMonitor(item, m)
 		}
+	}
+	for item := range s.classifyCandidatesStream(classifyCtx, candidates, in.ProbeInterfaces, in.ProbeSites) {
 		if item.ClassificationStatus == adminplusdomain.SiteDiscoveryClassificationSupported {
 			supported++
 		}
 		existing, err := s.repo.FindExistingItem(ctx, sourceURL, item.SourceSiteID, item.RegisterURL)
 		if err != nil {
+			cancelClassify()
 			return nil, s.failRunWithProgress(ctx, run, err, emit)
 		}
 		created, err := s.repo.UpsertItem(ctx, item)
 		if err != nil {
+			cancelClassify()
 			return nil, s.failRunWithProgress(ctx, run, err, emit)
 		}
 		if created.ImportStatus == adminplusdomain.SiteDiscoveryImportImported {
@@ -213,6 +322,9 @@ func (s *Service) run(ctx context.Context, in RunInput, emit RunProgressEmitter)
 		}
 		items = append(items, created)
 		emitRunProgress(emit, siteDiscoveryItemProgressEvent(len(items), len(candidates), created, existing != nil, run))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, s.failRunWithProgress(ctx, run, err, emit)
 	}
 	finished := s.now().UTC()
 	run.Status = adminplusdomain.SiteDiscoveryRunStatusSucceeded
@@ -521,9 +633,52 @@ func siteDiscoveryItemProgressEvent(current int, total int, item *adminplusdomai
 	}
 }
 
+func siteDiscoveryClassifyProgressEvent(current int, total int, item *adminplusdomain.SiteDiscoveryItem) RunProgressEvent {
+	if item == nil {
+		return RunProgressEvent{
+			Type:    "item_unknown",
+			Level:   "warning",
+			Message: "候选识别完成，但返回结果为空",
+			Current: current,
+			Total:   total,
+		}
+	}
+	name := firstNonEmpty(item.Name, item.Host, item.RegisterURL)
+	provider := string(item.ProviderType)
+	if item.ClassificationStatus == adminplusdomain.SiteDiscoveryClassificationSupported {
+		if provider == "" {
+			provider = "supported"
+		}
+		return RunProgressEvent{
+			Type:    "item_success",
+			Level:   "success",
+			Message: "识别成功：" + name + "（" + provider + "）",
+			Current: current,
+			Total:   total,
+			Item:    item,
+		}
+	}
+	return RunProgressEvent{
+		Type:    "item_unknown",
+		Level:   "warning",
+		Message: "接口未命中：" + name,
+		Current: current,
+		Total:   total,
+		Item:    item,
+	}
+}
+
 func (s *Service) classifyCandidates(ctx context.Context, candidates []*adminplusdomain.SiteDiscoveryItem, probeInterfaces bool, probePages bool) {
+	for item := range s.classifyCandidatesStream(ctx, candidates, probeInterfaces, probePages) {
+		_ = item
+	}
+}
+
+func (s *Service) classifyCandidatesStream(ctx context.Context, candidates []*adminplusdomain.SiteDiscoveryItem, probeInterfaces bool, probePages bool) <-chan *adminplusdomain.SiteDiscoveryItem {
+	results := make(chan *adminplusdomain.SiteDiscoveryItem)
 	if len(candidates) == 0 {
-		return
+		close(results)
+		return results
 	}
 	workers := defaultSiteProbeWorkers
 	if len(candidates) < workers {
@@ -535,32 +690,69 @@ func (s *Service) classifyCandidates(ctx context.Context, candidates []*adminplu
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for item := range jobs {
-				classification := classifyItem(item)
-				if probeInterfaces && classification.Confidence < 0.95 {
-					classification = classification.Merge(s.probeKnownProviderInterfaces(ctx, item))
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case item, ok := <-jobs:
+					if !ok {
+						return
+					}
+					s.classifyCandidate(ctx, item, probeInterfaces, probePages)
+					select {
+					case <-ctx.Done():
+						return
+					case results <- item:
+					}
 				}
-				if probePages && classification.Confidence < 0.95 {
-					classification = classification.Merge(s.probeSitePageClassification(ctx, item))
-				}
-				item.ProviderType = classification.ProviderType
-				item.ClassificationStatus = classification.Status
-				item.ClassificationConfidence = classification.Confidence
-				item.ClassificationEvidence = classification.Evidence
 			}
 		}()
 	}
-	for _, item := range candidates {
-		select {
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			return
-		case jobs <- item:
+	go func() {
+		defer close(jobs)
+		for _, item := range candidates {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- item:
+			}
 		}
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	return results
+}
+
+func (s *Service) classifyCandidate(ctx context.Context, item *adminplusdomain.SiteDiscoveryItem, probeInterfaces bool, probePages bool) {
+	classification := classifyItem(item).Merge(existingClassification(item))
+	if probeInterfaces && classification.Confidence < 0.95 {
+		classification = classification.Merge(s.probeKnownProviderInterfaces(ctx, item))
 	}
-	close(jobs)
-	wg.Wait()
+	if probePages && classification.Confidence < 0.95 {
+		classification = classification.Merge(s.probeSitePageClassification(ctx, item))
+	}
+	item.ProviderType = classification.ProviderType
+	item.ClassificationStatus = classification.Status
+	item.ClassificationConfidence = classification.Confidence
+	item.ClassificationEvidence = classification.Evidence
+}
+
+func existingClassification(item *adminplusdomain.SiteDiscoveryItem) classificationResult {
+	if item == nil || item.ProviderType == "" || item.ClassificationStatus != adminplusdomain.SiteDiscoveryClassificationSupported {
+		return classificationResult{}
+	}
+	confidence := item.ClassificationConfidence
+	if confidence <= 0 {
+		confidence = 0.95
+	}
+	return classificationResult{
+		ProviderType: item.ProviderType,
+		Status:       item.ClassificationStatus,
+		Confidence:   confidence,
+		Evidence:     append([]string(nil), item.ClassificationEvidence...),
+	}
 }
 
 func (s *Service) fetchText(ctx context.Context, rawURL string, limit int64) (string, error) {
@@ -632,7 +824,7 @@ func (s *Service) probeSitePageClassification(ctx context.Context, item *adminpl
 	if target == "" {
 		return classificationResult{}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, defaultPageProbeTTL)
 	defer cancel()
 	body, err := s.fetchText(ctx, target, defaultSiteProbeLimit)
 	if err != nil {
@@ -642,13 +834,25 @@ func (s *Service) probeSitePageClassification(ctx context.Context, item *adminpl
 }
 
 func (s *Service) probeKnownProviderInterfaces(ctx context.Context, item *adminplusdomain.SiteDiscoveryItem) classificationResult {
-	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, defaultInterfaceProbeTTL)
 	defer cancel()
 	for _, origin := range candidateOrigins(item) {
-		if result := s.probeSub2APIInterface(ctx, origin); result.Status == adminplusdomain.SiteDiscoveryClassificationSupported {
+		if ctx.Err() != nil {
+			return classificationResult{}
+		}
+		sub2apiCtx, cancelSub2API := context.WithTimeout(ctx, defaultEndpointProbeTTL)
+		result := s.probeSub2APIInterface(sub2apiCtx, origin)
+		cancelSub2API()
+		if result.Status == adminplusdomain.SiteDiscoveryClassificationSupported {
 			return result
 		}
-		if result := s.probeNewAPIInterface(ctx, origin); result.Status == adminplusdomain.SiteDiscoveryClassificationSupported {
+		if ctx.Err() != nil {
+			return classificationResult{}
+		}
+		newAPICtx, cancelNewAPI := context.WithTimeout(ctx, defaultEndpointProbeTTL)
+		result = s.probeNewAPIInterface(newAPICtx, origin)
+		cancelNewAPI()
+		if result.Status == adminplusdomain.SiteDiscoveryClassificationSupported {
 			return result
 		}
 	}
@@ -846,6 +1050,9 @@ type classificationResult struct {
 }
 
 func (r classificationResult) Merge(other classificationResult) classificationResult {
+	if r.Status == "" && other.Status != "" {
+		return other
+	}
 	if other.Confidence > r.Confidence {
 		return other
 	}

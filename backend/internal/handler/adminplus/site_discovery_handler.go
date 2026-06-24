@@ -33,6 +33,18 @@ type runSiteDiscoveryRequest struct {
 	Limit           int    `json:"limit"`
 }
 
+type classifySiteDiscoveryRequest struct {
+	Query                string `json:"q"`
+	ProviderType         string `json:"provider_type"`
+	ClassificationStatus string `json:"classification_status"`
+	ImportStatus         string `json:"import_status"`
+	RegistrationStatus   string `json:"registration_status"`
+	ProcessedStatus      string `json:"processed_status"`
+	ProbeInterfaces      *bool  `json:"probe_interfaces"`
+	ProbeSites           bool   `json:"probe_sites"`
+	Limit                int    `json:"limit"`
+}
+
 func (h *SiteDiscoveryHandler) GetSettings(c *gin.Context) {
 	settings, err := h.service.GetSettings(c.Request.Context())
 	if response.ErrorFrom(c, err) {
@@ -101,6 +113,46 @@ func (h *SiteDiscoveryHandler) RunStream(c *gin.Context) {
 		ProbeInterfaces: boolDefault(req.ProbeInterfaces, true),
 		ProbeSites:      req.ProbeSites,
 		Limit:           req.Limit,
+	}, emit)
+	if err != nil {
+		emit(sitediscoveryapp.RunProgressEvent{
+			Type:    "failed",
+			Level:   "error",
+			Message: err.Error(),
+		})
+	}
+}
+
+func (h *SiteDiscoveryHandler) ClassifyStream(c *gin.Context) {
+	var req classifySiteDiscoveryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.Error(c, http.StatusInternalServerError, "streaming is not supported")
+		return
+	}
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusCreated)
+	encoder := json.NewEncoder(c.Writer)
+	emit := func(event sitediscoveryapp.RunProgressEvent) {
+		_ = encoder.Encode(event)
+		flusher.Flush()
+	}
+	_, err := h.service.ClassifyWithProgress(c.Request.Context(), sitediscoveryapp.ClassifyInput{
+		Query:                req.Query,
+		ProviderType:         normalizeDiscoveryProviderType(req.ProviderType),
+		ClassificationStatus: adminplusdomain.SiteDiscoveryClassificationStatus(strings.TrimSpace(req.ClassificationStatus)),
+		ImportStatus:         adminplusdomain.SiteDiscoveryImportStatus(strings.TrimSpace(req.ImportStatus)),
+		RegistrationStatus:   adminplusdomain.SupplierRegistrationStatus(strings.TrimSpace(req.RegistrationStatus)),
+		ProcessedStatus:      strings.TrimSpace(req.ProcessedStatus),
+		ProbeInterfaces:      boolDefault(req.ProbeInterfaces, true),
+		ProbeSites:           req.ProbeSites,
+		Limit:                req.Limit,
 	}, emit)
 	if err != nil {
 		emit(sitediscoveryapp.RunProgressEvent{

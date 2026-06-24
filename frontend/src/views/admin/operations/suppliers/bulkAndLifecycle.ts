@@ -83,10 +83,10 @@ export function attachSupplierBulkAndLifecycle(ctx: any) {
           } else {
             success++
           }
-        } catch (error) {
-          failed++
-          failures.push(`${supplier.name}: ${normalizeBalanceErrorMessage(errorMessage(error, '读取当前额度失败'))}`)
-        }
+	    } catch (error) {
+	      failed++
+	      failures.push(`${supplier.name}: ${normalizeBalanceErrorMessage(error) || errorMessage(error, '读取当前额度失败')}`)
+	    }
       }
 
       await loadSuppliers()
@@ -120,9 +120,9 @@ export function attachSupplierBulkAndLifecycle(ctx: any) {
         return
       }
       appStore.showSuccess(`${supplier.name} 余额已刷新`)
-    } catch (error) {
-      appStore.showError(`${supplier.name}: ${normalizeBalanceErrorMessage(errorMessage(error, '读取当前额度失败'))}`, 8000)
-    } finally {
+	} catch (error) {
+	  appStore.showError(`${supplier.name}: ${normalizeBalanceErrorMessage(error) || errorMessage(error, '读取当前额度失败')}`, 8000)
+	} finally {
       rowBalanceRefreshingID.value = null
     }
   }

@@ -122,6 +122,35 @@ func TestClientProbeSelfConvertsQuotaUnitsToUSD(t *testing.T) {
 	require.Equal(t, int64(3), result.Diagnostics["request_count"])
 }
 
+func TestClientProbeSelfIncludesHTTPDiagnosticsOnBadStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/user/self", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not found"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	_, err := client.ProbeSub2APIUserProfile(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"provider_type":    "new_api",
+			"required_headers": map[string]any{"New-Api-User": "9"},
+		},
+	})
+
+	require.Error(t, err)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "SUPPLIER_SESSION_BAD_STATUS", appErr.Reason)
+	require.Equal(t, server.URL+"/api/user/self", appErr.Metadata["endpoint"])
+	require.Equal(t, "404", appErr.Metadata["status_code"])
+	require.Equal(t, "json", appErr.Metadata["body_type"])
+	require.Contains(t, appErr.Metadata["body_excerpt"], "not found")
+}
+
 func TestClientReadGroups(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/user/self/groups", r.URL.Path)

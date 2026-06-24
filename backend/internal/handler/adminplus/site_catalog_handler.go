@@ -1,6 +1,7 @@
 package adminplus
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,6 +69,25 @@ type addDiscoveryCandidateRequest struct {
 	CategoryIDs          []int64                  `json:"category_ids"`
 	TagIDs               []int64                  `json:"tag_ids"`
 	Links                []siteCatalogLinkRequest `json:"links"`
+}
+
+type bulkAddDiscoveryCandidatesRequest struct {
+	Query                string  `json:"q"`
+	ProviderType         string  `json:"provider_type"`
+	ClassificationStatus string  `json:"classification_status"`
+	ImportStatus         string  `json:"import_status"`
+	RegistrationStatus   string  `json:"registration_status"`
+	ProcessedStatus      string  `json:"processed_status"`
+	OnlySupported        *bool   `json:"only_supported"`
+	Limit                int     `json:"limit"`
+	SiteKind             string  `json:"site_kind"`
+	Status               string  `json:"status"`
+	Visibility           string  `json:"visibility"`
+	RecommendationLevel  string  `json:"recommendation_level"`
+	RecommendationReason string  `json:"recommendation_reason"`
+	RiskLevel            string  `json:"risk_level"`
+	CategoryIDs          []int64 `json:"category_ids"`
+	TagIDs               []int64 `json:"tag_ids"`
 }
 
 func (h *SiteCatalogHandler) ListSites(c *gin.Context) {
@@ -168,6 +188,69 @@ func (h *SiteCatalogHandler) AddDiscoveryCandidate(c *gin.Context) {
 		return
 	}
 	response.Created(c, item)
+}
+
+func (h *SiteCatalogHandler) BulkAddDiscoveryCandidatesStream(c *gin.Context) {
+	var req bulkAddDiscoveryCandidatesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.Error(c, http.StatusInternalServerError, "streaming is not supported")
+		return
+	}
+	processedStatus := strings.TrimSpace(req.ProcessedStatus)
+	if processedStatus == "" {
+		processedStatus = "unprocessed"
+	}
+	classificationStatus := adminplusdomain.SiteDiscoveryClassificationStatus(strings.TrimSpace(req.ClassificationStatus))
+	if boolDefault(req.OnlySupported, true) && classificationStatus == "" {
+		classificationStatus = adminplusdomain.SiteDiscoveryClassificationSupported
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+	candidates, err := h.discovery.ListItems(c.Request.Context(), sitediscoveryapp.ListFilter{
+		Query:                req.Query,
+		ProviderType:         normalizeDiscoveryProviderType(req.ProviderType),
+		ClassificationStatus: classificationStatus,
+		ImportStatus:         adminplusdomain.SiteDiscoveryImportStatus(strings.TrimSpace(req.ImportStatus)),
+		RegistrationStatus:   adminplusdomain.SupplierRegistrationStatus(strings.TrimSpace(req.RegistrationStatus)),
+		ProcessedStatus:      processedStatus,
+		Limit:                limit,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusCreated)
+	encoder := json.NewEncoder(c.Writer)
+	emit := func(event sitecatalogapp.BulkAddDiscoveryCandidateProgressEvent) {
+		_ = encoder.Encode(event)
+		flusher.Flush()
+	}
+	_, err = h.service.BulkAddDiscoveryCandidates(c.Request.Context(), candidates, sitecatalogapp.BulkAddDiscoveryCandidatesInput{
+		SiteKind:             adminplusdomain.SiteCatalogKind(strings.TrimSpace(req.SiteKind)),
+		Status:               adminplusdomain.SiteCatalogStatus(strings.TrimSpace(req.Status)),
+		Visibility:           adminplusdomain.SiteCatalogVisibility(strings.TrimSpace(req.Visibility)),
+		RecommendationLevel:  adminplusdomain.SiteCatalogRecommendationLevel(strings.TrimSpace(req.RecommendationLevel)),
+		RecommendationReason: req.RecommendationReason,
+		RiskLevel:            adminplusdomain.SiteCatalogRiskLevel(strings.TrimSpace(req.RiskLevel)),
+		CategoryIDs:          req.CategoryIDs,
+		TagIDs:               req.TagIDs,
+	}, emit)
+	if err != nil {
+		emit(sitecatalogapp.BulkAddDiscoveryCandidateProgressEvent{
+			Type:    "failed",
+			Level:   "error",
+			Message: err.Error(),
+		})
+	}
 }
 
 func (h *SiteCatalogHandler) ListCategories(c *gin.Context) {

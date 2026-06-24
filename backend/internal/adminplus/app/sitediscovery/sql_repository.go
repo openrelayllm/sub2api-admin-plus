@@ -262,10 +262,16 @@ func (r *SQLRepository) updateItemByRegisterURL(ctx context.Context, item *admin
 			monitor_uptime_percent = $19,
 			monitor_avg_response_ms = $20,
 			monitor_latest_response_ms = $21,
+			import_status = CASE
+				WHEN d.import_status = 'new' THEN $22
+				ELSE d.import_status
+			END,
 			process_status = CASE
 				WHEN d.process_status = 'unprocessed' THEN $23
 				ELSE d.process_status
 			END,
+			catalog_site_id = COALESCE(NULLIF($24::bigint, 0), d.catalog_site_id),
+			supplier_id = COALESCE(NULLIF($25::bigint, 0), d.supplier_id),
 			raw_payload = $26,
 			updated_at = NOW()
 		WHERE d.register_url = $7
@@ -326,7 +332,15 @@ func (r *SQLRepository) ListItems(ctx context.Context, filter ListFilter) ([]*ad
 		SELECT *
 		FROM (` + siteDiscoverySelectClause() + `) discovery
 		WHERE ` + strings.Join(where, " AND ") + `
-		ORDER BY discovery.updated_at DESC, discovery.id DESC
+		ORDER BY
+			CASE
+				WHEN discovery.provider_type = 'new_api' THEN 0
+				WHEN discovery.provider_type = 'sub2api' THEN 1
+				WHEN discovery.classification_status = 'supported' THEN 2
+				ELSE 3
+			END,
+			discovery.updated_at DESC,
+			discovery.id DESC
 		LIMIT ` + limitRef
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -557,7 +571,7 @@ func scanSiteDiscoveryItemColumns(scanner itemScanner, withRegistration bool) (*
 	var monitorAvailable sql.NullBool
 	var monitorUptime sql.NullFloat64
 	var monitorAvg, monitorLatest sql.NullInt64
-	var supplierID sql.NullInt64
+	var catalogSiteID, supplierID sql.NullInt64
 	dests := []any{
 		&item.ID,
 		&item.RunID,
@@ -583,7 +597,7 @@ func scanSiteDiscoveryItemColumns(scanner itemScanner, withRegistration bool) (*
 		&monitorLatest,
 		&importStatus,
 		&processStatus,
-		&item.CatalogSiteID,
+		&catalogSiteID,
 		&supplierID,
 		&raw,
 		&item.CreatedAt,
@@ -619,6 +633,9 @@ func scanSiteDiscoveryItemColumns(scanner itemScanner, withRegistration bool) (*
 	if monitorLatest.Valid {
 		v := int(monitorLatest.Int64)
 		item.MonitorLatestResponseMS = &v
+	}
+	if catalogSiteID.Valid {
+		item.CatalogSiteID = catalogSiteID.Int64
 	}
 	if supplierID.Valid {
 		item.SupplierID = supplierID.Int64

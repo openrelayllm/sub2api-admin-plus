@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,10 +139,60 @@ func (c *Client) doSessionJSON(ctx context.Context, method string, endpoint stri
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, infraerrors.New(resp.StatusCode, "SUPPLIER_SESSION_PERMISSION_DENIED", "new api session cannot access requested endpoint")
+		return nil, withHTTPDiagnostics(infraerrors.New(resp.StatusCode, "SUPPLIER_SESSION_PERMISSION_DENIED", "new api session cannot access requested endpoint"), endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), data)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_SESSION_BAD_STATUS", "new api session endpoint returned non-success status")
+		return nil, withHTTPDiagnostics(infraerrors.New(http.StatusBadGateway, "SUPPLIER_SESSION_BAD_STATUS", "new api session endpoint returned non-success status"), endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), data)
 	}
 	return data, nil
+}
+
+func withHTTPDiagnostics(err error, endpoint string, statusCode int, contentType string, body []byte) error {
+	if err == nil {
+		return nil
+	}
+	var appErr *infraerrors.ApplicationError
+	if !errors.As(err, &appErr) {
+		return err
+	}
+	metadata := make(map[string]string, len(appErr.Metadata)+5)
+	for key, value := range appErr.Metadata {
+		metadata[key] = value
+	}
+	if strings.TrimSpace(endpoint) != "" {
+		metadata["endpoint"] = endpoint
+	}
+	if statusCode > 0 {
+		metadata["status_code"] = strconv.Itoa(statusCode)
+	}
+	if strings.TrimSpace(contentType) != "" {
+		metadata["content_type"] = strings.TrimSpace(contentType)
+	}
+	if len(body) > 0 {
+		lower := strings.ToLower(string(body))
+		switch {
+		case looksLikeHTMLResponse(lower):
+			metadata["body_type"] = "html"
+		case json.Valid(body):
+			metadata["body_type"] = "json"
+		default:
+			metadata["body_type"] = "text"
+		}
+		if excerpt := responseExcerpt(body, 240); excerpt != "" {
+			metadata["body_excerpt"] = excerpt
+		}
+	}
+	return appErr.WithMetadata(metadata)
+}
+
+func responseExcerpt(body []byte, limit int) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return ""
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit]
 }

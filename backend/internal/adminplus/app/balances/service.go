@@ -493,7 +493,36 @@ func refreshErrorMessage(err error) string {
 	if message == "" {
 		return "balance refresh failed"
 	}
-	return message
+	diagnostic := refreshErrorDiagnostic(err)
+	if diagnostic == "" {
+		return message
+	}
+	return message + " (" + diagnostic + ")"
+}
+
+func refreshErrorDiagnostic(err error) string {
+	var appErr *infraerrors.ApplicationError
+	if !errors.As(err, &appErr) || len(appErr.Metadata) == 0 {
+		return ""
+	}
+	keys := []string{"endpoint", "status_code", "content_type", "body_type", "body_excerpt"}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := strings.TrimSpace(appErr.Metadata[key])
+		if value == "" {
+			continue
+		}
+		parts = append(parts, key+"="+trimBalanceDiagnostic(value))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func trimBalanceDiagnostic(value string) string {
+	text := strings.Join(strings.Fields(value), " ")
+	if len(text) <= 180 {
+		return text
+	}
+	return text[:177] + "..."
 }
 
 func buildBalanceEvent(current, previous *adminplusdomain.BalanceSnapshot, thresholdCents int64) *adminplusdomain.BalanceEvent {
