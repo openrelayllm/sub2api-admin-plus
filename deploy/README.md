@@ -30,6 +30,7 @@ The Sub2API readonly database user should have only `SELECT` on the required run
 | `DOCKER.md` | Docker image usage notes |
 | `Dockerfile` | Multi-stage image build file |
 | `install.sh` | Binary installer/upgrader. Downloads pinned GitHub Release assets like the upstream Sub2API installer |
+| `sub2apiplus` | Command wrapper installed to `/usr/local/bin/sub2apiplus` for systemd upgrades and service operations |
 | `config.example.yaml` | Example runtime configuration |
 
 ## Build, Release, And Deployment Channels
@@ -110,6 +111,27 @@ The target database must be an Admin Plus database. Do not use a live Sub2API pr
 ## Updating
 
 For the systemd binary deployment:
+
+```bash
+# Fresh install
+curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh | sudo bash -s -- install
+
+# Existing installation: bootstrap the command wrapper only.
+# This detects the installed binary and does not download, overwrite, or restart the app.
+curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh | sudo bash -s -- install-command
+
+# After the command wrapper exists, use it for future operations
+sudo sub2apiplus upgrade
+sudo sub2apiplus upgrade -v v0.11.3
+sudo sub2apiplus rollback v0.11.3
+sub2apiplus status
+sub2apiplus logs -n 200
+sub2apiplus follow
+```
+
+The command wrapper delegates release downloads, checksum verification, backup, and systemd restart to `install.sh`. It is installed at `/usr/local/bin/sub2apiplus` and refreshed on every binary install or upgrade.
+
+One-off remote execution is still supported:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh | sudo bash -s -- upgrade

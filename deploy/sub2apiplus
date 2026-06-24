@@ -1,0 +1,119 @@
+#!/bin/bash
+#
+# Sub2API Admin Plus command wrapper.
+# Installed by deploy/install.sh to /usr/local/bin/sub2apiplus.
+#
+
+set -euo pipefail
+
+INSTALL_DIR="${SUB2APIPLUS_INSTALL_DIR:-/opt/sub2api-admin-plus}"
+SERVICE_NAME="${SUB2APIPLUS_SERVICE_NAME:-sub2api-admin-plus}"
+INSTALLER="${SUB2APIPLUS_INSTALLER:-${INSTALL_DIR}/install.sh}"
+REMOTE_INSTALLER="${SUB2APIPLUS_REMOTE_INSTALLER:-https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh}"
+USE_LOCAL_INSTALLER="${SUB2APIPLUS_USE_LOCAL_INSTALLER:-0}"
+
+run_as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        echo "Error: root privileges are required and sudo is not available." >&2
+        exit 1
+    fi
+}
+
+run_installer() {
+    if [ "$USE_LOCAL_INSTALLER" = "1" ] && [ -f "$INSTALLER" ]; then
+        run_as_root bash "$INSTALLER" "$@"
+        return
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required to download the installer." >&2
+        exit 1
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        curl -fsSL "$REMOTE_INSTALLER" | bash -s -- "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        curl -fsSL "$REMOTE_INSTALLER" | sudo bash -s -- "$@"
+    else
+        echo "Error: root privileges are required and sudo is not available." >&2
+        exit 1
+    fi
+}
+
+usage() {
+    cat <<EOF
+Usage: sub2apiplus <command> [options]
+
+Install and update:
+  install [-v VERSION]      Install the latest or a pinned GitHub Release
+  upgrade [-v VERSION]      Upgrade to the latest or a pinned GitHub Release
+  update [-v VERSION]       Alias for upgrade
+  rollback VERSION          Roll back to a pinned GitHub Release
+  versions                  List available GitHub Release versions
+  uninstall                 Remove the systemd installation
+  install-command           Refresh this command wrapper only
+
+Service operations:
+  status                    Show systemd status
+  logs [-n N]               Show recent logs, default 100 lines
+  follow                    Follow service logs
+  restart                   Restart the service
+  start                     Start the service
+  stop                      Stop the service
+
+Examples:
+  sub2apiplus upgrade
+  sub2apiplus upgrade -v v0.11.3
+  sub2apiplus rollback v0.11.3
+  sub2apiplus logs -n 200
+EOF
+}
+
+case "${1:-}" in
+    ""|help|--help|-h)
+        usage
+        ;;
+    status)
+        systemctl status "$SERVICE_NAME"
+        ;;
+    logs)
+        shift
+        lines=100
+        if [ "${1:-}" = "-n" ] || [ "${1:-}" = "--lines" ]; then
+            if [ -z "${2:-}" ]; then
+                echo "Error: ${1} requires a line count." >&2
+                exit 1
+            fi
+            lines="$2"
+            shift 2
+        fi
+        journalctl -u "$SERVICE_NAME" -n "$lines" --no-pager "$@"
+        ;;
+    follow)
+        journalctl -u "$SERVICE_NAME" -f
+        ;;
+    restart|start|stop)
+        command="$1"
+        run_as_root systemctl "$command" "$SERVICE_NAME"
+        ;;
+    install-command)
+        if [ -f "$INSTALLER" ] && grep -q "install-command" "$INSTALLER"; then
+            run_as_root bash "$INSTALLER" install-command
+        else
+            run_installer install-command
+        fi
+        ;;
+    install|upgrade|update|rollback|versions|list-versions|uninstall|remove)
+        run_installer "$@"
+        ;;
+    *)
+        echo "Error: unknown command: $1" >&2
+        echo "" >&2
+        usage >&2
+        exit 1
+        ;;
+esac

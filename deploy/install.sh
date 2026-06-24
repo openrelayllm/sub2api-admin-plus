@@ -43,6 +43,9 @@ LEGACY_INSTALL_DIR="/opt/sub2api"
 LEGACY_SERVICE_NAME="sub2api"
 LEGACY_BINARY_NAME="sub2api"
 LEGACY_SERVICE_FILE="/etc/systemd/system/${LEGACY_SERVICE_NAME}.service"
+COMMAND_NAME="sub2apiplus"
+COMMAND_PATH="/usr/local/bin/${COMMAND_NAME}"
+MIGRATING_LEGACY=false
 
 # Server configuration (will be set by user)
 SERVER_HOST="0.0.0.0"
@@ -95,6 +98,8 @@ declare -A MSG_ZH=(
     ["dirs_configured"]="目录配置完成"
     ["installing_service"]="正在安装 systemd 服务..."
     ["service_installed"]="systemd 服务已安装"
+    ["installing_command"]="正在安装命令入口..."
+    ["command_installed"]="命令入口已安装"
     ["ready_for_setup"]="准备就绪，可以启动设置向导"
 
     # Completion
@@ -115,6 +120,7 @@ declare -A MSG_ZH=(
     ["cmd_logs"]="查看日志"
     ["cmd_restart"]="重启服务"
     ["cmd_stop"]="停止服务"
+    ["cmd_upgrade_command"]="命令升级"
 
     # Upgrade
     ["upgrading"]="正在升级 Sub2API Admin Plus..."
@@ -159,6 +165,7 @@ declare -A MSG_ZH=(
     ["cmd_uninstall"]="卸载 Sub2API Admin Plus"
     ["cmd_install_version"]="安装/回退到指定版本"
     ["cmd_list_versions"]="列出可用版本"
+    ["cmd_install_command"]="仅安装/刷新 sub2apiplus 命令入口"
     ["opt_version"]="指定要安装的版本号 (例如: v1.0.0)"
 
     # Server configuration
@@ -221,6 +228,8 @@ declare -A MSG_EN=(
     ["dirs_configured"]="Directories configured"
     ["installing_service"]="Installing systemd service..."
     ["service_installed"]="Systemd service installed"
+    ["installing_command"]="Installing command wrapper..."
+    ["command_installed"]="Command wrapper installed"
     ["ready_for_setup"]="Ready for Setup Wizard"
 
     # Completion
@@ -241,6 +250,7 @@ declare -A MSG_EN=(
     ["cmd_logs"]="View logs"
     ["cmd_restart"]="Restart"
     ["cmd_stop"]="Stop"
+    ["cmd_upgrade_command"]="Command upgrade"
 
     # Upgrade
     ["upgrading"]="Upgrading Sub2API Admin Plus..."
@@ -285,6 +295,7 @@ declare -A MSG_EN=(
     ["cmd_uninstall"]="Remove Sub2API Admin Plus"
     ["cmd_install_version"]="Install/rollback to a specific version"
     ["cmd_list_versions"]="List available versions"
+    ["cmd_install_command"]="Install/refresh the sub2apiplus command wrapper only"
     ["opt_version"]="Specify version to install (e.g., v1.0.0)"
 
     # Server configuration
@@ -434,15 +445,22 @@ configure_server() {
 load_existing_server_config() {
     local existing_host
     local existing_port
+    local service_paths=()
     local candidate
-    for candidate in "$SERVICE_FILE" "$LEGACY_SERVICE_FILE"; do
-        if [ ! -f "$candidate" ]; then
-            continue
-        fi
-        existing_host=$(grep -E '^Environment=SERVER_HOST=' "$candidate" | tail -1 | sed 's/^Environment=SERVER_HOST=//' || true)
-        existing_port=$(grep -E '^Environment=SERVER_PORT=' "$candidate" | tail -1 | sed 's/^Environment=SERVER_PORT=//' || true)
-        break
+
+    for candidate in "$SERVICE_FILE" /etc/systemd/system/${SERVICE_NAME}.service.d/*.conf; do
+        [ -f "$candidate" ] && service_paths+=("$candidate")
     done
+    if [ "${#service_paths[@]}" -eq 0 ]; then
+        for candidate in "$LEGACY_SERVICE_FILE" /etc/systemd/system/${LEGACY_SERVICE_NAME}.service.d/*.conf; do
+            [ -f "$candidate" ] && service_paths+=("$candidate")
+        done
+    fi
+
+    if [ "${#service_paths[@]}" -gt 0 ]; then
+        existing_host=$(grep -hE '^Environment=SERVER_HOST=' "${service_paths[@]}" | tail -1 | sed 's/^Environment=SERVER_HOST=//' || true)
+        existing_port=$(grep -hE '^Environment=SERVER_PORT=' "${service_paths[@]}" | tail -1 | sed 's/^Environment=SERVER_PORT=//' || true)
+    fi
 
     if [ -n "$existing_host" ]; then
         SERVER_HOST="$existing_host"
@@ -607,6 +625,18 @@ is_installed() {
     current_binary_path >/dev/null 2>&1
 }
 
+is_legacy_only_install() {
+    [ ! -f "$INSTALL_DIR/$BINARY_NAME" ] && [ -f "$LEGACY_INSTALL_DIR/$LEGACY_BINARY_NAME" ]
+}
+
+detect_legacy_migration() {
+    if is_legacy_only_install; then
+        MIGRATING_LEGACY=true
+    else
+        MIGRATING_LEGACY=false
+    fi
+}
+
 # Get current installed version
 get_current_version() {
     local binary_path
@@ -681,6 +711,42 @@ download_and_extract() {
     print_success "$(msg 'binary_installed') $INSTALL_DIR/$BINARY_NAME"
 }
 
+install_command_wrapper() {
+    print_info "$(msg 'installing_command')"
+
+    local source_path="$INSTALL_DIR/$COMMAND_NAME"
+    local remote_wrapper="https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/${COMMAND_NAME}"
+    if [ -f "$source_path" ]; then
+        cp "$source_path" "$COMMAND_PATH"
+    elif command -v curl >/dev/null 2>&1 && curl -fsSL "$remote_wrapper" -o "$COMMAND_PATH"; then
+        :
+    else
+        cat > "$COMMAND_PATH" << EOF
+#!/bin/bash
+set -euo pipefail
+
+INSTALLER="${INSTALL_DIR}/install.sh"
+REMOTE_INSTALLER="https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install.sh"
+
+if [ -f "\$INSTALLER" ]; then
+    if [ "\$(id -u)" -eq 0 ]; then
+        exec bash "\$INSTALLER" "\$@"
+    fi
+    exec sudo bash "\$INSTALLER" "\$@"
+fi
+
+if [ "\$(id -u)" -eq 0 ]; then
+    curl -fsSL "\$REMOTE_INSTALLER" | bash -s -- "\$@"
+else
+    curl -fsSL "\$REMOTE_INSTALLER" | sudo bash -s -- "\$@"
+fi
+EOF
+    fi
+
+    chmod 755 "$COMMAND_PATH"
+    print_success "$(msg 'command_installed'): $COMMAND_PATH"
+}
+
 # Create system user
 create_user() {
     if id "$SERVICE_USER" &>/dev/null; then
@@ -724,6 +790,10 @@ setup_directories() {
 }
 
 migrate_legacy_config() {
+    if [ "$MIGRATING_LEGACY" != true ]; then
+        return 0
+    fi
+
     local migrated=false
     local candidate
 
@@ -813,17 +883,19 @@ EOF
 }
 
 stop_existing_services() {
-    local service
-    for service in "$SERVICE_NAME" "$LEGACY_SERVICE_NAME"; do
-        if systemctl is-active --quiet "$service"; then
-            print_info "$(msg 'stopping_service') $service"
-            systemctl stop "$service"
-        fi
-    done
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        print_info "$(msg 'stopping_service') $SERVICE_NAME"
+        systemctl stop "$SERVICE_NAME"
+    fi
+
+    if [ "$MIGRATING_LEGACY" = true ] && systemctl is-active --quiet "$LEGACY_SERVICE_NAME"; then
+        print_info "$(msg 'stopping_service') $LEGACY_SERVICE_NAME"
+        systemctl stop "$LEGACY_SERVICE_NAME"
+    fi
 }
 
 disable_legacy_service() {
-    if [ -f "$LEGACY_SERVICE_FILE" ]; then
+    if [ "$MIGRATING_LEGACY" = true ] && [ -f "$LEGACY_SERVICE_FILE" ]; then
         systemctl disable "$LEGACY_SERVICE_NAME" 2>/dev/null || true
         print_warning "Legacy service disabled: $LEGACY_SERVICE_NAME"
         print_warning "Legacy files kept for manual rollback: $LEGACY_INSTALL_DIR"
@@ -918,10 +990,11 @@ print_completion() {
     echo "  $(msg 'useful_commands')"
     echo "=============================================="
     echo ""
-    echo "  $(msg 'cmd_status'):   sudo systemctl status $SERVICE_NAME"
-    echo "  $(msg 'cmd_logs'):     sudo journalctl -u $SERVICE_NAME -f"
-    echo "  $(msg 'cmd_restart'):  sudo systemctl restart $SERVICE_NAME"
-    echo "  $(msg 'cmd_stop'):     sudo systemctl stop $SERVICE_NAME"
+    echo "  $(msg 'cmd_status'):   $COMMAND_NAME status"
+    echo "  $(msg 'cmd_logs'):     $COMMAND_NAME follow"
+    echo "  $(msg 'cmd_restart'):  sudo $COMMAND_NAME restart"
+    echo "  $(msg 'cmd_stop'):     sudo $COMMAND_NAME stop"
+    echo "  $(msg 'cmd_upgrade_command'):  sudo $COMMAND_NAME upgrade"
     echo ""
     echo "=============================================="
 }
@@ -936,6 +1009,7 @@ upgrade() {
     fi
 
     print_info "$(msg 'upgrading')"
+    detect_legacy_migration
     load_existing_server_config
 
     # Get current version
@@ -957,6 +1031,7 @@ upgrade() {
     # Set permissions
     create_user
     setup_directories
+    install_command_wrapper
     migrate_legacy_config
     chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/$BINARY_NAME"
     install_service
@@ -986,6 +1061,7 @@ install_version() {
     target_version=$(validate_version "$target_version")
 
     print_info "$(msg 'installing_version'): $target_version"
+    detect_legacy_migration
     load_existing_server_config
 
     # Get current version
@@ -1023,6 +1099,7 @@ install_version() {
     # Set permissions
     create_user
     setup_directories
+    install_command_wrapper
     migrate_legacy_config
     chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/$BINARY_NAME"
     install_service
@@ -1196,6 +1273,7 @@ main() {
                     download_and_extract
                     create_user
                     setup_directories
+                    install_command_wrapper
                     install_service
                     prepare_for_setup
                     get_public_ip
@@ -1213,6 +1291,7 @@ main() {
                     download_and_extract
                     create_user
                     setup_directories
+                    install_command_wrapper
                     install_service
                     prepare_for_setup
                     get_public_ip
@@ -1247,6 +1326,21 @@ main() {
             list_versions
             exit 0
             ;;
+        install-command|command|bootstrap-command)
+            check_root
+            if ! is_installed; then
+                print_error "$(msg 'not_installed')"
+                print_info "$(msg 'fresh_install_hint'): $0 install"
+                exit 1
+            fi
+            install_command_wrapper
+            echo ""
+            print_success "$COMMAND_NAME ready: $COMMAND_PATH"
+            echo "  $COMMAND_NAME upgrade"
+            echo "  $COMMAND_NAME upgrade -v v0.11.3"
+            echo "  $COMMAND_NAME status"
+            exit 0
+            ;;
         uninstall|remove)
             check_root
             uninstall
@@ -1261,6 +1355,7 @@ main() {
             echo "  upgrade              $(msg 'cmd_upgrade')"
             echo "  rollback <version>   $(msg 'cmd_install_version')"
             echo "  list-versions        $(msg 'cmd_list_versions')"
+            echo "  install-command      $(msg 'cmd_install_command')"
             echo "  uninstall            $(msg 'cmd_uninstall')"
             echo ""
             echo "Options:"
@@ -1274,6 +1369,7 @@ main() {
             echo "  $0 upgrade -v v0.11.1     # Upgrade to specific version"
             echo "  $0 rollback v0.11.1       # Rollback to v0.11.1"
             echo "  $0 list-versions          # List available versions"
+            echo "  $0 install-command        # Install/refresh local sub2apiplus command only"
             echo ""
             exit 0
             ;;
@@ -1294,6 +1390,7 @@ main() {
             download_and_extract
             create_user
             setup_directories
+            install_command_wrapper
             install_service
             prepare_for_setup
             get_public_ip
@@ -1311,6 +1408,7 @@ main() {
             download_and_extract
             create_user
             setup_directories
+            install_command_wrapper
             install_service
             prepare_for_setup
             get_public_ip
