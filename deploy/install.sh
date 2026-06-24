@@ -716,6 +716,7 @@ install_command_wrapper() {
 
     local source_path="$INSTALL_DIR/$COMMAND_NAME"
     local remote_wrapper="https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/${COMMAND_NAME}"
+    local remote_installer="https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install.sh"
     if [ -f "$source_path" ]; then
         cp "$source_path" "$COMMAND_PATH"
     elif command -v curl >/dev/null 2>&1 && curl -fsSL "$remote_wrapper" -o "$COMMAND_PATH"; then
@@ -744,6 +745,17 @@ EOF
     fi
 
     chmod 755 "$COMMAND_PATH"
+
+    if command -v curl >/dev/null 2>&1; then
+        local installer_tmp
+        installer_tmp=$(mktemp)
+        if curl -fsSL "$remote_installer" -o "$installer_tmp"; then
+            install -m 0755 "$installer_tmp" "$INSTALL_DIR/install.sh"
+            chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/install.sh" 2>/dev/null || true
+        fi
+        rm -f "$installer_tmp"
+    fi
+
     print_success "$(msg 'command_installed'): $COMMAND_PATH"
 }
 
