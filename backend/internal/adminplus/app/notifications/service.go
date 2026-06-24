@@ -395,7 +395,7 @@ func normalizeSettings(settings, defaults adminplusdomain.NotificationSettings) 
 	if out.Feishu.ConfigSource == "" {
 		out.Feishu.ConfigSource = "database"
 	}
-	if out.Rules == nil || len(out.Rules) == 0 {
+	if len(out.Rules) == 0 {
 		out.Rules = defaults.Rules
 	} else {
 		out.Rules = mergeRules(defaults.Rules, out.Rules)

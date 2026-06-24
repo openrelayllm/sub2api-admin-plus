@@ -103,7 +103,7 @@ func (r *SQLRepository) ListRuns(ctx context.Context, limit int) ([]adminplusdom
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]adminplusdomain.SchedulerRunSummary, 0)
 	for rows.Next() {
@@ -149,7 +149,7 @@ func (r *SQLRepository) ListSteps(ctx context.Context, runID string, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]adminplusdomain.SchedulerStepRecord, 0)
 	for rows.Next() {
 		step, err := scanStepRecord(rows)
@@ -183,7 +183,7 @@ func (r *SQLRepository) ListAttempts(ctx context.Context, runID string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]adminplusdomain.SchedulerAttemptRecord, 0)
 	for rows.Next() {
 		attempt, err := scanAttemptRecord(rows)
@@ -255,7 +255,7 @@ func (r *SQLRepository) ListPlans(ctx context.Context) ([]adminplusdomain.Schedu
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]adminplusdomain.SchedulerPlan, 0)
 	for rows.Next() {
 		var plan adminplusdomain.SchedulerPlan
@@ -743,7 +743,7 @@ func (r *SQLRepository) ListActions(ctx context.Context) ([]adminplusdomain.Sche
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]adminplusdomain.SchedulerAction, 0)
 	for rows.Next() {
 		action, err := scanAction(rows)
