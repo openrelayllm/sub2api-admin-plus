@@ -110,8 +110,16 @@ func (s *Service) loadSettings(ctx context.Context, redact bool) adminplusdomain
 func (s *Service) UpdateSettings(ctx context.Context, settings adminplusdomain.NotificationSettings) (adminplusdomain.NotificationSettings, error) {
 	current, _ := s.repo.LoadSettings(ctx)
 	normalized := normalizeSettings(settings, defaultSettings())
+	clearWebhook := normalized.Feishu.ClearWebhook
 	clearLastTest := false
-	if current != nil {
+	if clearWebhook {
+		normalized.Feishu.WebhookURL = ""
+		normalized.Feishu.WebhookSecret = ""
+		normalized.Feishu.WebhookHost = ""
+		normalized.Feishu.WebhookConfigured = false
+		normalized.Feishu.SecretConfigured = false
+		clearLastTestState(&normalized.Feishu)
+	} else if current != nil {
 		currentNormalized := normalizeSettings(*current, defaultSettings())
 		if shouldPreserveSecret(normalized.Feishu.WebhookURL) {
 			normalized.Feishu.WebhookURL = currentNormalized.Feishu.WebhookURL
@@ -124,6 +132,7 @@ func (s *Service) UpdateSettings(ctx context.Context, settings adminplusdomain.N
 			copyLastTestState(&normalized.Feishu, currentNormalized.Feishu)
 		}
 	}
+	normalized.Feishu.ClearWebhook = false
 	if s != nil && s.cipher != nil && strings.TrimSpace(normalized.Feishu.WebhookSecret) != "" && !strings.HasPrefix(normalized.Feishu.WebhookSecret, "enc:") {
 		encrypted, err := s.cipher.Encrypt(normalized.Feishu.WebhookSecret)
 		if err != nil {

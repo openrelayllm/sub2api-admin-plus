@@ -94,6 +94,18 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     meta: adminMeta('采集会话')
   },
   {
+    path: '/admin/collection/site-discovery',
+    name: 'AdminPlusSiteDiscovery',
+    component: () => import('@/views/admin/operations/SiteDiscoveryView.vue'),
+    meta: adminMeta('渠道索引采集')
+  },
+  {
+    path: '/admin/site-catalog',
+    name: 'AdminPlusSiteCatalog',
+    component: () => import('@/views/admin/operations/SiteCatalogView.vue'),
+    meta: adminMeta('网址目录')
+  },
+  {
     path: '/admin/events/announcements',
     redirect: redirectWithQuery('/admin/suppliers')
   },

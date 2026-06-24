@@ -16,6 +16,8 @@ import (
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
+	sitecatalogapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sitecatalog"
+	sitediscoveryapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sitediscovery"
 	sub2apiapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sub2api"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
 	supplierkeysapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/supplierkeys"
@@ -61,6 +63,8 @@ var ProviderSet = wire.NewSet(
 	provisionjobsapp.ProviderSet,
 	schedulerapp.ProviderSet,
 	sessionsapp.ProviderSet,
+	sitecatalogapp.ProviderSet,
+	sitediscoveryapp.ProviderSet,
 	sub2apiapp.ProviderSet,
 	suppliergroupsapp.ProviderSet,
 	supplierkeysapp.ProviderSet,

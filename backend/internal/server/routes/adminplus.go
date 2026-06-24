@@ -58,6 +58,28 @@ func RegisterAdminPlusRoutes(
 
 		adminPlus.GET("/supplier-channel-checks/best", h.AdminPlus.ChannelCheck.ListBest)
 
+		siteDiscovery := adminPlus.Group("/site-discovery")
+		{
+			siteDiscovery.GET("/settings", h.AdminPlus.SiteDiscovery.GetSettings)
+			siteDiscovery.PUT("/settings", h.AdminPlus.SiteDiscovery.UpdateSettings)
+			siteDiscovery.POST("/runs", h.AdminPlus.SiteDiscovery.Run)
+			siteDiscovery.POST("/runs/stream", h.AdminPlus.SiteDiscovery.RunStream)
+			siteDiscovery.GET("/items", h.AdminPlus.SiteDiscovery.ListItems)
+			siteDiscovery.POST("/items/:id/import", h.AdminPlus.SiteDiscovery.ImportItem)
+			siteDiscovery.POST("/items/:id/register", h.AdminPlus.SiteDiscovery.RegisterItem)
+			siteDiscovery.GET("/recommendations", h.AdminPlus.SiteDiscovery.Recommendations)
+		}
+
+		siteCatalog := adminPlus.Group("/site-catalog")
+		{
+			siteCatalog.GET("/sites", h.AdminPlus.SiteCatalog.ListSites)
+			siteCatalog.POST("/sites", h.AdminPlus.SiteCatalog.CreateSite)
+			siteCatalog.GET("/sites/:id", h.AdminPlus.SiteCatalog.GetSite)
+			siteCatalog.GET("/categories", h.AdminPlus.SiteCatalog.ListCategories)
+			siteCatalog.GET("/tags", h.AdminPlus.SiteCatalog.ListTags)
+			siteCatalog.POST("/candidates/:id/add", h.AdminPlus.SiteCatalog.AddDiscoveryCandidate)
+		}
+
 		sub2api := adminPlus.Group("/sub2api")
 		{
 			sub2api.GET("/accounts", h.AdminPlus.Supplier.ListLocalAccounts)
@@ -139,6 +161,7 @@ func RegisterAdminPlusRoutes(
 			extension.POST("/session/capture-task", h.AdminPlus.Extension.CreateCaptureSessionTask)
 			extension.POST("/tasks/:id/heartbeat", h.AdminPlus.Extension.Heartbeat)
 			extension.POST("/tasks/:id/browser-credential", h.AdminPlus.Extension.GetBrowserCredential)
+			extension.POST("/tasks/:id/registration-credential", h.AdminPlus.SiteDiscovery.GetRegistrationCredential)
 			extension.POST("/tasks/:id/complete", h.AdminPlus.Extension.CompleteTask)
 			extension.POST("/tasks/:id/fail", h.AdminPlus.Extension.FailTask)
 		}

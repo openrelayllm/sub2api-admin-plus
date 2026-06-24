@@ -5,6 +5,7 @@ const supplierTextEl = document.querySelector('#supplierText')
 const statusEl = document.querySelector('#status')
 const primaryAction = document.querySelector('#primaryAction')
 const secondaryAction = document.querySelector('#secondaryAction')
+const registrationAction = document.querySelector('#registrationAction')
 const stepIndex = document.querySelector('#stepIndex')
 const stepLabel = document.querySelector('#stepLabel')
 const stepTitle = document.querySelector('#stepTitle')
@@ -27,6 +28,7 @@ let secondaryHandler = openAdminPlus
 
 primaryAction.addEventListener('click', () => guard(primaryHandler))
 secondaryAction.addEventListener('click', () => guard(secondaryHandler))
+registrationAction.addEventListener('click', () => guard(runRegistrationTask))
 adminPlusBaseURLEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault()
@@ -112,6 +114,27 @@ async function capture() {
   }
 }
 
+async function runRegistrationTask() {
+  setBusy(true)
+  try {
+    writeStatus('正在领取注册任务...', 'neutral')
+    const result = await sendMessage({ type: 'registration:run-next' })
+    if (result.status === 'waiting_manual_verification') {
+      writeStatus(result.message || '需要人工完成验证码或邮箱验证', 'failed')
+      await refresh()
+      return
+    }
+    if (result.status === 'succeeded') {
+      writeStatus(result.message || '注册表单已提交', 'success')
+      await refresh()
+      return
+    }
+    writeStatus(result.message || '注册任务执行失败', 'failed')
+  } finally {
+    setBusy(false)
+  }
+}
+
 function render() {
   const connection = state?.connection || {}
   const connected = connection.status === 'connected'
@@ -123,6 +146,7 @@ function render() {
     adminPlusBaseURLEl.value = connection.baseURL || adminPlusBaseURLEl.value || ''
   }
   renderLastCaptureResult()
+  renderRegistrationAction(connected)
 
   if (!connected) {
     renderStep({
@@ -201,6 +225,11 @@ function render() {
   })
 }
 
+function renderRegistrationAction(connected) {
+  registrationAction.classList.toggle('hidden', !connected)
+  registrationAction.disabled = busy || !connected
+}
+
 function renderStep(config) {
   stepIndex.textContent = String(config.index)
   stepLabel.textContent = config.label
@@ -218,6 +247,7 @@ function renderStep(config) {
   secondaryHandler = config.secondary
   primaryAction.disabled = busy
   secondaryAction.disabled = busy
+  registrationAction.disabled = busy || state?.connection?.status !== 'connected'
 }
 
 function renderLastCaptureResult() {
@@ -279,6 +309,7 @@ function showError(error) {
   if (error?.reason === 'ADMIN_PLUS_PAGE_REQUIRED') return writeStatus('请切换到 Admin Plus 后台页', 'failed')
   if (error?.reason === 'ADMIN_PLUS_AUTH_INVALID') return writeStatus('Admin Plus 登录态无效或后端地址不对', 'failed')
   if (error?.reason === 'ADMIN_PLUS_NOT_CONNECTED') return writeStatus('请先连接 Admin Plus', 'failed')
+  if (error?.reason === 'EXTENSION_TASK_NOT_AVAILABLE') return writeStatus('暂无待执行注册任务', 'failed')
   if (error?.reason === 'SUPPLIER_LOGIN_REQUIRED') return writeStatus('请先在供应商页面登录', 'failed')
   writeStatus(error.message || String(error), 'failed')
 }
@@ -302,6 +333,7 @@ function setBusy(nextBusy) {
   busy = nextBusy
   primaryAction.disabled = nextBusy
   secondaryAction.disabled = nextBusy
+  registrationAction.disabled = nextBusy || state?.connection?.status !== 'connected'
 }
 
 function guard(action) {

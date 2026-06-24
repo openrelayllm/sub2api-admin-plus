@@ -81,7 +81,7 @@ func (p *IngestProcessor) ProcessTaskResult(ctx context.Context, task *adminplus
 		return p.processAnnouncements(ctx, task, result)
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return p.processHealth(ctx, task, result)
-	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
+	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts, adminplusdomain.ExtensionTaskTypeExportBills:
 		return p.processUsageCosts(ctx, task, result)
 	default:
 		return nil, nil

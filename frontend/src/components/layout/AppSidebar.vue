@@ -289,12 +289,28 @@ const adminNavItems = computed((): NavItem[] => [
   },
   {
     path: '/admin/scheduler',
+    label: '数据采集',
+    icon: OperationsIcon,
+    children: [
+      { path: '/admin/collection/sessions', label: '采集会话', icon: OperationsIcon },
+      { path: '/admin/collection/site-discovery', label: '渠道索引采集', icon: OperationsIcon }
+    ]
+  },
+  {
+    path: '/admin/site-catalog',
+    label: '网址目录',
+    icon: OperationsIcon,
+    children: [
+      { path: '/admin/site-catalog', label: '站点列表', icon: OperationsIcon }
+    ]
+  },
+  {
+    path: '/admin/scheduler',
     label: '调度中心',
     icon: OperationsIcon,
     children: [
       { path: '/admin/scheduler', label: '工作台', icon: OperationsIcon },
-      { path: '/admin/scheduler/notifications', label: '通知中心', icon: OperationsIcon },
-      { path: '/admin/collection/sessions', label: '采集会话', icon: OperationsIcon }
+      { path: '/admin/scheduler/notifications', label: '通知中心', icon: OperationsIcon }
     ]
   },
   {

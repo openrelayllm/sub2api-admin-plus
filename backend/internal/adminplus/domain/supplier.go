@@ -125,17 +125,33 @@ type SupplierAccount struct {
 }
 
 type LocalSub2APIAccount struct {
-	ID             int64    `json:"id"`
-	Name           string   `json:"name"`
-	Platform       string   `json:"platform"`
-	Type           string   `json:"type"`
-	Status         string   `json:"status"`
-	Schedulable    bool     `json:"schedulable"`
-	Concurrency    int      `json:"concurrency"`
-	Priority       int      `json:"priority"`
-	RateMultiplier float64  `json:"rate_multiplier"`
-	GroupIDs       []int64  `json:"group_ids,omitempty"`
-	GroupNames     []string `json:"group_names,omitempty"`
+	ID                      int64      `json:"id"`
+	Name                    string     `json:"name"`
+	Notes                   string     `json:"notes,omitempty"`
+	Platform                string     `json:"platform"`
+	Type                    string     `json:"type"`
+	Status                  string     `json:"status"`
+	ErrorMessage            string     `json:"error_message,omitempty"`
+	Schedulable             bool       `json:"schedulable"`
+	Concurrency             int        `json:"concurrency"`
+	LoadFactor              *int       `json:"load_factor,omitempty"`
+	Priority                int        `json:"priority"`
+	RateMultiplier          float64    `json:"rate_multiplier"`
+	LastUsedAt              *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt               *time.Time `json:"expires_at,omitempty"`
+	AutoPauseOnExpired      bool       `json:"auto_pause_on_expired"`
+	RateLimitedAt           *time.Time `json:"rate_limited_at,omitempty"`
+	RateLimitResetAt        *time.Time `json:"rate_limit_reset_at,omitempty"`
+	OverloadUntil           *time.Time `json:"overload_until,omitempty"`
+	TempUnschedulableUntil  *time.Time `json:"temp_unschedulable_until,omitempty"`
+	TempUnschedulableReason string     `json:"temp_unschedulable_reason,omitempty"`
+	SessionWindowStart      *time.Time `json:"session_window_start,omitempty"`
+	SessionWindowEnd        *time.Time `json:"session_window_end,omitempty"`
+	SessionWindowStatus     string     `json:"session_window_status,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+	GroupIDs                []int64    `json:"group_ids,omitempty"`
+	GroupNames              []string   `json:"group_names,omitempty"`
 }
 
 func (k SupplierKind) Valid() bool {

@@ -182,6 +182,16 @@ class AdminPlusClient {
     })
   }
 
+  async registrationCredential(task) {
+    return this.request(`/api/v1/admin-plus/extension/tasks/${task.id}/registration-credential`, {
+      method: 'POST',
+      body: {
+        device_id: task.device_id,
+        lease_token: task.lease_token
+      }
+    })
+  }
+
   async complete(task, result) {
     return this.request(`/api/v1/admin-plus/extension/tasks/${task.id}/complete`, {
       method: 'POST',
@@ -273,6 +283,8 @@ async function handleMessage(message) {
       return identifyCurrentSite()
     case 'session:capture':
       return captureSupplierSession(message.supplierID, message.autoCreate !== false)
+    case 'registration:run-next':
+      return runNextRegistrationTask()
     default:
       throw new Error('Unsupported extension message')
   }
@@ -571,6 +583,164 @@ async function captureSupplierSession(supplierID, autoCreate) {
     await recordCaptureResult('failed', error.message || String(error), task, supplier, identification.activeTab).catch(() => {})
     throw error
   }
+}
+
+async function runNextRegistrationTask() {
+  const config = await requireConnectedConfig()
+  const client = new AdminPlusClient(config)
+  const task = await client.claimTask(config.deviceID, ['register_supplier_account'])
+  await client.heartbeat(task)
+  const credential = await client.registrationCredential(task)
+  if (!credential?.register_url || !credential?.email || !credential?.password) {
+    await client.fail(task, 'REGISTRATION_CREDENTIAL_INCOMPLETE', 'registration credential is incomplete').catch(() => {})
+    return { status: 'failed', task, message: '注册凭据不完整' }
+  }
+  const tab = await chrome.tabs.create({ url: credential.register_url, active: true })
+  try {
+    await waitForTabComplete(tab.id)
+    const [injected] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: fillRegistrationForm,
+      args: [{
+        email: credential.email,
+        password: credential.password,
+        providerType: credential.provider_type,
+        registerURL: credential.register_url
+      }]
+    })
+    const result = injected?.result || {}
+    if (result.manual_verification_required) {
+      await client.fail(task, 'REGISTRATION_VERIFICATION_REQUIRED', result.message || 'registration requires manual verification')
+      return {
+        status: 'waiting_manual_verification',
+        task,
+        result,
+        message: result.message || '需要人工完成验证码或邮箱验证'
+      }
+    }
+    if (!result.ok) {
+      await client.fail(task, result.error_code || 'REGISTRATION_AUTOFILL_FAILED', result.message || 'registration autofill failed')
+      return {
+        status: 'failed',
+        task,
+        result,
+        message: result.message || '注册自动填写失败'
+      }
+    }
+    const completed = await client.complete(task, {
+      registration_submitted: true,
+      provider_type: credential.provider_type,
+      register_url: credential.register_url,
+      submitted_at: new Date().toISOString(),
+      result
+    })
+    return {
+      status: 'succeeded',
+      task: completed,
+      result,
+      message: '注册表单已提交'
+    }
+  } catch (error) {
+    await client.fail(task, error.reason || 'REGISTRATION_AUTOFILL_FAILED', error.message || String(error)).catch(() => {})
+    throw error
+  }
+}
+
+function fillRegistrationForm(credential) {
+  const startedAt = new Date().toISOString()
+  const text = () => String(document.body?.innerText || '').toLowerCase()
+  const verificationMarkers = [
+    'captcha',
+    'turnstile',
+    'recaptcha',
+    'hcaptcha',
+    '验证码',
+    '人机',
+    '验证',
+    '邮箱验证',
+    '邮件验证',
+    'email verification',
+    'verify your email'
+  ]
+  const hasVerification = () => verificationMarkers.some((marker) => text().includes(marker))
+  const visible = (element) => {
+    if (!element || element.disabled || element.readOnly) return false
+    const style = window.getComputedStyle(element)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+    const rect = element.getBoundingClientRect()
+    return rect.width > 0 && rect.height > 0
+  }
+  const inputs = Array.from(document.querySelectorAll('input')).filter(visible)
+  const lowerAttr = (element) => [
+    element.type,
+    element.name,
+    element.id,
+    element.autocomplete,
+    element.placeholder,
+    element.getAttribute('aria-label')
+  ].join(' ').toLowerCase()
+  const setValue = (element, value) => {
+    const proto = Object.getPrototypeOf(element)
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value')
+    if (descriptor?.set) {
+      descriptor.set.call(element, value)
+    } else {
+      element.value = value
+    }
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+  const emailInput = inputs.find((input) => input.type === 'email') ||
+    inputs.find((input) => /(email|mail|邮箱|account|username|user_name|login)/i.test(lowerAttr(input))) ||
+    inputs.find((input) => ['text', 'search', ''].includes(input.type))
+  const passwordInputs = inputs.filter((input) => input.type === 'password')
+  if (!emailInput || passwordInputs.length === 0) {
+    return {
+      ok: false,
+      error_code: 'REGISTRATION_FORM_NOT_FOUND',
+      message: '未找到可填写的注册表单',
+      started_at: startedAt
+    }
+  }
+  setValue(emailInput, credential.email)
+  passwordInputs.forEach((input) => setValue(input, credential.password))
+  for (const checkbox of inputs.filter((input) => input.type === 'checkbox')) {
+    if (!checkbox.checked) checkbox.click()
+  }
+  if (hasVerification()) {
+    return {
+      ok: false,
+      manual_verification_required: true,
+      message: '页面存在验证码或验证流程，请人工完成',
+      started_at: startedAt
+    }
+  }
+  const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')).filter(visible)
+  const submit = buttons.find((button) => /(注册|sign up|signup|register|创建|create|submit|提交)/i.test(`${button.innerText || ''} ${button.value || ''} ${button.getAttribute('aria-label') || ''}`)) ||
+    buttons.find((button) => button.type === 'submit') ||
+    document.querySelector('form button[type="submit"], form input[type="submit"]')
+  if (!submit) {
+    return {
+      ok: false,
+      error_code: 'REGISTRATION_SUBMIT_NOT_FOUND',
+      message: '未找到注册提交按钮',
+      started_at: startedAt
+    }
+  }
+  submit.click()
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const needsManual = hasVerification()
+      resolve({
+        ok: !needsManual,
+        manual_verification_required: needsManual,
+        message: needsManual ? '提交后需要验证码或邮箱验证' : '注册表单已提交',
+        started_at: startedAt,
+        submitted_at: new Date().toISOString(),
+        url: window.location.href
+      })
+    }, 2500)
+  })
 }
 
 async function recordCaptureResult(status, message, task, supplier, activeTab, summary = {}, ingest = {}) {

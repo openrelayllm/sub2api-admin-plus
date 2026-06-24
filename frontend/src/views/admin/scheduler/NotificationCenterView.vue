@@ -298,6 +298,15 @@
                 <dd class="mt-1 break-words text-xs text-rose-700 dark:text-rose-200">{{ settingsForm.feishu.last_test_error }}</dd>
               </div>
             </dl>
+            <button
+              type="button"
+              class="btn btn-secondary mt-5 w-full"
+              :disabled="saving || !settingsForm.feishu.webhook_configured || settingsForm.feishu.config_source === 'environment'"
+              @click="clearChannelSettings"
+            >
+              <Icon name="trash" size="sm" />
+              清除通道配置
+            </button>
           </section>
         </aside>
 
@@ -637,6 +646,26 @@ async function retryDelivery(item: NotificationDelivery) {
     appStore.showError((error as { message?: string }).message || '重试通知失败')
   } finally {
     retryingId.value = null
+  }
+}
+
+async function clearChannelSettings() {
+  if (!window.confirm('确认清除后台保存的飞书 Webhook 和签名密钥？')) return
+  saving.value = true
+  try {
+    const payload = normalizedSettingsPayload()
+    payload.feishu.clear_webhook = true
+    payload.feishu.webhook_url = ''
+    payload.feishu.webhook_secret = ''
+    const updated = await updateNotificationSettings(payload)
+    syncSettingsForm(updated)
+    status.value = await getNotificationCenterStatus()
+    await reloadDeliveries()
+    appStore.showSuccess('飞书通道配置已清除')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '清除飞书通道配置失败')
+  } finally {
+    saving.value = false
   }
 }
 

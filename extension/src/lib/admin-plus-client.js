@@ -73,6 +73,16 @@ export class AdminPlusClient {
     })
   }
 
+  async registrationCredential(task) {
+    return this.request(`/api/v1/admin-plus/extension/tasks/${task.id}/registration-credential`, {
+      method: 'POST',
+      body: {
+        device_id: task.device_id,
+        lease_token: task.lease_token
+      }
+    })
+  }
+
   async complete(task, result) {
     return this.request(`/api/v1/admin-plus/extension/tasks/${task.id}/complete`, {
       method: 'POST',

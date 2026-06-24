@@ -29,6 +29,8 @@ type AdminPlusHandlers struct {
 	Cost          *adminplushandler.CostHandler
 	ChannelCheck  *adminplushandler.ChannelCheckHandler
 	Extension     *adminplushandler.ExtensionHandler
+	SiteDiscovery *adminplushandler.SiteDiscoveryHandler
+	SiteCatalog   *adminplushandler.SiteCatalogHandler
 	Session       *adminplushandler.SessionHandler
 	Scheduler     *adminplushandler.SchedulerHandler
 	Action        *adminplushandler.ActionHandler

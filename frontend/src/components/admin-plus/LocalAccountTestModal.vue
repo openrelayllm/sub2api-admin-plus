@@ -11,7 +11,7 @@
           </div>
           <div class="min-w-0">
             <div class="truncate font-semibold text-gray-900 dark:text-gray-100">
-              {{ account.local_account_name }}
+              {{ account.name }}
             </div>
             <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
               <span class="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium uppercase dark:bg-dark-500">
@@ -21,8 +21,8 @@
             </div>
           </div>
         </div>
-        <span class="badge ml-3 flex-shrink-0" :class="runtimeBadgeClass(account.runtime_status)">
-          {{ runtimeBadgeLabel(account.runtime_status) }}
+        <span class="badge ml-3 flex-shrink-0" :class="statusBadgeClass(account.status)">
+          {{ statusBadgeLabel(account.status) }}
         </span>
       </div>
 
@@ -186,11 +186,10 @@ import { useClipboard } from '@/composables/useClipboard'
 import {
   listLocalAccountTestModels,
   localAccountTestURL,
-  type LocalAccountTestModel,
-  type LocalAccountTestPayload,
-  type SupplierAccount,
-  type SupplierRuntimeStatus
-} from '@/api/admin/adminPlus'
+	  type LocalAccountTestModel,
+	  type LocalAccountTestPayload,
+	  type LocalSub2APIAccount
+	} from '@/api/admin/adminPlus'
 
 interface OutputLine {
   text: string
@@ -215,7 +214,7 @@ interface TestEvent {
 
 const props = defineProps<{
   show: boolean
-  account: SupplierAccount | null
+  account: LocalSub2APIAccount | null
 }>()
 
 const emit = defineEmits<{
@@ -252,15 +251,15 @@ const prioritizedGeminiModels = [
 
 const modelOptions = computed(() => availableModels.value as unknown as Array<Record<string, unknown>>)
 
-const normalizedPlatform = computed(() => props.account?.local_account_platform.toLowerCase() || '')
-const normalizedType = computed(() => props.account?.local_account_type.toLowerCase() || '')
+const normalizedPlatform = computed(() => props.account?.platform.toLowerCase() || '')
+const normalizedType = computed(() => props.account?.type.toLowerCase() || '')
 const isOpenAIAccount = computed(() => normalizedPlatform.value === 'openai')
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: '默认测试' },
   { value: 'compact', label: 'Compact 探测' }
 ])
 const accountTypeLabel = computed(() => {
-  const value = normalizedType.value || props.account?.local_account_type || ''
+  const value = normalizedType.value || props.account?.type || ''
   if (value.toLowerCase() === 'apikey') return 'APIKEY'
   if (value.toLowerCase() === 'oauth') return 'OAUTH'
   return value.toUpperCase()
@@ -299,7 +298,7 @@ async function loadAvailableModels() {
   loadingModels.value = true
   selectedModelId.value = ''
   try {
-    const models = await listLocalAccountTestModels(props.account.local_sub2api_account_id)
+    const models = await listLocalAccountTestModels(props.account.id)
     availableModels.value = normalizedPlatform.value === 'gemini' || normalizedPlatform.value === 'antigravity'
       ? sortTestModels(models)
       : models
@@ -370,8 +369,8 @@ async function startTest() {
 
   resetState()
   status.value = 'connecting'
-  addLine(`开始测试账号: ${props.account.local_account_name}`, 'text-blue-400')
-  addLine(`账号类型: ${props.account.local_account_type}`, 'text-gray-400')
+  addLine(`开始测试账号: ${props.account.name}`, 'text-blue-400')
+  addLine(`账号类型: ${props.account.type}`, 'text-gray-400')
   addLine('', 'text-gray-300')
 
   abortStream()
@@ -383,7 +382,7 @@ async function startTest() {
       prompt: supportsImageTest.value ? testPrompt.value.trim() : '',
       mode: isOpenAIAccount.value ? testMode.value : 'default'
     }
-    const response = await fetch(localAccountTestURL(props.account.local_sub2api_account_id), {
+    const response = await fetch(localAccountTestURL(props.account.id), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
@@ -506,19 +505,19 @@ function copyOutput() {
   void copyToClipboard(text, '输出已复制')
 }
 
-function runtimeBadgeLabel(value: SupplierRuntimeStatus): string {
+function statusBadgeLabel(value: string): string {
   return {
     active: 'active',
-    candidate: 'candidate',
-    monitor_only: 'monitor',
-    disabled: 'disabled'
-  }[value]
+    disabled: 'disabled',
+    error: 'error',
+    rate_limited: 'rate limited'
+  }[value] || value || '-'
 }
 
-function runtimeBadgeClass(value: SupplierRuntimeStatus): string {
+function statusBadgeClass(value: string): string {
   if (value === 'active') return 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
-  if (value === 'candidate') return 'bg-primary-100 text-primary-700 dark:bg-primary-500/20 dark:text-primary-300'
-  if (value === 'disabled') return 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300'
+  if (value === 'error' || value === 'rate_limited') return 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300'
+  if (value === 'disabled') return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
   return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
 }
 </script>

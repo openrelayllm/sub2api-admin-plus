@@ -325,15 +325,54 @@ export interface UpdateSupplierStatusPayload {
 export interface LocalSub2APIAccount {
   id: number
   name: string
+  notes?: string
   platform: string
   type: string
   status: string
+  error_message?: string
   schedulable: boolean
   concurrency: number
+  load_factor?: number | null
   priority: number
   rate_multiplier: number
+  last_used_at?: string | null
+  expires_at?: string | null
+  auto_pause_on_expired: boolean
+  rate_limited_at?: string | null
+  rate_limit_reset_at?: string | null
+  overload_until?: string | null
+  temp_unschedulable_until?: string | null
+  temp_unschedulable_reason?: string
+  session_window_start?: string | null
+  session_window_end?: string | null
+  session_window_status?: string
+  created_at: string
+  updated_at: string
   group_ids?: number[]
   group_names?: string[]
+}
+
+export interface LocalAccountRuntime {
+  account_id: number
+  account_name: string
+  account_platform: string
+  account_type: string
+  status: string
+  schedulable: boolean
+  configured_limit: number
+  current_concurrency: number
+  waiting_count: number
+  load_percent: number
+  switch_eligible: boolean
+  blocked_reason?: string
+  error_message?: string
+  rate_limit_reset_at?: string | null
+  overload_until?: string | null
+  temp_unsched_until?: string | null
+  temp_unsched_reason?: string
+  last_used_at?: string | null
+  collected_at: string
+  redis_read_configured: boolean
 }
 
 export interface LocalAccountTestModel {
@@ -934,7 +973,7 @@ export interface LocalAccountUsageSummary {
 export interface ExtensionTask {
   id: number
   supplier_id: number
-  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_announcements' | 'fetch_usage_costs' | 'fetch_health' | 'check_supplier_channels' | 'capture_supplier_session'
+  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_announcements' | 'fetch_usage_costs' | 'fetch_health' | 'check_supplier_channels' | 'capture_supplier_session' | 'register_supplier_account'
   schedule_key?: string
   status: 'pending' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   priority: number
@@ -966,6 +1005,219 @@ export interface ExtensionBrowserCredential {
   username?: string
   password?: string
   token?: string
+}
+
+export type SiteDiscoveryClassificationStatus = 'supported' | 'unknown' | 'unsupported'
+export type SiteDiscoveryImportStatus = 'new' | 'imported' | 'skipped'
+export type SiteDiscoveryProcessStatus = 'unprocessed' | 'added_to_catalog' | 'registered' | 'ignored'
+export type SupplierRegistrationStatus =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'waiting_manual_verification'
+  | 'succeeded'
+  | 'failed'
+
+export interface SiteDiscoverySettings {
+  registration_email: string
+  registration_enabled: boolean
+  low_rate_threshold: number
+  updated_at?: string
+}
+
+export interface SiteDiscoveryRun {
+  id: number
+  source_url: string
+  status: 'running' | 'succeeded' | 'failed'
+  total: number
+  supported_total: number
+  imported_total: number
+  error_message?: string
+  started_at: string
+  finished_at?: string | null
+  created_at: string
+}
+
+export interface SiteDiscoveryItem {
+  id: number
+  run_id: number
+  source_url: string
+  source_site_id: string
+  source_section: string
+  source_category?: string
+  name: string
+  register_url: string
+  dashboard_url: string
+  api_base_url: string
+  host: string
+  domain_hint?: string
+  description?: string
+  provider_type?: SupplierType | ''
+  classification_status: SiteDiscoveryClassificationStatus
+  classification_confidence: number
+  classification_evidence?: string[]
+  monitor_status?: string
+  monitor_available?: boolean | null
+  monitor_uptime_percent?: number | null
+  monitor_avg_response_ms?: number | null
+  monitor_latest_response_ms?: number | null
+  import_status: SiteDiscoveryImportStatus
+  process_status?: SiteDiscoveryProcessStatus
+  catalog_site_id?: number
+  supplier_id?: number
+  registration_status?: SupplierRegistrationStatus | ''
+  registration_task_id?: number
+  registration_email?: string
+  registration_error_code?: string
+  registration_error_message?: string
+  raw_payload?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface SiteDiscoveryRunResult {
+  run: SiteDiscoveryRun
+  items: SiteDiscoveryItem[]
+}
+
+export type SiteDiscoveryRunProgressLevel = 'info' | 'success' | 'warning' | 'error'
+
+export interface SiteDiscoveryRunProgressEvent {
+  type: 'started' | 'log' | 'item_success' | 'item_skipped' | 'item_unknown' | 'failed' | 'completed' | string
+  level?: SiteDiscoveryRunProgressLevel
+  message: string
+  current?: number
+  total?: number
+  run?: SiteDiscoveryRun
+  item?: SiteDiscoveryItem
+  result?: SiteDiscoveryRunResult
+}
+
+export type SiteCatalogStatus = 'draft' | 'reviewing' | 'published' | 'archived'
+export type SiteCatalogVisibility = 'public' | 'private'
+export type SiteCatalogQualityStatus = 'complete' | 'needs_review' | 'link_broken' | 'duplicate'
+export type SiteCatalogKind = 'api_relay' | 'official' | 'tool' | 'client' | 'benchmark' | 'other'
+export type SiteCatalogRecommendationLevel = 'none' | 'normal' | 'featured' | 'avoid'
+export type SiteCatalogRiskLevel = 'unknown' | 'low' | 'medium' | 'high'
+export type SiteCatalogLinkType = 'homepage' | 'register' | 'dashboard' | 'api_base' | 'recharge' | 'docs' | 'contact'
+export type SiteCatalogLinkStatus = 'unknown' | 'ok' | 'broken'
+
+export interface SiteCatalogLink {
+  id: number
+  site_id: number
+  link_type: SiteCatalogLinkType
+  url: string
+  label?: string
+  is_primary: boolean
+  status: SiteCatalogLinkStatus
+  last_checked_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SiteCatalogCategory {
+  id: number
+  parent_id?: number
+  slug: string
+  name: string
+  description?: string
+  display_order: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface SiteCatalogTag {
+  id: number
+  slug: string
+  name: string
+  tag_type: string
+  color?: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface SiteCatalogSite {
+  id: number
+  slug: string
+  canonical_host: string
+  name: string
+  short_name?: string
+  summary?: string
+  description?: string
+  provider_type?: SupplierType | ''
+  site_kind: SiteCatalogKind
+  status: SiteCatalogStatus
+  visibility: SiteCatalogVisibility
+  quality_status: SiteCatalogQualityStatus
+  recommendation_level: SiteCatalogRecommendationLevel
+  recommendation_reason?: string
+  risk_level: SiteCatalogRiskLevel
+  logo_url?: string
+  screenshot_url?: string
+  primary_language?: string
+  country_or_region?: string
+  supplier_id?: number
+  metadata?: Record<string, unknown>
+  links?: SiteCatalogLink[]
+  categories?: SiteCatalogCategory[]
+  tags?: SiteCatalogTag[]
+  published_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SiteCatalogLinkPayload {
+  link_type: SiteCatalogLinkType
+  url: string
+  label?: string
+  is_primary?: boolean
+}
+
+export interface AddDiscoveryCandidateToCatalogPayload {
+  site_id?: number
+  slug?: string
+  name?: string
+  summary?: string
+  description?: string
+  site_kind?: SiteCatalogKind
+  status?: SiteCatalogStatus
+  visibility?: SiteCatalogVisibility
+  recommendation_level?: SiteCatalogRecommendationLevel
+  recommendation_reason?: string
+  risk_level?: SiteCatalogRiskLevel
+  category_ids?: number[]
+  tag_ids?: number[]
+  links?: SiteCatalogLinkPayload[]
+}
+
+export interface SupplierRegistrationCredential {
+  id: number
+  discovery_id: number
+  supplier_id: number
+  email: string
+  password_configured: boolean
+  status: SupplierRegistrationStatus
+  verification_status?: string
+  extension_task_id?: number
+  error_code?: string
+  error_message?: string
+  last_attempt_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RegisterSiteDiscoveryItemResponse {
+  credential: SupplierRegistrationCredential
+  task: ExtensionTask
+}
+
+export interface SiteDiscoveryRecommendation {
+  item: SiteDiscoveryItem
+  min_rate_multiplier: number
+  recommended_channels: number
+  reason: string
 }
 
 export interface ScheduledTask {
@@ -1229,6 +1481,7 @@ export interface NotificationChannelSettings {
   enabled: boolean
   webhook_url?: string
   webhook_secret?: string
+  clear_webhook?: boolean
   webhook_host?: string
   webhook_configured: boolean
   secret_configured: boolean
@@ -1429,6 +1682,11 @@ export async function listSupplierProvisionJobs(params?: { supplier_id?: number;
 
 export async function listLocalSub2APIAccounts(params?: { q?: string } & AdminPlusPaginationParams): Promise<AdminPlusListResponse<LocalSub2APIAccount>> {
   const { data } = await apiClient.get<AdminPlusListResponse<LocalSub2APIAccount>>('/admin-plus/sub2api/accounts', { params })
+  return data
+}
+
+export async function listLocalAccountRuntime(params?: { account_id?: number; q?: string } & AdminPlusPaginationParams): Promise<AdminPlusListResponse<LocalAccountRuntime>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<LocalAccountRuntime>>('/admin-plus/sub2api/account-runtime', { params })
   return data
 }
 
@@ -1767,6 +2025,135 @@ export async function failExtensionTask(task: ExtensionTask, error_code: string,
   return data
 }
 
+export async function getSiteDiscoverySettings(): Promise<SiteDiscoverySettings> {
+  const { data } = await apiClient.get<SiteDiscoverySettings>('/admin-plus/site-discovery/settings')
+  return data
+}
+
+export async function updateSiteDiscoverySettings(payload: SiteDiscoverySettings): Promise<SiteDiscoverySettings> {
+  const { data } = await apiClient.put<SiteDiscoverySettings>('/admin-plus/site-discovery/settings', payload)
+  return data
+}
+
+export async function runSiteDiscovery(payload?: {
+  source_url?: string
+  probe_interfaces?: boolean
+  probe_sites?: boolean
+  limit?: number
+}): Promise<SiteDiscoveryRunResult> {
+  const { data } = await apiClient.post<SiteDiscoveryRunResult>('/admin-plus/site-discovery/runs', payload || {})
+  return data
+}
+
+export async function runSiteDiscoveryStream(
+  payload: {
+    source_url?: string
+    probe_interfaces?: boolean
+    probe_sites?: boolean
+    limit?: number
+  },
+  onEvent: (event: SiteDiscoveryRunProgressEvent) => void
+): Promise<void> {
+  const baseURL = String(apiClient.defaults.baseURL || import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(`${baseURL}/admin-plus/site-discovery/runs/stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(payload || {})
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`采集启动失败：HTTP ${response.status}`)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      const text = line.trim()
+      if (!text) continue
+      onEvent(JSON.parse(text) as SiteDiscoveryRunProgressEvent)
+    }
+  }
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer.trim()) as SiteDiscoveryRunProgressEvent)
+  }
+}
+
+export async function listSiteDiscoveryItems(params?: {
+  q?: string
+  provider_type?: 'new_api' | 'sub2api' | ''
+  classification_status?: SiteDiscoveryClassificationStatus | ''
+  import_status?: SiteDiscoveryImportStatus | ''
+  registration_status?: SupplierRegistrationStatus | ''
+  processed_status?: 'processed' | 'unprocessed' | ''
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<SiteDiscoveryItem>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<SiteDiscoveryItem>>('/admin-plus/site-discovery/items', { params })
+  return data
+}
+
+export async function importSiteDiscoveryItem(id: number): Promise<SiteDiscoveryItem> {
+  const { data } = await apiClient.post<SiteDiscoveryItem>(`/admin-plus/site-discovery/items/${id}/import`)
+  return data
+}
+
+export async function registerSiteDiscoveryItem(id: number): Promise<RegisterSiteDiscoveryItemResponse> {
+  const { data } = await apiClient.post<RegisterSiteDiscoveryItemResponse>(`/admin-plus/site-discovery/items/${id}/register`)
+  return data
+}
+
+export async function listSiteDiscoveryRecommendations(params?: { limit?: number }): Promise<{ items: SiteDiscoveryRecommendation[] }> {
+  const { data } = await apiClient.get<{ items: SiteDiscoveryRecommendation[] }>('/admin-plus/site-discovery/recommendations', { params })
+  return data
+}
+
+export async function listSiteCatalogSites(params?: {
+  q?: string
+  status?: SiteCatalogStatus | ''
+  site_kind?: SiteCatalogKind | ''
+  provider_type?: 'new_api' | 'sub2api' | ''
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<SiteCatalogSite>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<SiteCatalogSite>>('/admin-plus/site-catalog/sites', { params })
+  return data
+}
+
+export async function getSiteCatalogSite(id: number): Promise<SiteCatalogSite> {
+  const { data } = await apiClient.get<SiteCatalogSite>(`/admin-plus/site-catalog/sites/${id}`)
+  return data
+}
+
+export async function createSiteCatalogSite(payload: Partial<SiteCatalogSite> & {
+  links?: SiteCatalogLinkPayload[]
+  category_ids?: number[]
+  tag_ids?: number[]
+}): Promise<SiteCatalogSite> {
+  const { data } = await apiClient.post<SiteCatalogSite>('/admin-plus/site-catalog/sites', payload)
+  return data
+}
+
+export async function listSiteCatalogCategories(): Promise<{ items: SiteCatalogCategory[] }> {
+  const { data } = await apiClient.get<{ items: SiteCatalogCategory[] }>('/admin-plus/site-catalog/categories')
+  return data
+}
+
+export async function listSiteCatalogTags(): Promise<{ items: SiteCatalogTag[] }> {
+  const { data } = await apiClient.get<{ items: SiteCatalogTag[] }>('/admin-plus/site-catalog/tags')
+  return data
+}
+
+export async function addDiscoveryCandidateToCatalog(id: number, payload: AddDiscoveryCandidateToCatalogPayload): Promise<SiteCatalogSite> {
+  const { data } = await apiClient.post<SiteCatalogSite>(`/admin-plus/site-catalog/candidates/${id}/add`, payload)
+  return data
+}
+
 export async function generateActions(payload: {
   suppliers: SupplierSignal[]
   balance_events?: BalanceEvent[]
@@ -1844,6 +2231,7 @@ export const adminPlusAPI = {
   standardizeSupplierKeyNames,
   repairSupplierKeyBinding,
   listLocalSub2APIAccounts,
+  listLocalAccountRuntime,
   listLocalAccountTestModels,
   localAccountTestURL,
   listLocalUsageLines,
@@ -1898,6 +2286,20 @@ export const adminPlusAPI = {
   heartbeatExtensionTask,
   completeExtensionTask,
   failExtensionTask,
+  getSiteDiscoverySettings,
+  updateSiteDiscoverySettings,
+  runSiteDiscovery,
+  runSiteDiscoveryStream,
+  listSiteDiscoveryItems,
+  importSiteDiscoveryItem,
+  registerSiteDiscoveryItem,
+  listSiteDiscoveryRecommendations,
+  listSiteCatalogSites,
+  getSiteCatalogSite,
+  createSiteCatalogSite,
+  listSiteCatalogCategories,
+  listSiteCatalogTags,
+  addDiscoveryCandidateToCatalog,
   generateActions,
   listActionRecommendations,
   updateActionRecommendationStatus,

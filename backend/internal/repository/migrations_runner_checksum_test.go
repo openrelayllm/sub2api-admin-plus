@@ -206,4 +206,13 @@ func TestIsMigrationChecksumCompatible(t *testing.T) {
 		)
 		require.True(t, ok)
 	})
+
+	t.Run("178历史site discovery checksum可兼容catalog处理版本", func(t *testing.T) {
+		ok := isMigrationChecksumCompatible(
+			"178_admin_plus_site_discovery.sql",
+			"459352b868de342155485bc43c849d207f3268473cfaf280c7dd02953f1a0500",
+			"86a1d255a31f3a7ce2824bfeca42b71e2778d2564b40693f7def006c77c310de",
+		)
+		require.True(t, ok)
+	})
 }

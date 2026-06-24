@@ -2,62 +2,45 @@
   <AppLayout>
     <TablePageLayout>
       <template #filters>
-        <div class="flex flex-wrap-reverse items-start justify-between gap-3">
-          <div class="grid flex-1 gap-3 lg:grid-cols-[260px_minmax(220px,1fr)_160px_160px]">
-            <label class="block">
-              <span class="input-label">供应商</span>
-              <select v-model.number="selectedSupplierID" class="input">
-                <option :value="0">全部供应商</option>
-                <option v-for="supplier in suppliers" :key="supplier.id" :value="supplier.id">
-                  {{ supplier.name }} · {{ typeLabel(supplier.type) }}
-                </option>
-              </select>
-            </label>
-            <label class="block">
-              <span class="input-label">搜索</span>
-              <div class="relative">
-                <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input v-model.trim="filters.q" class="input pl-9" placeholder="本地账号、供应商侧标识、分组、渠道、费率" />
-              </div>
-            </label>
-            <label class="block">
-              <span class="input-label">运行状态</span>
-              <select v-model="filters.runtime_status" class="input">
-                <option value="">全部</option>
-                <option value="monitor_only">仅监控</option>
-                <option value="candidate">候选</option>
-                <option value="active">当前使用</option>
-                <option value="disabled">停用</option>
-              </select>
-            </label>
-            <label class="block">
-              <span class="input-label">健康状态</span>
-              <select v-model="filters.health_status" class="input">
-                <option value="">全部</option>
-                <option value="normal">正常</option>
-                <option value="unavailable">不可用</option>
-                <option value="credential_invalid">凭据失效</option>
-                <option value="paused">暂停</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-2">
-            <button type="button" class="btn btn-secondary px-2 md:px-3" :disabled="loading" title="刷新" @click="loadAll">
-              <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />
-              <span class="hidden md:inline">刷新</span>
-            </button>
-            <button type="button" class="btn btn-secondary px-2 md:px-3" title="清除筛选" @click="resetFilters">
-              <Icon name="x" size="sm" />
-              <span class="hidden md:inline">清除筛选</span>
-            </button>
-          </div>
-        </div>
+        <SupplierAccountsToolbar
+          :filters="filters"
+          :selected-supplier-id="selectedSupplierId"
+          :suppliers="suppliers"
+	          :type-options="typeOptions"
+	          :group-options="groupOptions"
+	          :column-options="toggleableColumns"
+	          :visible-column-keys="visibleColumnKeys"
+	          :loading="loading"
+          @update:filters="updateFilters"
+          @update:selected-supplier-id="selectedSupplierId = $event"
+          @refresh="loadAll"
+          @reset-filters="resetFilters"
+          @select-current-page="selectCurrentPage"
+	          @clear-selection="clearSelection"
+	          @create-account="goCreateAccount"
+	          @toggle-column="toggleColumn"
+	        />
       </template>
 
       <template #table>
-        <DataTable
-          :columns="columns"
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-primary-50 p-3 dark:bg-primary-900/20">
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="font-medium text-primary-900 dark:text-primary-100">{{ selectedIds.length > 0 ? `已选择 ${selectedIds.length} 个账号` : '批量编辑账号' }}</span>
+            <template v-if="selectedIds.length > 0">
+              <button class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300" @click="selectCurrentPage">选择当前页</button>
+              <span class="text-primary-200 dark:text-primary-700">•</span>
+              <button class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300" @click="clearSelection">清空</button>
+            </template>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length !== 1" title="请选择一个账号测试" @click="testSelected">测试账号</button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length !== 1" title="请选择一个账号查看分组" @click="openSelectedSupplier">查看分组</button>
+            <button type="button" class="btn btn-primary btn-sm" :disabled="selectedIds.length !== 1" title="请选择一个账号后到供应商分组更新" @click="openSelectedSupplier">批量更新</button>
+          </div>
+        </div>
+
+	        <DataTable
+	          :columns="visibleColumns"
           :data="pagedBindings"
           :loading="loadingBindings"
           row-key="id"
@@ -65,109 +48,163 @@
           default-sort-order="desc"
           :estimate-row-height="72"
         >
-          <template #cell-local_account_name="{ row }">
+          <template #header-select>
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="allCurrentPageSelected"
+              @click.stop
+              @change="toggleSelectCurrentPage(($event.target as HTMLInputElement).checked)"
+            />
+          </template>
+          <template #cell-select="{ row }">
+            <input
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="selectedSet.has(row.id)"
+              @change="toggleSelect(row.id)"
+            />
+          </template>
+
+          <template #cell-name="{ row }">
             <div class="min-w-[260px]">
               <div class="flex items-center gap-1.5">
-                <span class="font-medium text-gray-900 dark:text-white">{{ row.local_account_name }}</span>
-                <span class="badge badge-gray">#{{ row.local_sub2api_account_id }}</span>
+	                <span class="font-medium text-gray-900 dark:text-white">{{ localAccount(row)?.name || row.local_account_name }}</span>
               </div>
               <div class="mt-1 flex items-center gap-2">
-                <code class="code text-xs">{{ supplierKeyDisplay(row) }}</code>
-                <span v-if="row.supplier_key_external_id" class="text-xs text-gray-400 dark:text-dark-500">
-                  Key #{{ row.supplier_key_external_id }}
-                </span>
+	                <code class="code text-xs">#{{ row.local_sub2api_account_id }}</code>
+	                <span v-if="supplierKeyDisplay(row) !== '-'" class="text-xs text-gray-400 dark:text-dark-500">{{ supplierKeyDisplay(row) }}</span>
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
-                <span>{{ supplierLabel(row.supplier_id) }}</span>
-                <span>{{ row.local_account_platform }} / {{ row.local_account_type }}</span>
-                <span v-if="row.supplier_account_label">{{ row.supplier_account_label }}</span>
+	                <span>{{ supplierRelationLabel(row) }}</span>
+	                <span v-if="row.supplier_account_label">{{ row.supplier_account_label }}</span>
               </div>
+            </div>
+          </template>
+
+          <template #cell-account_id="{ row }">
+            <span class="font-mono text-xs text-gray-500 dark:text-dark-400">#{{ row.local_sub2api_account_id }}</span>
+          </template>
+
+          <template #cell-platform_type="{ row }">
+	            <div class="flex min-w-[130px] flex-col gap-1">
+	              <div class="flex flex-wrap items-center gap-1">
+	                <span class="badge" :class="platformBadgeClass(localAccount(row)?.platform || row.local_account_platform)">{{ platformLabel(localAccount(row)?.platform || row.local_account_platform) }}</span>
+	                <span class="badge badge-gray">{{ typeShortLabel(localAccount(row)?.type || row.local_account_type) }}</span>
+	              </div>
+              <span class="text-xs text-gray-500 dark:text-dark-400">{{ compactModeLabel(row) }}</span>
+            </div>
+          </template>
+
+          <template #cell-capacity="{ row }">
+            <div class="min-w-[116px]">
+              <div class="h-2 w-24 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                <div class="h-full rounded-full bg-amber-300" :style="{ width: capacityPercent(row) + '%' }" />
+              </div>
+	              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ accountRuntime(row)?.current_concurrency || row.observed_max_concurrency || 0 }} / {{ accountRuntime(row)?.configured_limit || localAccount(row)?.concurrency || row.configured_concurrency || 0 }}</div>
             </div>
           </template>
 
           <template #cell-status="{ row }">
-            <div class="flex min-w-[132px] flex-col gap-1.5">
-              <div class="flex flex-wrap gap-1.5">
-                <span class="badge w-fit" :class="runtimeClass(row.runtime_status)">{{ runtimeLabel(row.runtime_status) }}</span>
-                <span class="badge w-fit" :class="healthClass(row.health_status)">{{ healthLabel(row.health_status) }}</span>
-              </div>
-              <span class="text-xs font-medium" :class="switchStateClass(row)">
-                {{ switchStateLabel(row) }}
+	            <div class="flex min-w-[108px] flex-col gap-1.5">
+	              <span class="badge w-fit" :class="accountStatusClass(localAccount(row)?.status || '')">{{ accountStatusLabel(localAccount(row)?.status || '') }}</span>
+	              <span v-if="accountBlockReason(row)" class="badge badge-warning w-fit">{{ accountBlockReason(row) }}</span>
+	            </div>
+          </template>
+
+          <template #cell-schedulable="{ row }">
+            <div class="min-w-[88px]">
+              <span
+                class="relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors"
+                :class="isSchedulable(row) ? 'bg-primary-500' : 'bg-gray-200 dark:bg-dark-600'"
+                :title="switchStateLabel(row)"
+              >
+                <span class="pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition" :class="isSchedulable(row) ? 'translate-x-4' : 'translate-x-0'" />
               </span>
+              <div class="mt-1 text-xs" :class="switchStateClass(row)">{{ switchStateLabel(row) }}</div>
             </div>
           </template>
+
+	          <template #cell-groups="{ row }">
+	            <div class="min-w-[220px]">
+	              <div class="flex flex-wrap gap-1">
+	                <GroupBadge
+	                  v-for="name in displayGroupNames(row)"
+	                  :key="name"
+	                  :name="name"
+	                  :platform="groupPlatform(row)"
+	                  :rate-multiplier="groupRate(row)"
+	                  always-show-rate
+	                />
+	              </div>
+	              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
+	                <span>{{ providerLabel(groupProvider(row)) }}</span>
+	                <span v-if="bindingsForAccount(row).length > 0">{{ bindingsForAccount(row).length }} 个供应商绑定</span>
+	                <span v-if="row.supplier_external_group_id" class="font-mono">#{{ row.supplier_external_group_id }}</span>
+	              </div>
+	            </div>
+	          </template>
 
           <template #cell-usage="{ row }">
-            <div class="min-w-[142px] text-sm">
-              <div class="flex items-center gap-1.5">
-                <span class="text-gray-500 dark:text-gray-400">今日:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
-                  {{ formatMoneyCompact(accountUsage(row).today.account_cost_cents, 'USD') }}
-                </span>
-              </div>
-              <div class="mt-0.5 flex items-center gap-1.5">
-                <span class="text-gray-500 dark:text-gray-400">近30天:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
-                  {{ formatMoneyCompact(accountUsage(row).last30d.account_cost_cents, 'USD') }}
-                </span>
-              </div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                {{ formatInteger(accountUsage(row).last30d.total_tokens) }} tokens
-              </div>
+            <div class="min-w-[150px] text-sm">
+              <div><span class="text-gray-500 dark:text-dark-400">今日:</span> <span class="font-medium">{{ formatMoneyCompact(accountUsage(row).today.account_cost_cents, 'USD') }}</span></div>
+              <div class="mt-0.5"><span class="text-gray-500 dark:text-dark-400">近30天:</span> <span class="font-medium">{{ formatMoneyCompact(accountUsage(row).last30d.account_cost_cents, 'USD') }}</span></div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ formatInteger(accountUsage(row).last30d.total_tokens) }} tokens</div>
             </div>
           </template>
 
-          <template #cell-concurrency="{ row }">
-            <div class="min-w-[110px] text-right">
-              <div>{{ row.observed_max_concurrency || 0 }} / {{ row.configured_concurrency || 0 }}</div>
-              <div class="text-xs text-gray-500 dark:text-dark-400">观测 / 配置</div>
-            </div>
-          </template>
+	          <template #cell-today_stats="{ row }">
+	            <div class="min-w-[128px] text-sm">
+	              <div class="font-medium text-gray-900 dark:text-gray-100">{{ accountUsage(row).today.request_count }} 次</div>
+	              <div class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ formatInteger(accountUsage(row).today.total_tokens) }} tokens</div>
+	            </div>
+	          </template>
 
-          <template #cell-rate_profile="{ row }">
-            <div class="min-w-[220px]">
-              <GroupBadge
-                :name="groupName(row)"
-                :platform="groupPlatform(row)"
-                :rate-multiplier="groupRate(row)"
-              />
-              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
-                <span>{{ providerLabel(groupProvider(row)) }}</span>
-                <span v-if="row.supplier_external_group_id" class="font-mono">#{{ row.supplier_external_group_id }}</span>
-              </div>
-            </div>
-          </template>
+	          <template #cell-last_used_at="{ row }">
+	            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeDateTime(localAccount(row)?.last_used_at || lastUsedAt(row)) }}</span>
+	          </template>
 
-          <template #cell-created_at="{ row }">
-            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(row.created_at) }}</span>
-          </template>
+	          <template #cell-created_at="{ row }">
+	            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(localAccount(row)?.created_at || row.created_at) }}</span>
+	          </template>
+
+	          <template #cell-updated_at="{ row }">
+	            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(localAccount(row)?.updated_at || row.updated_at) }}</span>
+	          </template>
+
+	          <template #cell-expires_at="{ row }">
+	            <div class="min-w-[126px]">
+	              <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(localAccount(row)?.expires_at) }}</span>
+	              <div v-if="localAccount(row)?.expires_at && localAccount(row)?.auto_pause_on_expired" class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">到期自动暂停</div>
+	            </div>
+	          </template>
+
+	          <template #cell-priority="{ row }">
+	            <span class="text-sm text-gray-700 dark:text-gray-300">{{ localAccount(row)?.priority ?? '-' }}</span>
+	          </template>
+
+	          <template #cell-rate_multiplier="{ row }">
+	            <span class="rounded-md bg-emerald-50 px-2 py-1 font-mono text-base font-bold text-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-200">
+	              {{ formatRate(localAccount(row)?.rate_multiplier) }}
+	            </span>
+	          </template>
+
+	          <template #cell-notes="{ row }">
+	            <span v-if="localAccount(row)?.notes" class="block max-w-[220px] truncate text-sm text-gray-600 dark:text-gray-300" :title="localAccount(row)?.notes">{{ localAccount(row)?.notes }}</span>
+	            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+	          </template>
 
           <template #cell-actions="{ row }">
-            <div class="flex min-w-[156px] items-center justify-end gap-1">
-              <button
-                type="button"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-300"
-                title="测试渠道"
-                @click="openTestDialog(row)"
-              >
+            <div class="flex min-w-[112px] items-center justify-end gap-1">
+              <button type="button" class="row-action hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-300" title="测试渠道" @click="openTestDialog(row)">
                 <Icon name="beaker" size="sm" />
                 <span class="text-xs">测试</span>
               </button>
-              <button
-                type="button"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-primary-50 hover:text-primary-600 dark:hover:bg-primary-900/20 dark:hover:text-primary-400"
-                title="查看供应商分组"
-                @click="goSupplierGroups(row)"
-              >
+              <button type="button" class="row-action hover:bg-primary-50 hover:text-primary-600 dark:hover:bg-primary-900/20 dark:hover:text-primary-400" title="查看供应商分组" @click="goSupplierGroups(row)">
                 <Icon name="externalLink" size="sm" />
                 <span class="text-xs">分组</span>
               </button>
-              <button
-                type="button"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
-                title="刷新"
-                @click="loadAll"
-              >
+              <button type="button" class="row-action hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400" title="刷新" @click="loadAll">
                 <Icon name="refresh" size="sm" />
                 <span class="text-xs">刷新</span>
               </button>
@@ -175,10 +212,7 @@
           </template>
 
           <template #empty>
-            <EmptyState
-              title="暂无账号/Key 绑定"
-              description="请在供应商管理页打开分组弹窗，同步分组后从分组行开通 Key/账号；这里仅展示已生成的绑定。"
-            />
+            <EmptyState title="暂无账号/Key 绑定" description="请在供应商管理页同步分组，并从分组行开通 Key/账号。" />
           </template>
         </DataTable>
       </template>
@@ -195,11 +229,7 @@
       </template>
     </TablePageLayout>
 
-    <LocalAccountTestModal
-      :show="Boolean(testingAccount)"
-      :account="testingAccount"
-      @close="testingAccount = null"
-    />
+    <LocalAccountTestModal :show="Boolean(testingAccount)" :account="testingAccount" @close="testingAccount = null" />
   </AppLayout>
 </template>
 
@@ -214,20 +244,37 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LocalAccountTestModal from '@/components/admin-plus/LocalAccountTestModal.vue'
+import SupplierAccountsToolbar from './SupplierAccountsToolbar.vue'
+import {
+  accountStatusClass,
+  accountStatusLabel,
+  formatDateTime,
+  formatInteger,
+  formatMoneyCompact,
+  formatRate,
+  formatRelativeDateTime,
+  normalizePlatform,
+  normalizeType,
+  platformBadgeClass,
+  platformLabel,
+  providerLabel,
+  typeShortLabel
+} from './SupplierAccountsUtils'
 import type { Column } from '@/components/common/types'
 import type { GroupPlatform } from '@/types'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useAppStore } from '@/stores/app'
 import {
-  listSupplierAccounts,
   listLocalAccountUsageSummary,
+  listLocalAccountRuntime,
+  listLocalSub2APIAccounts,
+  listSupplierAccounts,
   listSuppliers,
   type LocalAccountUsageSummary,
+  type LocalAccountRuntime,
+  type LocalSub2APIAccount,
   type Supplier,
-  type SupplierAccount,
-  type SupplierHealthStatus,
-  type SupplierRuntimeStatus,
-  type SupplierType
+  type SupplierAccount
 } from '@/api/admin/adminPlus'
 
 const appStore = useAppStore()
@@ -238,9 +285,15 @@ const loading = ref(false)
 const loadingBindings = ref(false)
 const suppliers = ref<Supplier[]>([])
 const bindings = ref<SupplierAccount[]>([])
+const supplierBindings = ref<SupplierAccount[]>([])
+const localAccountsByID = ref<Record<number, LocalSub2APIAccount>>({})
+const runtimeByAccountID = ref<Record<number, LocalAccountRuntime>>({})
 const usageByAccountID = ref<Record<number, AccountUsageWindow>>({})
-const selectedSupplierID = ref(0)
-const testingAccount = ref<SupplierAccount | null>(null)
+const selectedSupplierId = ref(0)
+const selectedIds = ref<number[]>([])
+const testingAccount = ref<LocalSub2APIAccount | null>(null)
+const suppressSupplierWatch = ref(false)
+const hiddenColumns = reactive(new Set<string>(['notes', 'updated_at']))
 
 interface UsageSummary {
   request_count: number
@@ -249,6 +302,7 @@ interface UsageSummary {
   total_tokens: number
   revenue_cents: number
   account_cost_cents: number
+  last_request_created_at: string
 }
 
 interface AccountUsageWindow {
@@ -258,65 +312,97 @@ interface AccountUsageWindow {
 
 const filters = reactive({
   q: '',
-  runtime_status: '' as '' | SupplierRuntimeStatus,
-  health_status: '' as '' | SupplierHealthStatus
+  platform: '',
+  type: '',
+  status: '',
+  group: ''
 })
-
-const pagination = reactive({
-  page: 1,
-  page_size: getPersistedPageSize(),
-  total: 0,
-  pages: 0
-})
+const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0, pages: 0 })
 
 const columns: Column[] = [
-  { key: 'local_account_name', label: '名称', sortable: true },
-  { key: 'rate_profile', label: '分组' },
-  { key: 'usage', label: '用量' },
-  { key: 'status', label: '状态' },
-  { key: 'concurrency', label: '并发', class: 'text-right' },
-  { key: 'created_at', label: '创建时间', sortable: true },
-  { key: 'actions', label: '操作', class: 'text-right' }
-]
+	  { key: 'select', label: '' },
+	  { key: 'name', label: '名称', sortable: true },
+	  { key: 'account_id', label: '账号ID', sortable: true },
+	  { key: 'platform_type', label: '平台/类型' },
+	  { key: 'capacity', label: '容量' },
+	  { key: 'status', label: '状态' },
+	  { key: 'schedulable', label: '调度' },
+	  { key: 'today_stats', label: '今日统计' },
+	  { key: 'groups', label: '分组' },
+	  { key: 'usage', label: '用量窗口' },
+	  { key: 'priority', label: '优先级', sortable: true },
+	  { key: 'rate_multiplier', label: '倍率', sortable: true },
+	  { key: 'last_used_at', label: '最近使用', sortable: true },
+	  { key: 'created_at', label: '创建时间', sortable: true },
+	  { key: 'updated_at', label: '更新时间', sortable: true },
+	  { key: 'expires_at', label: '过期时间', sortable: true },
+	  { key: 'notes', label: '备注' },
+	  { key: 'actions', label: '操作', class: 'text-right' }
+	]
 
-const filteredBindings = computed(() => {
-  const q = filters.q.toLowerCase()
-  const items = bindings.value.filter((item) => {
-    if (filters.runtime_status && item.runtime_status !== filters.runtime_status) return false
-    if (filters.health_status && item.health_status !== filters.health_status) return false
-    if (q) {
-      const haystack = [
-        item.local_account_name,
-        item.local_account_platform,
-        item.local_account_type,
-        item.supplier_account_identifier || '',
-        item.supplier_account_label || '',
-        item.supplier_key_name || '',
-        item.supplier_key_external_id || '',
-        item.supplier_key_last4 || '',
-        item.supplier_group_name || '',
-        item.supplier_group_provider || '',
-        item.supplier_external_group_id || '',
-        item.organization_id || '',
-        item.project_id || '',
-        item.rate_profile || ''
-      ].join(' ').toLowerCase()
-      if (!haystack.includes(q)) return false
-    }
-    return true
-  })
-  return sortBindingsDesc(items)
-})
-
+const selectedSet = computed(() => new Set(selectedIds.value))
+const filteredBindings = computed(() => sortBindingsDesc(bindings.value.filter(matchesFilters)))
 const pagedBindings = computed(() => {
   const start = (pagination.page - 1) * pagination.page_size
   return filteredBindings.value.slice(start, start + pagination.page_size)
 })
+const allCurrentPageSelected = computed(() => pagedBindings.value.length > 0 && pagedBindings.value.every((row) => selectedSet.value.has(row.id)))
+const visibleColumns = computed(() => columns.filter((column) => column.key === 'select' || column.key === 'name' || column.key === 'actions' || !hiddenColumns.has(column.key)))
+const toggleableColumns = computed(() => columns.filter((column) => column.key !== 'select' && column.key !== 'name' && column.key !== 'actions').map((column) => ({ key: column.key, label: column.label })))
+const visibleColumnKeys = computed(() => visibleColumns.value.map((column) => column.key))
+const typeOptions = computed(() => {
+  const values = new Map<string, string>()
+  for (const row of bindings.value) {
+    const value = normalizeType(row.local_account_type)
+    if (value) values.set(value, typeShortLabel(row.local_account_type))
+  }
+  return [...values.entries()].map(([value, label]) => ({ value, label }))
+})
+const groupOptions = computed(() => {
+  const values = new Set<string>()
+  for (const row of bindings.value) {
+    for (const name of groupFilterNames(row)) values.add(name)
+  }
+  return [...values].sort((a, b) => a.localeCompare(b))
+})
+
+function matchesFilters(item: SupplierAccount): boolean {
+  const account = localAccount(item)
+  if (selectedSupplierId.value && !bindingsForAccount(item).some((binding) => binding.supplier_id === selectedSupplierId.value)) return false
+  if (filters.platform && normalizePlatform(account?.platform || item.local_account_platform) !== filters.platform) return false
+  if (filters.type && normalizeType(account?.type || item.local_account_type) !== filters.type) return false
+  if (filters.status && accountStatusFilter(item) !== filters.status && item.runtime_status !== filters.status && item.health_status !== filters.status) return false
+  if (filters.group === 'ungrouped' && groupFilterNames(item).length > 0) return false
+  if (filters.group && filters.group !== 'ungrouped' && !groupFilterNames(item).includes(filters.group)) return false
+  const q = filters.q.toLowerCase()
+  if (!q) return true
+  return [
+    account?.name || item.local_account_name,
+    account?.platform || item.local_account_platform,
+    account?.type || item.local_account_type,
+    account?.status || '',
+    account?.notes || '',
+    account?.error_message || '',
+    item.supplier_account_identifier || '',
+    item.supplier_account_label || '',
+    item.supplier_key_name || '',
+    item.supplier_key_external_id || '',
+    item.supplier_key_last4 || '',
+    item.supplier_group_name || '',
+    item.supplier_group_provider || '',
+    item.supplier_external_group_id || '',
+    item.organization_id || '',
+    item.project_id || '',
+    item.rate_profile || '',
+    supplierLabel(item.supplier_id),
+    bindingsForAccount(item).map((binding) => supplierLabel(binding.supplier_id)).join(' ')
+  ].join(' ').toLowerCase().includes(q)
+}
 
 function sortBindingsDesc(items: SupplierAccount[]): SupplierAccount[] {
   return [...items].sort((a, b) => {
-    const createdA = Date.parse(a.created_at || '')
-    const createdB = Date.parse(b.created_at || '')
+    const createdA = Date.parse(localAccount(a)?.created_at || a.created_at || '')
+    const createdB = Date.parse(localAccount(b)?.created_at || b.created_at || '')
     if (!Number.isNaN(createdA) || !Number.isNaN(createdB)) {
       const normalizedA = Number.isNaN(createdA) ? 0 : createdA
       const normalizedB = Number.isNaN(createdB) ? 0 : createdB
@@ -326,93 +412,74 @@ function sortBindingsDesc(items: SupplierAccount[]): SupplierAccount[] {
   })
 }
 
-function formatMoneyCompact(cents: number, currency: string): string {
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: currency || 'USD',
-    currencyDisplay: 'narrowSymbol',
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4
-  }).format((cents || 0) / 100)
+function accountStatusFilter(row: SupplierAccount): string {
+  const account = localAccount(row)
+  if (!account) return row.health_status
+  if (account.temp_unschedulable_until) return 'temp_unschedulable'
+  return account.status || ''
 }
 
-function formatInteger(value: number): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value || 0)
-}
-
-function formatDateTime(value?: string | null): string {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString()
-}
-
-function typeLabel(value: SupplierType): string {
-  return {
-    openai: 'OpenAI',
-    anthropic: 'Anthropic',
-    gemini: 'Gemini',
-    sub2api: 'Sub2API',
-    new_api: 'New API',
-    browser_only: '仅浏览器',
-    custom: '自定义'
-  }[value]
-}
-
-function runtimeLabel(value: SupplierRuntimeStatus): string {
-  return {
-    monitor_only: '仅监控',
-    candidate: '候选',
-    active: '使用中',
-    disabled: '停用'
-  }[value]
-}
-
-function healthLabel(value: SupplierHealthStatus): string {
-  return {
-    normal: '正常',
-    unavailable: '不可用',
-    credential_invalid: '凭据失效',
-    paused: '暂停'
-  }[value]
-}
-
-function runtimeClass(status: SupplierRuntimeStatus): string {
-  if (status === 'active') return 'badge-success'
-  if (status === 'candidate') return 'badge-primary'
-  if (status === 'disabled') return 'badge-danger'
-  return 'badge-gray'
-}
-
-function healthClass(status: SupplierHealthStatus): string {
-  if (status === 'normal') return 'badge-success'
-  if (status === 'paused') return 'badge-warning'
-  return 'badge-danger'
+function accountBlockReason(row: SupplierAccount): string {
+  const account = localAccount(row)
+  const runtime = accountRuntime(row)
+  if (runtime?.blocked_reason) return runtime.blocked_reason
+  if (account?.temp_unschedulable_until) return '临时不可调度'
+  if (account?.rate_limit_reset_at) return '限流中'
+  if (account?.overload_until) return '过载'
+  return ''
 }
 
 function emptyUsage(): UsageSummary {
-  return {
-    request_count: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-    revenue_cents: 0,
-    account_cost_cents: 0
-  }
+  return { request_count: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, revenue_cents: 0, account_cost_cents: 0, last_request_created_at: '' }
 }
 
 function accountUsage(row: SupplierAccount): AccountUsageWindow {
-  return usageByAccountID.value[row.local_sub2api_account_id] || {
-    today: emptyUsage(),
-    last30d: emptyUsage()
-  }
+  return usageByAccountID.value[row.local_sub2api_account_id] || { today: emptyUsage(), last30d: emptyUsage() }
 }
 
-function groupName(row: SupplierAccount): string {
-  return row.supplier_group_name?.trim() || row.rate_profile?.trim() || '未同步分组'
+function localAccount(row: SupplierAccount): LocalSub2APIAccount | undefined {
+  return localAccountsByID.value[row.local_sub2api_account_id]
+}
+
+function accountRuntime(row: SupplierAccount): LocalAccountRuntime | undefined {
+  return runtimeByAccountID.value[row.local_sub2api_account_id]
+}
+
+function bindingsForAccount(row: SupplierAccount): SupplierAccount[] {
+  return supplierBindings.value.filter((binding) => binding.local_sub2api_account_id === row.local_sub2api_account_id)
+}
+
+function groupFilterNames(row: SupplierAccount): string[] {
+  return [
+    ...(localAccount(row)?.group_names || []),
+    row.supplier_group_name || '',
+    row.rate_profile || ''
+  ].map((name) => name.trim()).filter(Boolean)
+}
+
+function displayGroupNames(row: SupplierAccount): string[] {
+  const names = groupFilterNames(row)
+  return names.length > 0 ? names.slice(0, 4) : ['未分组']
+}
+
+function lastUsedAt(row: SupplierAccount): string {
+  return accountRuntime(row)?.last_used_at || accountUsage(row).last30d.last_request_created_at || accountUsage(row).today.last_request_created_at || ''
+}
+
+function compactModeLabel(row: SupplierAccount): string {
+  const account = localAccount(row)
+  if (!account) return 'Compact Auto'
+  return account.schedulable ? 'Compact Auto' : '未加入调度'
+}
+
+function capacityPercent(row: SupplierAccount): number {
+  const configured = accountRuntime(row)?.configured_limit || row.configured_concurrency || localAccount(row)?.concurrency || 0
+  if (configured <= 0) return 0
+  return Math.min(100, Math.round(((accountRuntime(row)?.current_concurrency || row.observed_max_concurrency || 0) / configured) * 100))
 }
 
 function groupProvider(row: SupplierAccount): string {
-  return row.supplier_group_provider?.trim() || row.rate_profile?.trim() || 'mixed'
+  return row.supplier_group_provider?.trim() || row.rate_profile?.trim() || row.local_account_platform || 'mixed'
 }
 
 function groupPlatform(row: SupplierAccount): GroupPlatform {
@@ -424,39 +491,35 @@ function groupPlatform(row: SupplierAccount): GroupPlatform {
 }
 
 function groupRate(row: SupplierAccount): number {
-  if (typeof row.supplier_group_rate === 'number' && row.supplier_group_rate > 0) return row.supplier_group_rate
-  return 1
+  return localAccount(row)?.rate_multiplier || 1
 }
 
-function providerLabel(value?: string): string {
-  const provider = (value || 'mixed').toLowerCase()
-  if (provider.includes('anthropic') || provider.includes('claude')) return 'Anthropic / Claude'
-  if (provider.includes('gemini') || provider.includes('google')) return 'Gemini'
-  if (provider.includes('openai') || provider.includes('gpt')) return 'OpenAI'
-  if (provider.includes('image')) return 'Image'
-  return provider === 'mixed' ? '混合渠道' : value || '混合渠道'
+function isSchedulable(row: SupplierAccount): boolean {
+  return Boolean(localAccount(row)?.schedulable)
 }
 
 function switchStateLabel(row: SupplierAccount): string {
-  if (row.runtime_status === 'active' && row.health_status === 'normal') return '当前承载流量'
-  if (row.runtime_status === 'candidate' && row.health_status === 'normal') return '可进入候选'
-  if (row.runtime_status === 'monitor_only') return '仅监控，不切换'
-  if (row.health_status !== 'normal') return '健康异常，不切换'
-  return '不可切换'
+  if (isSchedulable(row)) return '可调度'
+  if (localAccount(row)?.status === 'disabled') return '已停用'
+  if (localAccount(row)?.status === 'error') return '异常'
+  return '不切换'
 }
 
 function switchStateClass(row: SupplierAccount): string {
-  if ((row.runtime_status === 'active' || row.runtime_status === 'candidate') && row.health_status === 'normal') {
-    return 'text-emerald-700 dark:text-emerald-300'
-  }
-  if (row.health_status !== 'normal') {
-    return 'text-red-600 dark:text-red-300'
-  }
+  if (isSchedulable(row)) return 'text-emerald-700 dark:text-emerald-300'
+  if (row.health_status !== 'normal') return 'text-red-600 dark:text-red-300'
   return 'text-gray-500 dark:text-dark-400'
 }
 
 function supplierLabel(id: number): string {
+  if (!id) return '未绑定供应商'
   return suppliers.value.find((supplier) => supplier.id === id)?.name || `#${id}`
+}
+
+function supplierRelationLabel(row: SupplierAccount): string {
+  const related = bindingsForAccount(row)
+  if (related.length === 0) return '未绑定供应商'
+  return related.map((binding) => supplierLabel(binding.supplier_id)).join(' / ')
 }
 
 function supplierKeyDisplay(row: SupplierAccount): string {
@@ -466,19 +529,54 @@ function supplierKeyDisplay(row: SupplierAccount): string {
   return '-'
 }
 
+function toggleSelect(id: number) {
+  selectedIds.value = selectedSet.value.has(id) ? selectedIds.value.filter((item) => item !== id) : [...selectedIds.value, id]
+}
+
+function toggleSelectCurrentPage(checked: boolean) {
+  const current = new Set(selectedIds.value)
+  for (const row of pagedBindings.value) {
+    if (checked) current.add(row.id)
+    else current.delete(row.id)
+  }
+  selectedIds.value = [...current]
+}
+
+function selectCurrentPage() {
+  toggleSelectCurrentPage(true)
+}
+
+function clearSelection() {
+  selectedIds.value = []
+}
+
+function toggleColumn(key: string) {
+  if (hiddenColumns.has(key)) hiddenColumns.delete(key)
+  else hiddenColumns.add(key)
+}
+
+function selectedRows(): SupplierAccount[] {
+  const ids = selectedSet.value
+  return bindings.value.filter((row) => ids.has(row.id))
+}
+
+function testSelected() {
+  const first = selectedRows()[0]
+  if (first) openTestDialog(first)
+}
+
+function openSelectedSupplier() {
+  const first = selectedRows()[0]
+  if (first) goSupplierGroups(first)
+}
+
 function goSupplierGroups(row: SupplierAccount) {
-  void router.push({
-    path: '/admin/suppliers',
-    query: {
-      supplier_id: row.supplier_id,
-      q: supplierLabel(row.supplier_id),
-      open: 'groups'
-    }
-  })
+  void router.push({ path: '/admin/suppliers', query: { supplier_id: row.supplier_id, q: supplierLabel(row.supplier_id), open: 'groups' } })
 }
 
 function openTestDialog(row: SupplierAccount) {
-  testingAccount.value = row
+  const account = localAccount(row)
+  if (account) testingAccount.value = account
 }
 
 async function loadSuppliers() {
@@ -486,34 +584,88 @@ async function loadSuppliers() {
   suppliers.value = result.items
   const querySupplierID = Number(route.query.supplier_id || 0)
   if (querySupplierID && suppliers.value.some((supplier) => supplier.id === querySupplierID)) {
-    selectedSupplierID.value = querySupplierID
-  } else if (!selectedSupplierID.value && suppliers.value.length > 0) {
-    selectedSupplierID.value = suppliers.value[0].id
+    selectedSupplierId.value = querySupplierID
+  } else if (querySupplierID) {
+    selectedSupplierId.value = 0
   }
+}
+
+async function loadLocalAccounts() {
+  const result = await listLocalSub2APIAccounts({ page: 1, page_size: 5000 })
+  localAccountsByID.value = Object.fromEntries(result.items.map((account) => [account.id, account]))
 }
 
 async function loadBindings() {
   loadingBindings.value = true
   try {
-    if (selectedSupplierID.value) {
-      const result = await listSupplierAccounts(selectedSupplierID.value, { page: 1, page_size: 1000 })
-      bindings.value = result.items
-      await loadUsageSummaries()
-      syncBindingPagination()
-      return
-    }
-    const all: SupplierAccount[] = []
+    const allSupplierBindings: SupplierAccount[] = []
     for (const supplier of suppliers.value) {
       const result = await listSupplierAccounts(supplier.id, { page: 1, page_size: 1000 })
-      all.push(...result.items)
+      allSupplierBindings.push(...result.items)
     }
-    bindings.value = all
+    supplierBindings.value = allSupplierBindings
+    bindings.value = buildAccountRows(Object.values(localAccountsByID.value), allSupplierBindings)
+    await loadAccountRuntime()
     await loadUsageSummaries()
     syncBindingPagination()
+    selectedIds.value = selectedIds.value.filter((id) => bindings.value.some((row) => row.id === id))
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '加载账号/Key 绑定失败')
   } finally {
     loadingBindings.value = false
+  }
+}
+
+function buildAccountRows(accounts: LocalSub2APIAccount[], supplierRows: SupplierAccount[]): SupplierAccount[] {
+  const byAccountID = new Map<number, SupplierAccount[]>()
+  for (const row of supplierRows) {
+    const rows = byAccountID.get(row.local_sub2api_account_id) || []
+    rows.push(row)
+    byAccountID.set(row.local_sub2api_account_id, rows)
+  }
+  return accounts.map((account) => {
+    const primary = byAccountID.get(account.id)?.[0]
+    if (primary) {
+      return {
+        ...primary,
+        id: account.id,
+        local_account_name: account.name,
+        local_account_platform: account.platform,
+        local_account_type: account.type,
+        configured_concurrency: account.concurrency,
+        runtime_status: account.schedulable ? 'active' : 'disabled',
+        health_status: account.status === 'active' ? 'normal' : 'paused',
+        created_at: account.created_at,
+        updated_at: account.updated_at
+      }
+    }
+    return {
+      id: account.id,
+      supplier_id: 0,
+      local_sub2api_account_id: account.id,
+      local_account_name: account.name,
+      local_account_platform: account.platform,
+      local_account_type: account.type,
+      configured_concurrency: account.concurrency,
+      observed_max_concurrency: 0,
+      balance_threshold_cents: 0,
+      balance_cents: 0,
+      balance_currency: 'USD',
+      has_usable_balance: true,
+      runtime_status: account.schedulable ? 'active' : 'disabled',
+      health_status: account.status === 'active' ? 'normal' : 'paused',
+      created_at: account.created_at,
+      updated_at: account.updated_at
+    }
+  })
+}
+
+async function loadAccountRuntime() {
+  try {
+    const result = await listLocalAccountRuntime({ page: 1, page_size: 5000 })
+    runtimeByAccountID.value = Object.fromEntries(result.items.map((item) => [item.account_id, item]))
+  } catch {
+    runtimeByAccountID.value = {}
   }
 }
 
@@ -523,27 +675,11 @@ async function loadUsageSummaries() {
   todayStart.setHours(0, 0, 0, 0)
   const last30dStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
   const [todayResult, last30dResult] = await Promise.all([
-    listLocalAccountUsageSummary({
-      from: todayStart.toISOString(),
-      to: now.toISOString(),
-      page: 1,
-      page_size: 1000
-    }),
-    listLocalAccountUsageSummary({
-      from: last30dStart.toISOString(),
-      to: now.toISOString(),
-      page: 1,
-      page_size: 1000
-    })
+    listLocalAccountUsageSummary({ from: todayStart.toISOString(), to: now.toISOString(), page: 1, page_size: 1000 }),
+    listLocalAccountUsageSummary({ from: last30dStart.toISOString(), to: now.toISOString(), page: 1, page_size: 1000 })
   ])
-
   const next: Record<number, AccountUsageWindow> = {}
-  for (const row of bindings.value) {
-    next[row.local_sub2api_account_id] = {
-      today: emptyUsage(),
-      last30d: emptyUsage()
-    }
-  }
+  for (const row of bindings.value) next[row.local_sub2api_account_id] = { today: emptyUsage(), last30d: emptyUsage() }
   for (const item of todayResult.items) {
     if (!next[item.account_id]) next[item.account_id] = { today: emptyUsage(), last30d: emptyUsage() }
     next[item.account_id].today = normalizeUsageSummary(item)
@@ -562,16 +698,15 @@ function normalizeUsageSummary(item: LocalAccountUsageSummary): UsageSummary {
     output_tokens: item.output_tokens || 0,
     total_tokens: item.total_tokens || item.input_tokens + item.output_tokens,
     revenue_cents: item.revenue_cents || 0,
-    account_cost_cents: item.account_cost_cents || 0
+    account_cost_cents: item.account_cost_cents || 0,
+    last_request_created_at: item.last_request_created_at || ''
   }
 }
 
 function syncBindingPagination() {
   pagination.total = filteredBindings.value.length
   pagination.pages = Math.ceil(pagination.total / pagination.page_size)
-  if (pagination.page > Math.max(1, pagination.pages)) {
-    pagination.page = Math.max(1, pagination.pages)
-  }
+  if (pagination.page > Math.max(1, pagination.pages)) pagination.page = Math.max(1, pagination.pages)
 }
 
 function reloadFirstPage() {
@@ -586,44 +721,62 @@ function resetBindingPagination() {
 
 function handlePageChange(page: number) {
   pagination.page = page
-  void loadBindings()
 }
 
 function handlePageSizeChange(pageSize: number) {
   pagination.page_size = pageSize
   pagination.page = 1
-  void loadBindings()
+  syncBindingPagination()
 }
 
 async function loadAll() {
   loading.value = true
   try {
+    suppressSupplierWatch.value = true
     await loadSuppliers()
+    await loadLocalAccounts()
+    suppressSupplierWatch.value = false
     await loadBindings()
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '加载数据失败')
   } finally {
+    suppressSupplierWatch.value = false
     loading.value = false
   }
 }
 
 function resetFilters() {
   filters.q = ''
-  filters.runtime_status = ''
-  filters.health_status = ''
+  filters.platform = ''
+  filters.type = ''
+  filters.status = ''
+  filters.group = ''
   resetBindingPagination()
 }
 
-watch(selectedSupplierID, () => {
+function updateFilters(next: typeof filters) {
+  filters.q = next.q
+  filters.platform = next.platform
+  filters.type = next.type
+  filters.status = next.status
+  filters.group = next.group
+  resetBindingPagination()
+}
+
+function goCreateAccount() {
+  void router.push({ path: '/admin/suppliers', query: { open: 'groups' } })
+}
+
+watch(selectedSupplierId, () => {
+  if (suppressSupplierWatch.value) return
   reloadFirstPage()
 })
-
-watch(
-  () => ({ ...filters }),
-  () => {
-    resetBindingPagination()
-  }
-)
-
+watch(() => ({ ...filters }), resetBindingPagination)
 onMounted(loadAll)
 </script>
+
+<style scoped>
+.row-action {
+  @apply flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors;
+}
+</style>

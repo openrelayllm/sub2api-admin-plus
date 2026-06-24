@@ -541,26 +541,47 @@ func (r *SQLRepository) ListLocalAccounts(ctx context.Context, query string, lim
 	}
 	limitRef := addArg(limit)
 	rows, err := r.sub2apiDB.QueryContext(ctx, `
-		SELECT
-			a.id,
-			a.name,
-			a.platform,
-			a.type,
-			a.status,
-			a.schedulable,
-			a.concurrency,
-			a.priority,
-			a.rate_multiplier,
-			COALESCE(array_agg(g.id ORDER BY ag.priority, g.id) FILTER (WHERE g.id IS NOT NULL), ARRAY[]::BIGINT[]),
-			COALESCE(array_agg(g.name ORDER BY ag.priority, ag.group_id) FILTER (WHERE g.name IS NOT NULL), ARRAY[]::TEXT[])
-		FROM accounts a
-		LEFT JOIN account_groups ag ON ag.account_id = a.id
-		LEFT JOIN groups g ON g.id = ag.group_id AND g.deleted_at IS NULL
-		WHERE `+strings.Join(where, " AND ")+`
-		GROUP BY a.id, a.name, a.platform, a.type, a.status, a.schedulable, a.concurrency, a.priority, a.rate_multiplier
-		ORDER BY a.id DESC
-		LIMIT `+limitRef+`
-	`, args...)
+			SELECT
+				a.id,
+				a.name,
+				COALESCE(a.notes, ''),
+				a.platform,
+				a.type,
+				a.status,
+				COALESCE(a.error_message, ''),
+				a.schedulable,
+				a.concurrency,
+				a.load_factor,
+				a.priority,
+				COALESCE(a.rate_multiplier, 1),
+				a.last_used_at,
+				a.expires_at,
+				COALESCE(a.auto_pause_on_expired, TRUE),
+				a.rate_limited_at,
+				a.rate_limit_reset_at,
+				a.overload_until,
+				a.temp_unschedulable_until,
+				COALESCE(a.temp_unschedulable_reason, ''),
+				a.session_window_start,
+				a.session_window_end,
+				COALESCE(a.session_window_status, ''),
+				a.created_at,
+				a.updated_at,
+				COALESCE(array_agg(g.id ORDER BY ag.priority, g.id) FILTER (WHERE g.id IS NOT NULL), ARRAY[]::BIGINT[]),
+				COALESCE(array_agg(g.name ORDER BY ag.priority, ag.group_id) FILTER (WHERE g.name IS NOT NULL), ARRAY[]::TEXT[])
+			FROM accounts a
+			LEFT JOIN account_groups ag ON ag.account_id = a.id
+			LEFT JOIN groups g ON g.id = ag.group_id AND g.deleted_at IS NULL
+			WHERE `+strings.Join(where, " AND ")+`
+			GROUP BY a.id, a.name, a.notes, a.platform, a.type, a.status, a.error_message,
+				a.schedulable, a.concurrency, a.load_factor, a.priority, a.rate_multiplier,
+				a.last_used_at, a.expires_at, a.auto_pause_on_expired, a.rate_limited_at,
+				a.rate_limit_reset_at, a.overload_until, a.temp_unschedulable_until,
+				a.temp_unschedulable_reason, a.session_window_start, a.session_window_end,
+				a.session_window_status, a.created_at, a.updated_at
+			ORDER BY a.id DESC
+			LIMIT `+limitRef+`
+		`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -570,27 +591,11 @@ func (r *SQLRepository) ListLocalAccounts(ctx context.Context, query string, lim
 
 	items := make([]*adminplusdomain.LocalSub2APIAccount, 0)
 	for rows.Next() {
-		var item adminplusdomain.LocalSub2APIAccount
-		var groupIDs pq.Int64Array
-		var groupNames pq.StringArray
-		if err := rows.Scan(
-			&item.ID,
-			&item.Name,
-			&item.Platform,
-			&item.Type,
-			&item.Status,
-			&item.Schedulable,
-			&item.Concurrency,
-			&item.Priority,
-			&item.RateMultiplier,
-			&groupIDs,
-			&groupNames,
-		); err != nil {
+		item, err := scanLocalSub2APIAccount(rows)
+		if err != nil {
 			return nil, err
 		}
-		item.GroupIDs = append([]int64(nil), groupIDs...)
-		item.GroupNames = append([]string(nil), groupNames...)
-		items = append(items, &item)
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -606,41 +611,91 @@ func (r *SQLRepository) getLocalAccount(ctx context.Context, id int64) (*adminpl
 		SELECT
 			a.id,
 			a.name,
+			COALESCE(a.notes, ''),
 			a.platform,
 			a.type,
 			a.status,
+			COALESCE(a.error_message, ''),
 			a.schedulable,
 			a.concurrency,
+			a.load_factor,
 			a.priority,
-			a.rate_multiplier,
+			COALESCE(a.rate_multiplier, 1),
+			a.last_used_at,
+			a.expires_at,
+			COALESCE(a.auto_pause_on_expired, TRUE),
+			a.rate_limited_at,
+			a.rate_limit_reset_at,
+			a.overload_until,
+			a.temp_unschedulable_until,
+			COALESCE(a.temp_unschedulable_reason, ''),
+			a.session_window_start,
+			a.session_window_end,
+			COALESCE(a.session_window_status, ''),
+			a.created_at,
+			a.updated_at,
 			COALESCE(array_agg(g.id ORDER BY ag.priority, g.id) FILTER (WHERE g.id IS NOT NULL), ARRAY[]::BIGINT[]),
 			COALESCE(array_agg(g.name ORDER BY ag.priority, ag.group_id) FILTER (WHERE g.name IS NOT NULL), ARRAY[]::TEXT[])
 		FROM accounts a
 		LEFT JOIN account_groups ag ON ag.account_id = a.id
 		LEFT JOIN groups g ON g.id = ag.group_id AND g.deleted_at IS NULL
 		WHERE a.id = $1 AND a.deleted_at IS NULL
-		GROUP BY a.id, a.name, a.platform, a.type, a.status, a.schedulable, a.concurrency, a.priority, a.rate_multiplier
+		GROUP BY a.id, a.name, a.notes, a.platform, a.type, a.status, a.error_message,
+			a.schedulable, a.concurrency, a.load_factor, a.priority, a.rate_multiplier,
+			a.last_used_at, a.expires_at, a.auto_pause_on_expired, a.rate_limited_at,
+			a.rate_limit_reset_at, a.overload_until, a.temp_unschedulable_until,
+			a.temp_unschedulable_reason, a.session_window_start, a.session_window_end,
+			a.session_window_status, a.created_at, a.updated_at
 	`, id)
-	var item adminplusdomain.LocalSub2APIAccount
-	var groupIDs pq.Int64Array
-	var groupNames pq.StringArray
-	if err := row.Scan(
-		&item.ID,
-		&item.Name,
-		&item.Platform,
-		&item.Type,
-		&item.Status,
-		&item.Schedulable,
-		&item.Concurrency,
-		&item.Priority,
-		&item.RateMultiplier,
-		&groupIDs,
-		&groupNames,
-	); err != nil {
+	item, err := scanLocalSub2APIAccount(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, infraerrors.New(http.StatusNotFound, "LOCAL_ACCOUNT_NOT_FOUND", "local Sub2API account not found")
 		}
 		return nil, err
+	}
+	return item, nil
+}
+
+func scanLocalSub2APIAccount(scanner supplierScanner) (*adminplusdomain.LocalSub2APIAccount, error) {
+	var item adminplusdomain.LocalSub2APIAccount
+	var groupIDs pq.Int64Array
+	var groupNames pq.StringArray
+	var loadFactor sql.NullInt64
+	if err := scanner.Scan(
+		&item.ID,
+		&item.Name,
+		&item.Notes,
+		&item.Platform,
+		&item.Type,
+		&item.Status,
+		&item.ErrorMessage,
+		&item.Schedulable,
+		&item.Concurrency,
+		&loadFactor,
+		&item.Priority,
+		&item.RateMultiplier,
+		&item.LastUsedAt,
+		&item.ExpiresAt,
+		&item.AutoPauseOnExpired,
+		&item.RateLimitedAt,
+		&item.RateLimitResetAt,
+		&item.OverloadUntil,
+		&item.TempUnschedulableUntil,
+		&item.TempUnschedulableReason,
+		&item.SessionWindowStart,
+		&item.SessionWindowEnd,
+		&item.SessionWindowStatus,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&groupIDs,
+		&groupNames,
+	); err != nil {
+		return nil, err
+	}
+	if loadFactor.Valid {
+		value := int(loadFactor.Int64)
+		item.LoadFactor = &value
 	}
 	item.GroupIDs = append([]int64(nil), groupIDs...)
 	item.GroupNames = append([]string(nil), groupNames...)

@@ -17,6 +17,8 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(componentSource).toContain("path: '/admin/supplier-bindings'")
     expect(componentSource).toContain("path: '/admin/scheduler'")
     expect(componentSource).toContain("path: '/admin/collection/sessions'")
+    expect(componentSource).toContain("path: '/admin/collection/site-discovery'")
+    expect(componentSource).toContain("path: '/admin/site-catalog'")
     expect(componentSource).toContain("path: '/admin/finance/costs'")
     expect(componentSource).toContain("path: '/admin/finance/usage-costs'")
     expect(componentSource).toContain("path: '/admin/finance/local-usage'")
@@ -45,16 +47,21 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(componentSource).not.toContain("path: '/payment'")
   })
 
-  it('将业务页面收敛到当前三组导航下', () => {
+  it('将业务页面收敛到当前导航分组下', () => {
     const suppliersGroupMatch = componentSource.match(/label: '供应商',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
-    const collectionGroupMatch = componentSource.match(/label: '调度中心',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
+    const collectionGroupMatch = componentSource.match(/label: '数据采集',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
+    const siteCatalogGroupMatch = componentSource.match(/label: '网址目录',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
+    const schedulerGroupMatch = componentSource.match(/label: '调度中心',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
     const financeGroupMatch = componentSource.match(/label: '财务对账',[\s\S]*?children: \[([\s\S]*?)\n {4}\]/)
 
     expect(suppliersGroupMatch?.[1]).toContain("label: '供应商管理'")
     expect(suppliersGroupMatch?.[1]).toContain("label: '账号/Key 绑定'")
-    expect(collectionGroupMatch?.[1]).toContain("label: '工作台'")
     expect(collectionGroupMatch?.[1]).toContain("label: '采集会话'")
+    expect(collectionGroupMatch?.[1]).toContain("label: '渠道索引采集'")
     expect(collectionGroupMatch?.[1]).not.toContain("label: '插件任务'")
+    expect(siteCatalogGroupMatch?.[1]).toContain("label: '站点列表'")
+    expect(schedulerGroupMatch?.[1]).toContain("label: '工作台'")
+    expect(schedulerGroupMatch?.[1]).toContain("label: '通知中心'")
     expect(componentSource).not.toContain("label: '运营事件'")
     expect(componentSource).not.toContain("label: t('nav.ops')")
     expect(componentSource).not.toContain("label: '费率'")

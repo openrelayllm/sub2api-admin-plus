@@ -345,6 +345,13 @@ func (s *Service) GetBrowserCredential(ctx context.Context, in BrowserCredential
 	return s.credentials.GetBrowserCredential(ctx, task.SupplierID)
 }
 
+func (s *Service) LeasedTask(ctx context.Context, taskID int64, deviceID string, leaseToken string) (*adminplusdomain.ExtensionTask, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("extension task service is not configured")
+	}
+	return s.requireLeasedTask(ctx, taskID, deviceID, leaseToken)
+}
+
 func (s *Service) requireLeasedTask(ctx context.Context, taskID int64, deviceID string, leaseToken string) (*adminplusdomain.ExtensionTask, error) {
 	if taskID <= 0 {
 		return nil, badRequest("EXTENSION_TASK_ID_INVALID", "invalid extension task id")

@@ -1,22 +1,27 @@
 # Release Notes
 
-## v0.11.3 - 2026-06-24
+## v0.12.0 - 2026-06-25
 
 ### 新增
 
-- 安装向导新增 Sub2API 集成配置步骤，可在首次安装时配置只读 Sub2API PostgreSQL、只读 Redis、Sub2API Admin API 和本地开发兼容回退开关。
-- 后端新增 `sub2api` 与 `admin_plus` 配置命名空间，安装向导写入的 `config.yaml` 会在运行时生效，并继续兼容原有环境变量。
+- 新增渠道索引采集后台能力，支持站点发现、候选渠道分类、导入、注册任务状态和推荐列表。
+- 新增站点目录领域模型与数据库迁移，为后续渠道目录治理和采集结果沉淀提供结构化存储。
+- 新增 Admin Plus 前端“渠道索引采集”页面与导航入口，并补齐路由白名单测试。
+- 浏览器扩展新增采集会话上报能力，支持将页面发现结果回传到 Admin Plus。
 
 ### 改进
 
-- 安装脚本改为 Admin Plus 专用命令式安装/升级入口，从 GitHub Release 拉取 Linux 二进制产物，支持 `install`、`upgrade`、`rollback` 和 `list-versions`。
-- systemd 部署统一使用 `/opt/sub2api-admin-plus`、`sub2api-admin-plus.service` 和 `/etc/sub2api-admin-plus`。
-- 升级脚本可识别旧版 `/opt/sub2api/sub2api` 与 `sub2api.service` 部署，迁移旧配置和安装锁，停用旧服务但保留旧目录用于人工回滚。
-- 部署文档、Compose 模板和配置示例明确 Admin Plus 主库必须独立，真实 Sub2API 数据通过只读连接和 Admin API 接入。
+- 账号/Key 绑定页面拆出工具栏组件，补充自动刷新、筛选、批量选择和供应商切换交互。
+- 通知中心补充已读/归档状态展示与服务端状态字段处理。
+- 供应商账号与渠道发现相关 API 类型同步到前端客户端，降低页面和后端契约漂移风险。
+
+### 修复
+
+- 修复供应商账号页面拆分后的类型检查问题，包括筛选更新、供应商 ID 事件命名和冗余函数。
+- 补齐通知服务状态测试，避免已读与归档字段回归。
 
 ### 发布
 
-- 更新版本号到 `0.11.3`。
-- 修复 CI lint 中的 nil slice 判断与所有已暴露 `Rows.Close()` 错误处理问题。
+- 更新版本号到 `0.12.0`。
 - GitHub Release 继续只发布 Linux 产物：`linux_amd64`、`linux_arm64` 和 `checksums.txt`。
 - DockerHub 镜像继续由 GitHub Actions 发布，不依赖本地 Docker。

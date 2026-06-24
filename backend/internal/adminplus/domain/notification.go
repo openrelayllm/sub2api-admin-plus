@@ -49,6 +49,7 @@ type NotificationChannelSettings struct {
 	Enabled           bool       `json:"enabled"`
 	WebhookURL        string     `json:"webhook_url,omitempty"`
 	WebhookSecret     string     `json:"webhook_secret,omitempty"`
+	ClearWebhook      bool       `json:"clear_webhook,omitempty"`
 	WebhookHost       string     `json:"webhook_host,omitempty"`
 	WebhookConfigured bool       `json:"webhook_configured"`
 	SecretConfigured  bool       `json:"secret_configured"`

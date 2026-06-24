@@ -107,6 +107,40 @@ func TestServiceUpdateSettingsPreservesStoredWebhookWhenDisplayURLIsEmpty(t *tes
 	require.Equal(t, "secret", internal.Feishu.WebhookSecret)
 }
 
+func TestServiceUpdateSettingsClearsWebhookWhenExplicitlyRequested(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	testedAt := time.Date(2026, 6, 24, 10, 30, 0, 0, time.UTC)
+	settings := defaultSettings()
+	settings.Feishu.Enabled = true
+	settings.Feishu.WebhookURL = "https://open.feishu.cn/open-apis/bot/v2/hook/token"
+	settings.Feishu.WebhookSecret = "secret"
+	settings.Feishu.LastTestAt = &testedAt
+	settings.Feishu.LastTestStatus = string(adminplusdomain.NotificationStatusSucceeded)
+	settings.Feishu.LastTestError = "old error"
+	require.NoError(t, repo.SaveSettings(context.Background(), settings))
+
+	updated, err := svc.UpdateSettings(context.Background(), adminplusdomain.NotificationSettings{
+		Feishu: adminplusdomain.NotificationChannelSettings{
+			Enabled:      true,
+			ClearWebhook: true,
+		},
+		Rules: defaultSettings().Rules,
+	})
+
+	require.NoError(t, err)
+	require.False(t, updated.Feishu.WebhookConfigured)
+	require.False(t, updated.Feishu.SecretConfigured)
+	require.Empty(t, updated.Feishu.WebhookURL)
+	require.Empty(t, updated.Feishu.WebhookSecret)
+	require.Nil(t, updated.Feishu.LastTestAt)
+	require.Empty(t, updated.Feishu.LastTestStatus)
+	require.Empty(t, updated.Feishu.LastTestError)
+	internal := svc.effectiveSettings(context.Background())
+	require.Empty(t, internal.Feishu.WebhookURL)
+	require.Empty(t, internal.Feishu.WebhookSecret)
+}
+
 func TestServiceUpdateSettingsPreservesLastTestWhenCredentialsAreUnchanged(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewService(repo)
