@@ -965,6 +965,7 @@ upgrade() {
     # Start service
     print_info "$(msg 'starting_service')"
     systemctl start "$SERVICE_NAME"
+    enable_autostart
 
     print_success "$(msg 'upgrade_complete')"
 }
@@ -1031,6 +1032,7 @@ install_version() {
     print_info "$(msg 'starting_service')"
     if systemctl start "$SERVICE_NAME"; then
         print_success "$(msg 'service_started')"
+        enable_autostart
     else
         print_error "$(msg 'service_start_failed')"
         print_info "sudo journalctl -u $SERVICE_NAME -n 50"
