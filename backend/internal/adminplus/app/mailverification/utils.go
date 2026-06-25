@@ -56,16 +56,6 @@ func normalizeScopes(scopes []string, raw string) []string {
 	return out
 }
 
-func hasScope(scopes []string, target string) bool {
-	target = strings.TrimSpace(target)
-	for _, scope := range scopes {
-		if strings.TrimSpace(scope) == target {
-			return true
-		}
-	}
-	return false
-}
-
 func scopesToString(scopes []string) string {
 	return strings.Join(normalizeScopes(scopes, ""), " ")
 }

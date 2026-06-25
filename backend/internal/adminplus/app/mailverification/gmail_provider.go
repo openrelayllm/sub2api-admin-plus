@@ -312,7 +312,6 @@ func (p *GmailProvider) gmailRequest(ctx context.Context, method, rawURL, access
 			if err := sleepContext(ctx, p.retryDelay(attempt, retryAfter)); err != nil {
 				return err
 			}
-			retryAfter = 0
 		}
 		err := p.doJSONRequest(ctx, method, rawURL, accessToken, payload, out)
 		if err == nil {
