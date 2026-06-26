@@ -609,6 +609,17 @@ func TestRerunDirectFailureClearsStaleBrowserTask(t *testing.T) {
 	}
 }
 
+func TestSafeRegistrationErrorMessageUsesApplicationMessage(t *testing.T) {
+	err := infraerrors.New(http.StatusConflict, "REGISTRATION_DISABLED", "new api registration is disabled")
+	message := safeRegistrationErrorMessage(err)
+	if message != "new api registration is disabled" {
+		t.Fatalf("expected clean application message, got %q", message)
+	}
+	if strings.Contains(message, "metadata=map") || strings.Contains(message, "reason=") {
+		t.Fatalf("expected message without internal error formatting, got %q", message)
+	}
+}
+
 func TestRerunRegistrationCancelsRunningAttemptAndKeepsWorkflow(t *testing.T) {
 	ctx := context.Background()
 	repo := newRegistrationMemoryRepository()

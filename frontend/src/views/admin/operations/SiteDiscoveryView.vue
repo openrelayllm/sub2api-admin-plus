@@ -109,6 +109,10 @@
                 页面深度探测
               </label>
             </div>
+            <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
+              <span>{{ proxyPolicySummary }}</span>
+              <RouterLink to="/admin/proxy" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">配置代理出口</RouterLink>
+            </div>
           </div>
 
           <div class="card overflow-hidden">
@@ -444,6 +448,10 @@
                 <option v-for="policy in proxyPolicies" :key="policy.id" :value="policy.id">{{ policy.name }}</option>
               </select>
             </label>
+            <div class="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+              <div>{{ proxyPolicySummary }}</div>
+              <RouterLink to="/admin/proxy" class="mt-1 inline-block text-primary-600 hover:text-primary-700 dark:text-primary-400">配置代理出口</RouterLink>
+            </div>
             <label class="block">
               <span class="input-label">本次上限</span>
               <input v-model.number="runLimit" type="number" min="0" max="1000" class="input" />
@@ -800,6 +808,18 @@ const discoveryProgressLabel = computed(() => {
   if (discoveryLogs.value.length > 0) return '最近一次采集或识别日志。'
   return '启动采集或一键识别后显示实时进度和日志。'
 })
+const selectedProxyPolicy = computed(() => proxyPolicies.value.find((policy) => policy.id === proxyPolicyID.value))
+const proxyPolicySummary = computed(() => {
+  const policy = selectedProxyPolicy.value
+  if (!policy) return proxyPolicies.value.length > 0 ? '当前采集和注册不使用代理。' : '暂无可用代理策略，请先到代理出口管理创建策略。'
+  const mode = String(policy.config?.selection_mode || 'auto')
+  if (mode === 'fixed') {
+    const fixedNodeID = proxyPolicyFixedNodeID(policy)
+    return fixedNodeID ? `当前策略固定使用节点 #${fixedNodeID}，采集和注册都会走该出口。` : '当前策略为固定出口，但还没有选择节点。'
+  }
+  const regions = policy.preferred_regions?.join(', ') || '不限地区'
+  return `当前策略自动选择健康节点，地区偏好：${regions}。`
+})
 
 const activeTableItems = computed(() => {
   if (activeTab.value === 'registered') return registeredItems.value
@@ -1101,7 +1121,9 @@ async function importItem(item: SiteDiscoveryItem) {
 async function registerItem(item: SiteDiscoveryItem) {
   busyItemID.value = item.id
   try {
-    const result = await registerSiteDiscoveryItem(item.id)
+    const result = await registerSiteDiscoveryItem(item.id, {
+      proxy_policy_id: proxyPolicyID.value > 0 ? proxyPolicyID.value : undefined
+    })
     appStore.showSuccess(registrationActionSuccessMessage(result))
     taskPagination.page = 1
     taskFilters.registration_status = ''
@@ -1115,6 +1137,13 @@ async function registerItem(item: SiteDiscoveryItem) {
   } finally {
     busyItemID.value = null
   }
+}
+
+function proxyPolicyFixedNodeID(policy: ProxyPolicy): number {
+  const value = policy.config?.fixed_node_id
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return Number(value) || 0
+  return 0
 }
 
 async function rerunRegistration(item: SiteDiscoveryItem) {

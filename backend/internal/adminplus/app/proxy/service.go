@@ -3,8 +3,8 @@ package proxy
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -518,7 +518,7 @@ func (s *Service) CheckNode(ctx context.Context, id int64) (*adminplusdomain.Pro
 		LastStartedAt:    ptrToTimePtr(slotResult.StartedAt),
 		LastHeartbeatAt:  ptrToTimePtr(&now),
 		AssignedTaskType: strPtr("manual_test"),
-		AssignedTaskID:   strPtr("node:"+fmt.Sprint(node.ID)),
+		AssignedTaskID:   strPtr("node:" + fmt.Sprint(node.ID)),
 		SelectedNodeID:   &node.ID,
 	})
 	if err != nil {
@@ -542,9 +542,9 @@ func (s *Service) CheckNode(ctx context.Context, id int64) (*adminplusdomain.Pro
 		return nil, err
 	}
 	_, _ = s.repo.RecordHealthCheck(ctx, &adminplusdomain.ProxyHealthCheck{
-		NodeID:   node.ID,
+		NodeID:    node.ID,
 		CheckType: "egress_ip",
-		Status:   "succeeded",
+		Status:    "succeeded",
 		LatencyMS: &latency,
 		EgressIP:  egressIP,
 		CheckedAt: now,
@@ -1382,6 +1382,15 @@ func dedupeStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func containsInt64(values []int64, target int64) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func randomSecret() string {

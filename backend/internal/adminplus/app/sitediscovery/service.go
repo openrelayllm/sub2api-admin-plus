@@ -1308,7 +1308,10 @@ func safeRegistrationErrorMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	message := strings.TrimSpace(err.Error())
+	message := strings.TrimSpace(infraerrors.Message(err))
+	if message == "" {
+		message = strings.TrimSpace(err.Error())
+	}
 	if message == "" {
 		return ""
 	}
