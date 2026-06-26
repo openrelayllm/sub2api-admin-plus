@@ -540,7 +540,7 @@ func (r *SQLRepository) ListTargets(ctx context.Context, filter TargetFilter) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanTargets(rows)
 }
 
@@ -653,7 +653,7 @@ func (r *SQLRepository) ListRuntimeSlots(ctx context.Context, filter RuntimeSlot
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSlots(rows)
 }
 
@@ -790,7 +790,7 @@ func (r *SQLRepository) ListAssignments(ctx context.Context, filter AssignmentFi
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanAssignments(rows)
 }
 

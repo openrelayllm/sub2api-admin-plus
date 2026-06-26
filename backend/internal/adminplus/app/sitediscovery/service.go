@@ -1946,10 +1946,6 @@ func (s *Service) probeSub2APIInterfaceWithClient(ctx context.Context, client *h
 	}
 }
 
-func (s *Service) probeNewAPIInterface(ctx context.Context, origin string) classificationResult {
-	return s.probeNewAPIInterfaceWithClient(ctx, s.client, origin)
-}
-
 func (s *Service) probeNewAPIInterfaceWithClient(ctx context.Context, client *http.Client, origin string) classificationResult {
 	body, err := s.fetchTextWithClient(ctx, client, joinURLPath(origin, "/api/status"), defaultSiteProbeLimit)
 	if err != nil {
