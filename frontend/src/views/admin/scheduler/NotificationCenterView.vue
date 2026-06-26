@@ -263,6 +263,35 @@
               </div>
             </div>
           </section>
+
+          <section class="card overflow-hidden">
+            <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">供应商分组告警</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">仅用于 OpenAI 分组倍率变化，命中后按业务规则发送飞书。</p>
+            </div>
+            <div class="space-y-4 p-5">
+              <label class="flex items-center justify-between gap-4 rounded-md border border-gray-200 px-3 py-3 dark:border-dark-700">
+                <span>
+                  <span class="block text-sm font-medium text-gray-900 dark:text-white">启用 OpenAI 分组告警</span>
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">关闭后仍记录分组变更历史，但不触发飞书投递。</span>
+                </span>
+                <input v-model="settingsForm.supplier_group.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+              </label>
+
+              <div class="grid gap-4 sm:grid-cols-2">
+                <label class="block">
+                  <span class="text-sm font-medium text-gray-700 dark:text-dark-300">OpenAI 涨价阈值</span>
+                  <input v-model.number="settingsForm.supplier_group.openai_price_increase_rate" type="number" min="0.0001" step="0.001" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800 dark:text-white" />
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">上调后的有效倍率高于该值时提醒，默认 0.1x。</span>
+                </label>
+                <label class="block">
+                  <span class="text-sm font-medium text-gray-700 dark:text-dark-300">OpenAI 超低价阈值</span>
+                  <input v-model.number="settingsForm.supplier_group.openai_super_low_rate_threshold" type="number" min="0.0001" step="0.001" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800 dark:text-white" />
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">新增分组有效倍率低于该值时提醒，默认 0.06x。</span>
+                </label>
+              </div>
+            </div>
+          </section>
         </div>
 
         <aside v-if="activeTab === 'settings'" class="space-y-6">
@@ -474,6 +503,11 @@ const settingsForm = reactive<NotificationSettings>({
     secret_configured: false,
     config_source: 'database'
   },
+  supplier_group: {
+    enabled: true,
+    openai_super_low_rate_threshold: 0.06,
+    openai_price_increase_rate: 0.1
+  },
   rules: []
 })
 
@@ -683,6 +717,11 @@ function syncSettingsForm(value: NotificationSettings) {
     last_test_error: value.feishu.last_test_error || ''
   })
   settingsForm.rules = value.rules.map(cloneRule)
+  Object.assign(settingsForm.supplier_group, {
+    enabled: value.supplier_group?.enabled ?? true,
+    openai_super_low_rate_threshold: positiveNumber(value.supplier_group?.openai_super_low_rate_threshold, 0.06),
+    openai_price_increase_rate: positiveNumber(value.supplier_group?.openai_price_increase_rate, 0.1)
+  })
 }
 
 function normalizedSettingsPayload(): NotificationSettings {
@@ -694,6 +733,11 @@ function normalizedSettingsPayload(): NotificationSettings {
       webhook_secret: (settingsForm.feishu.webhook_secret || '').trim(),
       webhook_configured: Boolean(settingsForm.feishu.webhook_configured),
       secret_configured: Boolean(settingsForm.feishu.secret_configured)
+    },
+    supplier_group: {
+      enabled: Boolean(settingsForm.supplier_group.enabled),
+      openai_super_low_rate_threshold: positiveNumber(settingsForm.supplier_group.openai_super_low_rate_threshold, 0.06),
+      openai_price_increase_rate: positiveNumber(settingsForm.supplier_group.openai_price_increase_rate, 0.1)
     },
     rules: settingsForm.rules.map((rule) => ({
       ...cloneRule(rule),
@@ -737,9 +781,15 @@ function eventGroupLabel(eventType: string): string {
     balance: '余额',
     health: '健康',
     rate: '倍率',
+    supplier_group: '分组',
     cost: '对账',
     system: '系统'
   }[group] || group
+}
+
+function positiveNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
 function severityLabel(value: string): string {

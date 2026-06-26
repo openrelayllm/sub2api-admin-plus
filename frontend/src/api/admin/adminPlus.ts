@@ -1830,9 +1830,16 @@ export interface NotificationChannelSettings {
   last_test_error?: string
 }
 
+export interface SupplierGroupNotificationSettings {
+  enabled: boolean
+  openai_super_low_rate_threshold: number
+  openai_price_increase_rate: number
+}
+
 export interface NotificationSettings {
   feishu: NotificationChannelSettings
   rules: NotificationRule[]
+  supplier_group: SupplierGroupNotificationSettings
 }
 
 export interface NotificationCenterStatus {

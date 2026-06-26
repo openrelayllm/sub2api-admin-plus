@@ -97,7 +97,7 @@
                 {{ event.group_name }}
               </span>
             </div>
-            <span v-if="event.low_rate" class="badge badge-success shrink-0">低倍率</span>
+            <span v-if="event.low_rate" class="badge badge-success shrink-0">超低价</span>
           </div>
           <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
             <span class="font-mono">#{{ event.external_group_id }}</span>
