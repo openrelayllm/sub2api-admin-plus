@@ -12,7 +12,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-const lowRateOpportunityThreshold = 0.8
+const lowRateOpportunityThreshold = 0.06
 
 type SyncResult struct {
 	SupplierID int64                                       `json:"supplier_id"`
@@ -47,23 +47,33 @@ type Repository interface {
 	CreateChangeEvents(ctx context.Context, events []*adminplusdomain.SupplierGroupChangeEvent) ([]*adminplusdomain.SupplierGroupChangeEvent, error)
 }
 
+type Notifier interface {
+	NotifyGroupChange(ctx context.Context, event *adminplusdomain.SupplierGroupChangeEvent) error
+}
+
 type SessionReader interface {
 	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
 }
 
 type Service struct {
-	repo    Repository
-	session SessionReader
-	reader  ports.SessionGroupAdapter
-	now     func() time.Time
+	repo     Repository
+	notifier Notifier
+	session  SessionReader
+	reader   ports.SessionGroupAdapter
+	now      func() time.Time
 }
 
 func NewService(repo Repository, session SessionReader, reader ports.SessionGroupAdapter) *Service {
+	return NewServiceWithNotifier(repo, nil, session, reader)
+}
+
+func NewServiceWithNotifier(repo Repository, notifier Notifier, session SessionReader, reader ports.SessionGroupAdapter) *Service {
 	return &Service{
-		repo:    repo,
-		session: session,
-		reader:  reader,
-		now:     time.Now,
+		repo:     repo,
+		notifier: notifier,
+		session:  session,
+		reader:   reader,
+		now:      time.Now,
 	}
 }
 
@@ -116,6 +126,7 @@ func (s *Service) Sync(ctx context.Context, supplierID int64) (*SyncResult, erro
 	if err != nil {
 		return nil, err
 	}
+	s.notifyChangeEvents(ctx, events)
 	return &SyncResult{
 		SupplierID: supplierID,
 		SystemType: result.SystemType,
@@ -163,6 +174,18 @@ func (s *Service) recordChangeEvents(ctx context.Context, previous []*adminplusd
 		return nil, nil
 	}
 	return s.repo.CreateChangeEvents(ctx, events)
+}
+
+func (s *Service) notifyChangeEvents(ctx context.Context, events []*adminplusdomain.SupplierGroupChangeEvent) {
+	if s == nil || s.notifier == nil {
+		return
+	}
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		_ = s.notifier.NotifyGroupChange(ctx, event)
+	}
 }
 
 func buildSupplierGroup(supplierID int64, supplierName string, in *ports.ProviderGroup, seenAt time.Time) *adminplusdomain.SupplierGroup {
@@ -263,9 +286,24 @@ func newChangeEvent(group *adminplusdomain.SupplierGroup, oldRate *float64, dire
 		OldEffectiveRateMultiplier: oldRate,
 		NewEffectiveRateMultiplier: newRate,
 		ChangePercent:              changePercent,
-		LowRate:                    newRate > 0 && newRate <= lowRateOpportunityThreshold,
+		LowRate:                    isOpenAIGroup(group) && newRate > 0 && newRate < lowRateOpportunityThreshold,
 		CreatedAt:                  createdAt,
 	}
+}
+
+func isOpenAIGroup(group *adminplusdomain.SupplierGroup) bool {
+	if group == nil {
+		return false
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		group.ProviderFamily,
+		group.Name,
+		group.Description,
+		group.OfficialName,
+		group.ModelFamily,
+		group.ModelSpec,
+	}, " "))
+	return strings.Contains(haystack, "openai") || strings.Contains(haystack, "gpt")
 }
 
 func effectiveRate(group *adminplusdomain.SupplierGroup) float64 {

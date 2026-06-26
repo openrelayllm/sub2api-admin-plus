@@ -61,7 +61,7 @@
           <div class="card p-4">
             <p class="text-xs font-medium text-gray-500 dark:text-dark-400">服务器续费</p>
             <p class="mt-2 text-2xl font-semibold" :class="renewalTextClass">{{ renewalDaysLabel }}</p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ renewalStateLabel(status?.renewal.state) }}</p>
+            <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ renewalStateLabel(status?.renewal?.state) }}</p>
           </div>
           <div class="card p-4">
             <p class="text-xs font-medium text-gray-500 dark:text-dark-400">历史清理</p>
@@ -144,7 +144,7 @@
               <dl class="mt-4 space-y-3 text-sm">
                 <div class="flex items-center justify-between gap-3">
                   <dt class="text-gray-500 dark:text-dark-400">服务器续费</dt>
-                  <dd><span class="badge" :class="renewalStateClass(status?.renewal.state)">{{ renewalStateLabel(status?.renewal.state) }}</span></dd>
+                  <dd><span class="badge" :class="renewalStateClass(status?.renewal?.state)">{{ renewalStateLabel(status?.renewal?.state) }}</span></dd>
                 </div>
                 <div class="flex items-center justify-between gap-3">
                   <dt class="text-gray-500 dark:text-dark-400">到期剩余</dt>
@@ -272,7 +272,7 @@
           <dl class="mt-4 space-y-3 text-sm">
             <div class="flex items-center justify-between gap-3">
               <dt class="text-gray-500 dark:text-dark-400">当前状态</dt>
-              <dd><span class="badge" :class="renewalStateClass(status?.renewal.state)">{{ renewalStateLabel(status?.renewal.state) }}</span></dd>
+              <dd><span class="badge" :class="renewalStateClass(status?.renewal?.state)">{{ renewalStateLabel(status?.renewal?.state) }}</span></dd>
             </div>
             <div class="flex items-center justify-between gap-3">
               <dt class="text-gray-500 dark:text-dark-400">到期剩余</dt>
@@ -280,7 +280,7 @@
             </div>
             <div class="flex items-center justify-between gap-3">
               <dt class="text-gray-500 dark:text-dark-400">下次提醒</dt>
-              <dd class="font-medium text-gray-900 dark:text-white">{{ status?.renewal.next_reminder || '-' }}</dd>
+              <dd class="font-medium text-gray-900 dark:text-white">{{ status?.renewal?.next_reminder || '-' }}</dd>
             </div>
           </dl>
         </aside>
@@ -434,14 +434,14 @@
       </section>
 
       <transition name="fade">
-        <div v-if="guideOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div class="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-900">
+        <div v-if="guideOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="guideOpen = false">
+          <div class="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-900" role="dialog" aria-modal="true">
             <div class="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 dark:border-dark-700">
               <div>
                 <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ currentStorageGuide.title }}</h2>
                 <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ currentStorageGuide.summary }}</p>
               </div>
-              <button type="button" class="btn btn-secondary btn-sm shrink-0" @click="guideOpen = false">
+              <button type="button" class="btn btn-secondary btn-sm shrink-0" aria-label="关闭配置指引" @click="guideOpen = false">
                 <Icon name="x" size="sm" />
               </button>
             </div>

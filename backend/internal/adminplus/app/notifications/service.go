@@ -374,6 +374,11 @@ func defaultSettings() adminplusdomain.NotificationSettings {
 			Enabled:      true,
 			ConfigSource: "database",
 		},
+		SupplierGroup: adminplusdomain.SupplierGroupNotificationSettings{
+			Enabled:                     true,
+			OpenAISuperLowRateThreshold: 0.06,
+			OpenAIPriceIncreaseRate:     0.1,
+		},
 		Rules: []adminplusdomain.NotificationRule{
 			{EventType: "balance.low_balance", Label: "余额不足", Description: "供应商余额低于阈值", Enabled: true, Severity: "warning", QuietWindowMinutes: 30, DedupeScope: "supplier", NotifyRecovery: true},
 			{EventType: "balance.depleted", Label: "余额耗尽", Description: "供应商余额归零", Enabled: true, Severity: "critical", QuietWindowMinutes: 30, DedupeScope: "supplier", NotifyRecovery: true},
@@ -385,6 +390,8 @@ func defaultSettings() adminplusdomain.NotificationSettings {
 			{EventType: "rate.new", Label: "新增费率", Description: "供应商新增模型价格项", Enabled: true, Severity: "info", QuietWindowMinutes: 30, DedupeScope: "supplier_model_price"},
 			{EventType: "rate.increase", Label: "费率上涨", Description: "供应商模型价格上涨", Enabled: true, Severity: "warning", QuietWindowMinutes: 30, DedupeScope: "supplier_model_price"},
 			{EventType: "rate.decrease", Label: "费率下降", Description: "供应商模型价格下降", Enabled: true, Severity: "info", QuietWindowMinutes: 30, DedupeScope: "supplier_model_price"},
+			{EventType: "supplier_group.price_increase", Label: "OpenAI 分组涨价", Description: "OpenAI 分组有效倍率高于涨价阈值", Enabled: true, Severity: "critical", QuietWindowMinutes: 30, DedupeScope: "supplier_group"},
+			{EventType: "supplier_group.super_low_rate", Label: "OpenAI 超低价分组", Description: "OpenAI 分组有效倍率低于超低价阈值", Enabled: true, Severity: "info", QuietWindowMinutes: 30, DedupeScope: "supplier_group"},
 			{EventType: "announcement.recharge_bonus", Label: "充值赠送", Description: "识别到充值赠送机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
 			{EventType: "announcement.rate_discount", Label: "费率折扣", Description: "识别到费率折扣机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
 			{EventType: "announcement.package_deal", Label: "套餐活动", Description: "识别到套餐成本机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
@@ -409,10 +416,19 @@ func normalizeSettings(settings, defaults adminplusdomain.NotificationSettings) 
 	if out.Feishu.ConfigSource == "" {
 		out.Feishu.ConfigSource = "database"
 	}
+	if !out.SupplierGroup.Enabled && out.SupplierGroup.OpenAISuperLowRateThreshold <= 0 && out.SupplierGroup.OpenAIPriceIncreaseRate <= 0 {
+		out.SupplierGroup.Enabled = defaults.SupplierGroup.Enabled
+	}
 	if len(out.Rules) == 0 {
 		out.Rules = defaults.Rules
 	} else {
 		out.Rules = mergeRules(defaults.Rules, out.Rules)
+	}
+	if out.SupplierGroup.OpenAISuperLowRateThreshold <= 0 {
+		out.SupplierGroup.OpenAISuperLowRateThreshold = defaults.SupplierGroup.OpenAISuperLowRateThreshold
+	}
+	if out.SupplierGroup.OpenAIPriceIncreaseRate <= 0 {
+		out.SupplierGroup.OpenAIPriceIncreaseRate = defaults.SupplierGroup.OpenAIPriceIncreaseRate
 	}
 	for i := range out.Rules {
 		if out.Rules[i].Severity == "" {

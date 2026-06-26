@@ -60,8 +60,15 @@ type NotificationChannelSettings struct {
 }
 
 type NotificationSettings struct {
-	Feishu NotificationChannelSettings `json:"feishu"`
-	Rules  []NotificationRule          `json:"rules"`
+	Feishu        NotificationChannelSettings       `json:"feishu"`
+	Rules         []NotificationRule                `json:"rules"`
+	SupplierGroup SupplierGroupNotificationSettings `json:"supplier_group"`
+}
+
+type SupplierGroupNotificationSettings struct {
+	Enabled                     bool    `json:"enabled"`
+	OpenAISuperLowRateThreshold float64 `json:"openai_super_low_rate_threshold"`
+	OpenAIPriceIncreaseRate     float64 `json:"openai_price_increase_rate"`
 }
 
 type NotificationCenterStatus struct {
