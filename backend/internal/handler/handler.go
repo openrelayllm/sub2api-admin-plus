@@ -22,7 +22,6 @@ type AdminPlusHandlers struct {
 	ProvisionJob     *adminplushandler.ProvisionJobHandler
 	Rate             *adminplushandler.RateHandler
 	Balance          *adminplushandler.BalanceHandler
-	Announcement     *adminplushandler.AnnouncementHandler
 	Health           *adminplushandler.HealthHandler
 	Notification     *adminplushandler.NotificationHandler
 	UsageCost        *adminplushandler.UsageCostHandler
@@ -37,6 +36,7 @@ type AdminPlusHandlers struct {
 	Action           *adminplushandler.ActionHandler
 	Sub2API          *adminplushandler.Sub2APIHandler
 	Proxy            *adminplushandler.ProxyHandler
+	Backup           *adminplushandler.BackupHandler
 }
 
 // Handlers contains all HTTP handlers

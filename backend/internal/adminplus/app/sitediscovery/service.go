@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -438,7 +439,7 @@ func (s *Service) run(ctx context.Context, in RunInput, emit RunProgressEmitter)
 		releaseProxy(true, "SITE_DISCOVERY_FETCH_FAILED", err.Error())
 		return nil, s.failRunWithProgress(ctx, run, err, emit)
 	}
-	candidates, err := parseDaheiAIItems(sourceURL, body)
+	candidates, err := s.parseSourceCandidates(ctx, runClient, sourceURL, body)
 	if err != nil {
 		return nil, s.failRunWithProgress(ctx, run, err, emit)
 	}
@@ -2233,6 +2234,30 @@ func parseDaheiAIItems(sourceURL string, body string) ([]*adminplusdomain.SiteDi
 	return items, nil
 }
 
+func (s *Service) parseSourceCandidates(ctx context.Context, client *http.Client, sourceURL string, body string) ([]*adminplusdomain.SiteDiscoveryItem, error) {
+	items, err := parseDaheiAIItems(sourceURL, body)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 {
+		return items, nil
+	}
+	if items := parseKanLLMSummaryItems(sourceURL, body); len(items) > 0 {
+		return items, nil
+	}
+	if summaryURL := kanLLMSummaryURL(sourceURL); summaryURL != "" {
+		if summaryBody, err := s.fetchTextWithClient(ctx, client, summaryURL, defaultDiscoveryFetchLimit); err == nil {
+			if items := parseKanLLMSummaryItems(sourceURL, summaryBody); len(items) > 0 {
+				return items, nil
+			}
+		}
+	}
+	if item := parseDirectSiteItem(sourceURL, body); item != nil {
+		return []*adminplusdomain.SiteDiscoveryItem{item}, nil
+	}
+	return []*adminplusdomain.SiteDiscoveryItem{}, nil
+}
+
 func parseCard(sourceURL string, n *html.Node, section string, category string) *adminplusdomain.SiteDiscoveryItem {
 	href := strings.TrimSpace(attr(n, "href"))
 	if href == "" {
@@ -2274,6 +2299,248 @@ func parseCard(sourceURL string, n *html.Node, section string, category string) 
 			"source_category": category,
 		},
 	}
+}
+
+type kanLLMSummaryPayload struct {
+	GeneratedAt string             `json:"generatedAt"`
+	APIs        []kanLLMSummaryAPI `json:"apis"`
+}
+
+type kanLLMSummaryAPI struct {
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	WebsiteURL      string             `json:"websiteUrl"`
+	PlanType        string             `json:"planType"`
+	IsSelfPurchased bool               `json:"isSelfPurchased"`
+	PriceMultiplier float64            `json:"priceMultiplier"`
+	Enabled         bool               `json:"enabled"`
+	Available       bool               `json:"available"`
+	SuccessRates    map[string]float64 `json:"successRates"`
+	CheckedAt       string             `json:"checkedAt"`
+	ErrorType       string             `json:"errorType"`
+	ErrorMessage    string             `json:"errorMessage"`
+}
+
+type kanLLMSiteAggregate struct {
+	RegisterURL      string
+	Origin           string
+	Host             string
+	Name             string
+	APIIDs           []string
+	PlanTypes        []string
+	PlanSet          map[string]struct{}
+	MinRate          float64
+	EnabledCount     int
+	AvailableCount   int
+	TotalCount       int
+	IsSelfPurchased  bool
+	LatestCheckedAt  string
+	LastErrorType    string
+	LastErrorMessage string
+	SuccessRate24H   float64
+	SuccessRate24HOK bool
+}
+
+func parseKanLLMSummaryItems(sourceURL string, body string) []*adminplusdomain.SiteDiscoveryItem {
+	var payload kanLLMSummaryPayload
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || len(payload.APIs) == 0 {
+		return nil
+	}
+	aggregates := make(map[string]*kanLLMSiteAggregate)
+	order := make([]string, 0)
+	for _, api := range payload.APIs {
+		registerURL, origin, host, ok := normalizeDiscoverySiteURL(api.WebsiteURL)
+		if !ok {
+			continue
+		}
+		agg := aggregates[registerURL]
+		if agg == nil {
+			agg = &kanLLMSiteAggregate{
+				RegisterURL: registerURL,
+				Origin:      origin,
+				Host:        host,
+				Name:        firstNonEmpty(api.Name, host),
+				PlanSet:     make(map[string]struct{}),
+			}
+			aggregates[registerURL] = agg
+			order = append(order, registerURL)
+		}
+		agg.TotalCount++
+		if strings.TrimSpace(api.ID) != "" {
+			agg.APIIDs = append(agg.APIIDs, strings.TrimSpace(api.ID))
+		}
+		if api.Enabled {
+			agg.EnabledCount++
+		}
+		if api.Available {
+			agg.AvailableCount++
+		}
+		if api.IsSelfPurchased {
+			agg.IsSelfPurchased = true
+		}
+		if api.PriceMultiplier > 0 && (agg.MinRate <= 0 || api.PriceMultiplier < agg.MinRate) {
+			agg.MinRate = api.PriceMultiplier
+		}
+		if plan := strings.TrimSpace(api.PlanType); plan != "" {
+			if _, ok := agg.PlanSet[plan]; !ok {
+				agg.PlanSet[plan] = struct{}{}
+				agg.PlanTypes = append(agg.PlanTypes, plan)
+			}
+		}
+		if api.CheckedAt > agg.LatestCheckedAt {
+			agg.LatestCheckedAt = api.CheckedAt
+		}
+		if strings.TrimSpace(api.ErrorType) != "" {
+			agg.LastErrorType = strings.TrimSpace(api.ErrorType)
+			agg.LastErrorMessage = strings.TrimSpace(api.ErrorMessage)
+		}
+		if rate, ok := api.SuccessRates["24h"]; ok && (!agg.SuccessRate24HOK || rate > agg.SuccessRate24H) {
+			agg.SuccessRate24H = rate
+			agg.SuccessRate24HOK = true
+		}
+	}
+	items := make([]*adminplusdomain.SiteDiscoveryItem, 0, len(order))
+	for _, key := range order {
+		agg := aggregates[key]
+		if agg == nil {
+			continue
+		}
+		items = append(items, kanLLMDiscoveryItem(sourceURL, payload.GeneratedAt, agg))
+	}
+	return items
+}
+
+func kanLLMDiscoveryItem(sourceURL string, generatedAt string, agg *kanLLMSiteAggregate) *adminplusdomain.SiteDiscoveryItem {
+	description := "KanLLM 监测索引"
+	if len(agg.PlanTypes) > 0 {
+		description += "；分组：" + strings.Join(agg.PlanTypes, "、")
+	}
+	if agg.MinRate > 0 {
+		description += "；最低倍率 " + trimTrailingZeros(agg.MinRate)
+	}
+	if agg.TotalCount > 0 {
+		description += "；可用 " + stringFromInt64(int64(agg.AvailableCount)) + "/" + stringFromInt64(int64(agg.TotalCount))
+	}
+	raw := map[string]any{
+		"source_kind":       "kanllm_summary",
+		"generated_at":      generatedAt,
+		"api_ids":           append([]string(nil), agg.APIIDs...),
+		"plan_types":        append([]string(nil), agg.PlanTypes...),
+		"min_rate":          agg.MinRate,
+		"enabled_count":     agg.EnabledCount,
+		"available_count":   agg.AvailableCount,
+		"total_count":       agg.TotalCount,
+		"is_self_purchased": agg.IsSelfPurchased,
+		"latest_checked_at": agg.LatestCheckedAt,
+	}
+	if agg.SuccessRate24HOK {
+		raw["success_rate_24h"] = agg.SuccessRate24H
+	}
+	if agg.LastErrorType != "" {
+		raw["last_error_type"] = agg.LastErrorType
+		raw["last_error_message"] = agg.LastErrorMessage
+	}
+	return &adminplusdomain.SiteDiscoveryItem{
+		SourceURL:                sourceURL,
+		SourceSiteID:             agg.Host,
+		SourceSection:            "kanllm",
+		SourceCategory:           "monitor-summary",
+		Name:                     trimLimit(firstNonEmpty(agg.Name, agg.Host), 120),
+		RegisterURL:              agg.RegisterURL,
+		DashboardURL:             agg.Origin,
+		APIBaseURL:               agg.Origin,
+		Host:                     agg.Host,
+		DomainHint:               agg.Host,
+		Description:              trimLimit(description, 1000),
+		ClassificationStatus:     adminplusdomain.SiteDiscoveryClassificationUnknown,
+		ClassificationConfidence: 0,
+		ImportStatus:             adminplusdomain.SiteDiscoveryImportNew,
+		ProcessStatus:            adminplusdomain.SiteDiscoveryProcessUnprocessed,
+		RawPayload:               raw,
+	}
+}
+
+func parseDirectSiteItem(sourceURL string, body string) *adminplusdomain.SiteDiscoveryItem {
+	registerURL, origin, host, ok := normalizeDiscoverySiteURL(sourceURL)
+	if !ok {
+		return nil
+	}
+	name := firstNonEmpty(htmlTitle(body), host)
+	return &adminplusdomain.SiteDiscoveryItem{
+		SourceURL:                sourceURL,
+		SourceSiteID:             host,
+		SourceSection:            "direct-url",
+		Name:                     trimLimit(name, 120),
+		RegisterURL:              registerURL,
+		DashboardURL:             origin,
+		APIBaseURL:               origin,
+		Host:                     host,
+		DomainHint:               host,
+		ClassificationStatus:     adminplusdomain.SiteDiscoveryClassificationUnknown,
+		ClassificationConfidence: 0,
+		ImportStatus:             adminplusdomain.SiteDiscoveryImportNew,
+		ProcessStatus:            adminplusdomain.SiteDiscoveryProcessUnprocessed,
+		RawPayload: map[string]any{
+			"source_kind": "direct_url",
+		},
+	}
+}
+
+func kanLLMSummaryURL(sourceURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(sourceURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	if strings.TrimRight(parsed.Path, "/") == "/data/summary.json" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host + "/data/summary.json"
+}
+
+func normalizeDiscoverySiteURL(raw string) (string, string, string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", "", "", false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", "", "", false
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Fragment = ""
+	parsed.RawQuery = ""
+	if parsed.Path == "/" {
+		parsed.Path = ""
+	}
+	registerURL := strings.TrimRight(parsed.String(), "/")
+	origin := parsed.Scheme + "://" + parsed.Host
+	return registerURL, origin, parsed.Host, true
+}
+
+func htmlTitle(body string) string {
+	root, err := html.Parse(bytes.NewBufferString(body))
+	if err != nil {
+		return ""
+	}
+	var title string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n == nil || title != "" {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "title" {
+			title = nodeText(n)
+			return
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(root)
+	return strings.TrimSpace(title)
 }
 
 type classificationResult struct {
@@ -2595,6 +2862,10 @@ func stringFromAny(value any) string {
 
 func stringFromInt64(value int64) string {
 	return strings.TrimSpace(big.NewInt(value).String())
+}
+
+func trimTrailingZeros(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func firstNonEmpty(values ...string) string {

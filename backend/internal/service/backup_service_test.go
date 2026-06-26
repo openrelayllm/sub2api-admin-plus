@@ -159,8 +159,9 @@ func (d *blockingDumper) Restore(_ context.Context, data io.Reader) error {
 }
 
 type mockObjectStore struct {
-	objects map[string][]byte
-	mu      sync.Mutex
+	objects   map[string][]byte
+	mu        sync.Mutex
+	deleteErr error
 }
 
 func newMockObjectStore() *mockObjectStore {
@@ -189,6 +190,9 @@ func (m *mockObjectStore) Download(_ context.Context, key string) (io.ReadCloser
 }
 
 func (m *mockObjectStore) Delete(_ context.Context, key string) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
 	m.mu.Lock()
 	delete(m.objects, key)
 	m.mu.Unlock()
@@ -458,6 +462,31 @@ func TestBackupService_DeleteBackup(t *testing.T) {
 	// 记录应不存在
 	_, err = svc.GetBackupRecord(context.Background(), record.ID)
 	require.ErrorIs(t, err, ErrBackupNotFound)
+}
+
+func TestBackupService_DeleteBackup_RemoteDeleteFailureKeepsRecord(t *testing.T) {
+	repo := newMockSettingRepo()
+	seedS3Config(t, repo)
+
+	dumper := &mockDumper{dumpData: []byte("data")}
+	store := newMockObjectStore()
+	svc := newTestBackupService(repo, dumper, store)
+
+	record, err := svc.CreateBackup(context.Background(), "manual", 14)
+	require.NoError(t, err)
+
+	store.deleteErr = fmt.Errorf("remote unavailable")
+	err = svc.DeleteBackup(context.Background(), record.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete remote backup object")
+
+	kept, err := svc.GetBackupRecord(context.Background(), record.ID)
+	require.NoError(t, err)
+	require.Equal(t, record.ID, kept.ID)
+
+	store.mu.Lock()
+	require.Len(t, store.objects, 1)
+	store.mu.Unlock()
 }
 
 func TestBackupService_GetDownloadURL(t *testing.T) {

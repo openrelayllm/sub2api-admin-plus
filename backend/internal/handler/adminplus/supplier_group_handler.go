@@ -69,6 +69,26 @@ func (h *SupplierGroupHandler) List(c *gin.Context) {
 	response.Success(c, paginatedData(paged, total, page))
 }
 
+func (h *SupplierGroupHandler) ListEvents(c *gin.Context) {
+	supplierID, ok := parseSupplierID(c)
+	if !ok {
+		return
+	}
+	page := parsePagination(c)
+	lowRate := parseOptionalBoolQuery(c, "low_rate")
+	items, err := h.service.ListChangeEvents(c.Request.Context(), suppliergroupsapp.EventFilter{
+		SupplierID: supplierID,
+		Direction:  adminplusdomain.SupplierGroupChangeDirection(c.Query("direction")),
+		LowRate:    lowRate,
+		Limit:      fetchLimitForPagination(page),
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	paged, total := paginateSlice(items, page)
+	response.Success(c, paginatedData(paged, total, page))
+}
+
 func currentAdminUserID(c *gin.Context) int64 {
 	if subject, ok := middleware2.GetAuthSubjectFromContext(c); ok {
 		return subject.UserID

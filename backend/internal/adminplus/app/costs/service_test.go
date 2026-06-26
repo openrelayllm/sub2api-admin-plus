@@ -319,7 +319,7 @@ func TestServiceSyncUsesProviderTypeFromSessionBundleForBalanceOnlyNewAPI(t *tes
 	require.Equal(t, "USD", result.Snapshot.Currency)
 }
 
-func TestServiceSyncNotifiesCostReconcileAnomalyWhenDeltaExceedsThreshold(t *testing.T) {
+func TestServiceSyncRecordsCostReconcileAnomalyWithoutNotification(t *testing.T) {
 	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
 	repo := &anomalyCostRepository{
 		MemoryRepository: NewMemoryRepository(),
@@ -349,10 +349,9 @@ func TestServiceSyncNotifiesCostReconcileAnomalyWhenDeltaExceedsThreshold(t *tes
 
 	require.NoError(t, err)
 	require.NotNil(t, result.Snapshot)
-	require.Len(t, notifier.snapshots, 1)
-	require.Equal(t, int64(7), notifier.snapshots[0].SupplierID)
-	require.NotNil(t, notifier.snapshots[0].BalanceDeltaCents)
-	require.Equal(t, int64(-250), *notifier.snapshots[0].BalanceDeltaCents)
+	require.NotNil(t, result.Snapshot.BalanceDeltaCents)
+	require.Equal(t, int64(-250), *result.Snapshot.BalanceDeltaCents)
+	require.Empty(t, notifier.snapshots)
 }
 
 func TestServiceSyncDoesNotNotifyCostReconcileAnomalyBelowThreshold(t *testing.T) {

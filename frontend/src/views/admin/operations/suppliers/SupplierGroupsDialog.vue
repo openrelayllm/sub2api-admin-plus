@@ -81,6 +81,36 @@
       </div>
     </div>
 
+    <div v-if="supplierGroupEvents.length > 0" class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-sm font-semibold text-amber-950 dark:text-amber-100">最近分组变更</h3>
+        <span class="text-xs text-amber-700 dark:text-amber-300">同步分组时自动记录</span>
+      </div>
+      <div class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <div v-for="event in supplierGroupEvents" :key="event.id" class="rounded-md border border-amber-100 bg-white px-3 py-2 text-sm dark:border-amber-900/50 dark:bg-dark-900">
+          <div class="flex min-w-0 items-center justify-between gap-2">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="badge shrink-0" :class="groupChangeClass(event.direction)">
+                {{ groupChangeDirectionLabel(event.direction) }}
+              </span>
+              <span class="truncate font-medium text-gray-900 dark:text-gray-100" :title="event.group_name">
+                {{ event.group_name }}
+              </span>
+            </div>
+            <span v-if="event.low_rate" class="badge badge-success shrink-0">低倍率</span>
+          </div>
+          <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
+            <span class="font-mono">#{{ event.external_group_id }}</span>
+            <span>{{ event.provider_family || 'mixed' }}</span>
+            <span>{{ formatGroupChangeRate(event) }}</span>
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+            {{ formatDateTime(event.created_at) }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="groupsError" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
       {{ groupsError }}
     </div>
@@ -298,6 +328,7 @@ const {
   groupsDialogOpen,
   groupsSupplier,
   supplierGroups,
+  supplierGroupEvents,
   activeProvisionJob,
   groupsLoading,
   groupsSyncing,
@@ -357,4 +388,36 @@ const {
   ensureCurrentKeys,
   standardizeCurrentKeyNames
 } = props.vm
+
+type GroupChangeDirection = 'new' | 'increase' | 'decrease'
+interface GroupChangeEvent {
+  direction: GroupChangeDirection
+  old_effective_rate_multiplier?: number | null
+  new_effective_rate_multiplier: number
+  change_percent?: number | null
+}
+
+function groupChangeDirectionLabel(direction: GroupChangeDirection): string {
+  if (direction === 'new') return '新增'
+  if (direction === 'increase') return '上调'
+  return '下调'
+}
+
+function groupChangeClass(direction: GroupChangeDirection): string {
+  if (direction === 'new') return 'badge-primary'
+  if (direction === 'increase') return 'badge-warning'
+  return 'badge-success'
+}
+
+function formatGroupChangeRate(event: GroupChangeEvent): string {
+  const next = formatMultiplier(event.new_effective_rate_multiplier)
+  if (event.old_effective_rate_multiplier == null) {
+    return `当前 ${next}`
+  }
+  const previous = formatMultiplier(event.old_effective_rate_multiplier)
+  const change = typeof event.change_percent === 'number'
+    ? ` (${event.change_percent > 0 ? '+' : ''}${event.change_percent.toFixed(1)}%)`
+    : ''
+  return `${previous} -> ${next}${change}`
+}
 </script>

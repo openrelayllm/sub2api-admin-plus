@@ -177,8 +177,12 @@ func (r *LocalMihomoRuntime) ConfigureSlot(ctx context.Context, slot *adminplusd
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, r.cfg.BinaryPath, "-f", configPath)
+	cmd := exec.CommandContext(ctx, r.cfg.BinaryPath, "-d", slotDir, "-f", configPath)
 	cmd.Dir = slotDir
+	cmd.Env = append(os.Environ(),
+		"HOME="+slotDir,
+		"XDG_CONFIG_HOME="+slotDir,
+	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {

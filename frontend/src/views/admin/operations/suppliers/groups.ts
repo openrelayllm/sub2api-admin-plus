@@ -1,5 +1,5 @@
 import { groupsAPI } from '@/api/admin/groups'
-import { enableSupplierChannelScheduling, getSupplierProvisionJob, listSupplierChannelChecks, listSupplierKeys, listSupplierGroups, pauseSupplierChannelScheduling, probeSupplierChannel, provisionSupplierKey, syncSupplierChannelChecks } from '@/api/admin/adminPlus'
+import { enableSupplierChannelScheduling, getSupplierProvisionJob, listSupplierChannelChecks, listSupplierGroupChangeEvents, listSupplierKeys, listSupplierGroups, pauseSupplierChannelScheduling, probeSupplierChannel, provisionSupplierKey, syncSupplierChannelChecks } from '@/api/admin/adminPlus'
 import type { AdminGroup } from '@/types'
 import type { Supplier, SupplierChannelCheckResult, SupplierChannelCheckSnapshot, SupplierGroup, SupplierProvisionStatus } from '@/api/admin/adminPlus'
 import type { QuickProvisionBestChannelOptions } from './types'
@@ -15,6 +15,7 @@ export function attachSupplierGroups(ctx: any) {
   const channelProbeSupplier = ctxValue(ctx, 'channelProbeSupplier')
   const channelProbeSnapshot = ctxValue(ctx, 'channelProbeSnapshot')
   const supplierGroups = ctxValue(ctx, 'supplierGroups')
+  const supplierGroupEvents = ctxValue(ctx, 'supplierGroupEvents')
   const supplierKeys = ctxValue(ctx, 'supplierKeys')
   const supplierChannelChecks = ctxValue(ctx, 'supplierChannelChecks')
   const groupsLoading = ctxValue(ctx, 'groupsLoading')
@@ -53,7 +54,7 @@ export function attachSupplierGroups(ctx: any) {
     groupsLoading.value = true
     groupsError.value = ''
     try {
-      const [result, keyResult] = await Promise.all([
+      const [result, keyResult, eventResult] = await Promise.all([
         listSupplierGroups(groupsSupplier.value.id, {
           q: groupFilters.q || undefined,
           status: groupFilters.status || undefined,
@@ -64,9 +65,14 @@ export function attachSupplierGroups(ctx: any) {
           page: 1,
           page_size: 1000
         }),
+        listSupplierGroupChangeEvents(groupsSupplier.value.id, {
+          page: 1,
+          page_size: 20
+        }),
         loadCurrentChannelChecks()
       ])
       supplierGroups.value = result.items
+      supplierGroupEvents.value = eventResult.items
       supplierKeys.value = keyResult.items
       groupPagination.total = result.total || 0
       groupPagination.pages = result.pages || 0

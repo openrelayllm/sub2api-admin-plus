@@ -16,6 +16,7 @@ export function attachSupplierDialogs(ctx: any) {
   const channelStatusSupplier = ctxValue(ctx, 'channelStatusSupplier')
   const groupsSupplier = ctxValue(ctx, 'groupsSupplier')
   const supplierGroups = ctxValue(ctx, 'supplierGroups')
+  const supplierGroupEvents = ctxValue(ctx, 'supplierGroupEvents')
   const supplierKeys = ctxValue(ctx, 'supplierKeys')
   const supplierChannelChecks = ctxValue(ctx, 'supplierChannelChecks')
   const activeProvisionJob = ctxValue(ctx, 'activeProvisionJob')
@@ -243,6 +244,7 @@ export function attachSupplierDialogs(ctx: any) {
     stopProvisionJobPolling()
     groupsSupplier.value = supplier
     supplierGroups.value = []
+    supplierGroupEvents.value = []
     supplierKeys.value = []
     supplierChannelChecks.value = {}
     activeProvisionJob.value = null

@@ -76,6 +76,7 @@ func provideCleanup(
 	opsSystemLogSink *service.OpsSystemLogSink,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
+	backupService *service.BackupService,
 	idempotencyCoordinator *service.IdempotencyCoordinator,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	sub2apiRedis adminplussub2api.Sub2APIRedis,
@@ -135,6 +136,12 @@ func provideCleanup(
 			}},
 			{"BillingCacheService", func() error {
 				billingCache.Stop()
+				return nil
+			}},
+			{"BackupService", func() error {
+				if backupService != nil {
+					backupService.Stop()
+				}
 				return nil
 			}},
 			{"IdempotencyCleanupService", func() error {

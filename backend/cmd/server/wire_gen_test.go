@@ -40,6 +40,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		opsSystemLogSinkSvc,
 		emailQueueSvc,
 		billingCacheSvc,
+		nil,
 		idempotencyCoordinator,
 		idempotencyCleanupSvc,
 		adminplussub2api.Sub2APIRedis{},

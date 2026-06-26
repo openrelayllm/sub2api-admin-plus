@@ -13,7 +13,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/providerrouter"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
-	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/bizlogs"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
@@ -98,6 +97,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
+	dbDumper := repository.NewPgDumper(configConfig)
+	backupObjectStoreFactory := repository.NewS3BackupStoreFactory()
+	backupService := service.ProvideBackupService(settingRepository, configConfig, secretEncryptor, backupObjectStoreFactory, dbDumper)
 	totpCache := repository.NewTotpCache(redisClient)
 	totpService := service.NewTotpService(userRepository, secretEncryptor, totpCache, settingService, emailService, emailQueueService)
 	authHandler := handler.NewAuthHandler(configConfig, authService, userService, settingService, totpService)
@@ -226,12 +228,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	ratesService := rates.NewServiceWithDependencies(ratesSQLRepository, ratesFeishuNotifier, sessionsService, router)
 	rateHandler := adminplus.NewRateHandler(ratesService)
 	balanceHandler := adminplus.NewBalanceHandler(balancesService)
-	announcementsSQLRepository := announcements.NewSQLRepository(db)
-	announcementsFeishuNotifier := announcements.NewFeishuNotifier(notificationsService)
-	announcementsService := announcements.NewServiceWithDependencies(announcementsSQLRepository, announcementsFeishuNotifier, sessionsService, router)
-	announcementHandler := adminplus.NewAnnouncementHandler(announcementsService)
 	healthHandler := adminplus.NewHealthHandler(healthService)
 	notificationHandler := adminplus.NewNotificationHandler(notificationsService)
+	backupHandler := adminplus.NewBackupHandler(backupService, notificationsService, opsService, settingRepository)
 	usageCostHandler := adminplus.NewUsageCostHandler(usagecostsService)
 	costHandler := adminplus.NewCostHandlerWithProvisionJobs(costsService, provisionjobsService)
 	channelCheckHandler := adminplus.NewChannelCheckHandlerWithProvisionJobs(channelchecksService, provisionjobsService)
@@ -240,7 +239,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	sitediscoverySQLRepository := sitediscovery.NewSQLRepository(db)
 	sitediscoveryCredentialCipher := sitediscovery.UseCredentialCipher(secretEncryptor)
 	registrationProcessor := sitediscovery.ProvideRegistrationProcessor(sitediscoverySQLRepository, suppliersService, sitediscoveryCredentialCipher, businessLogRecorder, proxyService)
-	ingestProcessor := extension.NewIngestProcessorWithCipher(ratesService, balancesService, announcementsService, healthService, usagecostsService, sessionsService, sessionCipher, registrationProcessor)
+	ingestProcessor := extension.NewIngestProcessorWithCipher(ratesService, balancesService, healthService, usagecostsService, sessionsService, sessionCipher, registrationProcessor)
 	extensionService := extension.ProvideService(extensionSQLRepository, ingestProcessor, suppliersService, businessLogRecorder)
 	extensionHandler := adminplus.NewExtensionHandler(extensionService, suppliersService)
 	sitediscoveryService := sitediscovery.ProvideService(sitediscoverySQLRepository, suppliersService, extensionService, mailVerificationService, router, sitediscoveryCredentialCipher, httpClient, businessLogRecorder, opsService, proxyService)
@@ -251,7 +250,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	mailVerificationHandler := adminplus.NewMailVerificationHandler(mailVerificationService)
 	sessionHandler := adminplus.NewSessionHandler(sessionsService, balancesService)
 	schedulerSQLRepository := scheduler.NewSQLRepository(db)
-	schedulerService := scheduler.ProvideService(schedulerSQLRepository, suppliersService, extensionService, suppliergroupsService, ratesService, balancesService, announcementsService, healthService, usagecostsService, channelchecksService, sessionsService)
+	schedulerService := scheduler.ProvideService(schedulerSQLRepository, suppliersService, extensionService, suppliergroupsService, ratesService, balancesService, healthService, usagecostsService, channelchecksService, sessionsService)
 	schedulerHandler := adminplus.NewSchedulerHandler(schedulerService)
 	actionsSQLRepository := actions.NewSQLRepository(db)
 	actionsService := actions.NewService(actionsSQLRepository)
@@ -277,7 +276,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	tlsFingerprintProfileService := service.NewTLSFingerprintProfileService(tlsFingerprintProfileRepository, tlsFingerprintProfileCache)
 	accountTestService := service.NewAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService)
 	sub2APIHandler := adminplus.NewSub2APIHandlerWithAccountTest(sub2apiService, accountTestService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, announcementHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, extensionHandler, siteDiscoveryHandler, siteCatalogHandler, mailVerificationHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler, proxyHandler)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, extensionHandler, siteDiscoveryHandler, siteCatalogHandler, mailVerificationHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler, proxyHandler, backupHandler)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)
@@ -295,7 +294,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
 	worker := provisionjobs.ProvideWorker(provisionjobsService)
 	schedulerWorker := scheduler.ProvideWorker(schedulerService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, emailQueueService, billingCacheService, idempotencyCoordinator, idempotencyCleanupService, sub2APIRedis, worker, schedulerWorker)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, emailQueueService, billingCacheService, backupService, idempotencyCoordinator, idempotencyCleanupService, sub2APIRedis, worker, schedulerWorker)
 	application := &Application{
 		Server:  httpServer,
 		Cleanup: v,
@@ -328,6 +327,7 @@ func provideCleanup(
 	opsSystemLogSink *service.OpsSystemLogSink,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
+	backupService *service.BackupService,
 	idempotencyCoordinator *service.IdempotencyCoordinator,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	sub2apiRedis sub2api.Sub2APIRedis,
@@ -386,6 +386,12 @@ func provideCleanup(
 			}},
 			{"BillingCacheService", func() error {
 				billingCache.Stop()
+				return nil
+			}},
+			{"BackupService", func() error {
+				if backupService != nil {
+					backupService.Stop()
+				}
 				return nil
 			}},
 			{"IdempotencyCleanupService", func() error {

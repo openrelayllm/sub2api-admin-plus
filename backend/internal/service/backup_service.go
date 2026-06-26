@@ -62,13 +62,15 @@ type BackupObjectStoreFactory func(ctx context.Context, cfg *BackupS3Config) (Ba
 
 // BackupS3Config S3 兼容存储配置（支持 Cloudflare R2）
 type BackupS3Config struct {
-	Endpoint        string `json:"endpoint"` // e.g. https://<account_id>.r2.cloudflarestorage.com
-	Region          string `json:"region"`   // R2 用 "auto"
-	Bucket          string `json:"bucket"`
-	AccessKeyID     string `json:"access_key_id"`
-	SecretAccessKey string `json:"secret_access_key,omitempty"` //nolint:revive // field name follows AWS convention
-	Prefix          string `json:"prefix"`                      // S3 key 前缀，如 "backups/"
-	ForcePathStyle  bool   `json:"force_path_style"`
+	Provider         string `json:"provider"` // cloudflare_r2, s3, aliyun_oss
+	Endpoint         string `json:"endpoint"` // e.g. https://<account_id>.r2.cloudflarestorage.com
+	Region           string `json:"region"`   // R2 用 "auto"
+	Bucket           string `json:"bucket"`
+	AccessKeyID      string `json:"access_key_id"`
+	SecretAccessKey  string `json:"secret_access_key,omitempty"` //nolint:revive // field name follows AWS convention
+	SecretConfigured bool   `json:"secret_configured,omitempty"`
+	Prefix           string `json:"prefix"` // S3 key 前缀，如 "backups/"
+	ForcePathStyle   bool   `json:"force_path_style"`
 }
 
 // IsConfigured 检查必要字段是否已配置
@@ -245,6 +247,7 @@ func (s *BackupService) GetS3Config(ctx context.Context) (*BackupS3Config, error
 		return &BackupS3Config{}, nil
 	}
 	// 脱敏返回
+	cfg.SecretConfigured = cfg.SecretAccessKey != ""
 	cfg.SecretAccessKey = ""
 	return cfg, nil
 }
@@ -264,6 +267,7 @@ func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) 
 		}
 		cfg.SecretAccessKey = encrypted
 	}
+	cfg.SecretConfigured = cfg.SecretAccessKey != ""
 
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -919,11 +923,18 @@ func (s *BackupService) DeleteBackup(ctx context.Context, backupID string) error
 	// 从 S3 删除
 	if found.S3Key != "" && found.Status == "completed" {
 		s3Cfg, err := s.loadS3Config(ctx)
-		if err == nil && s3Cfg != nil && s3Cfg.IsConfigured() {
-			objectStore, err := s.getOrCreateStore(ctx, s3Cfg)
-			if err == nil {
-				_ = objectStore.Delete(ctx, found.S3Key)
-			}
+		if err != nil {
+			return err
+		}
+		if s3Cfg == nil || !s3Cfg.IsConfigured() {
+			return ErrBackupS3NotConfigured
+		}
+		objectStore, err := s.getOrCreateStore(ctx, s3Cfg)
+		if err != nil {
+			return err
+		}
+		if err := objectStore.Delete(ctx, found.S3Key); err != nil {
+			return fmt.Errorf("delete remote backup object: %w", err)
 		}
 	}
 

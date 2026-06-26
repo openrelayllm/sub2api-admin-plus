@@ -55,6 +55,97 @@ func TestParseDaheiAIItems(t *testing.T) {
 	}
 }
 
+func TestParseSourceCandidatesUsesKanLLMSummary(t *testing.T) {
+	body := `{
+		"generatedAt": "2026-06-26T13:52:47Z",
+		"apis": [
+			{
+				"id": "api-1",
+				"name": "5YuanToken",
+				"websiteUrl": "https://5yuantoken.org",
+				"planType": "GPT Pro",
+				"isSelfPurchased": true,
+				"priceMultiplier": 0.16,
+				"enabled": true,
+				"available": true,
+				"successRates": {"24h": 0.95},
+				"checkedAt": "2026-06-26T13:49:01Z"
+			},
+			{
+				"id": "api-2",
+				"name": "5YuanToken",
+				"websiteUrl": "https://5yuantoken.org/",
+				"planType": "GPT Plus",
+				"priceMultiplier": 0.10,
+				"enabled": true,
+				"available": false,
+				"errorType": "http_error",
+				"errorMessage": "503 Service Unavailable"
+			},
+			{
+				"id": "api-3",
+				"name": "937",
+				"websiteUrl": "https://sub2api.937auth.vip",
+				"planType": "GPT Mixed",
+				"priceMultiplier": 0.20,
+				"enabled": true,
+				"available": true
+			}
+		]
+	}`
+	service := NewService(nil, nil, nil, nil, nil, nil)
+	items, err := service.parseSourceCandidates(context.Background(), nil, "https://www.kanllm.com/", body)
+	if err != nil {
+		t.Fatalf("parse source candidates: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 aggregated candidates, got %d", len(items))
+	}
+	first := items[0]
+	if first.SourceSection != "kanllm" {
+		t.Fatalf("expected kanllm section, got %q", first.SourceSection)
+	}
+	if first.SourceSiteID != "5yuantoken.org" {
+		t.Fatalf("unexpected source site id: %q", first.SourceSiteID)
+	}
+	if first.RegisterURL != "https://5yuantoken.org" {
+		t.Fatalf("unexpected register url: %q", first.RegisterURL)
+	}
+	if !strings.Contains(first.Description, "最低倍率 0.1") {
+		t.Fatalf("expected min rate in description, got %q", first.Description)
+	}
+	if first.RawPayload["total_count"] != 2 {
+		t.Fatalf("expected aggregated total count, got %#v", first.RawPayload["total_count"])
+	}
+}
+
+func TestParseSourceCandidatesFallsBackToDirectSite(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	service := NewService(nil, nil, nil, nil, nil, server.Client())
+	items, err := service.parseSourceCandidates(context.Background(), server.Client(), server.URL, `<!doctype html><title>Plain Relay</title><div id="app"></div>`)
+	if err != nil {
+		t.Fatalf("parse source candidates: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 direct candidate, got %d", len(items))
+	}
+	item := items[0]
+	if item.SourceSection != "direct-url" {
+		t.Fatalf("expected direct-url section, got %q", item.SourceSection)
+	}
+	if item.Name != "Plain Relay" {
+		t.Fatalf("expected title as name, got %q", item.Name)
+	}
+	if item.RegisterURL != server.URL {
+		t.Fatalf("unexpected register url: %q", item.RegisterURL)
+	}
+	if item.Host == "" {
+		t.Fatalf("unexpected host: %q", item.Host)
+	}
+}
+
 func TestClassifyItem(t *testing.T) {
 	tests := []struct {
 		name     string

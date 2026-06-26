@@ -5,7 +5,6 @@ import (
 	providerrouter "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/providerrouter"
 	sub2apiprovider "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
-	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	bizlogsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/bizlogs"
 	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
@@ -48,7 +47,6 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ports.SessionChannelMonitorAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionGroupAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionRateAdapter), new(*providerrouter.Router)),
-	wire.Bind(new(ports.SessionAnnouncementAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionUsageCostAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionFundingAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionEntitlementAdapter), new(*providerrouter.Router)),
@@ -69,7 +67,6 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(costsapp.UsageCostSyncer), new(*usagecostsapp.Service)),
 	wire.Bind(new(costsapp.BalanceSyncer), new(*balancesapp.Service)),
 	wire.Bind(new(costsapp.SupplierLookup), new(*suppliersapp.Service)),
-	wire.Bind(new(announcementsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(ratesapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(usagecostsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(provisionjobsapp.GroupSyncer), new(*suppliergroupsapp.Service)),
@@ -79,7 +76,6 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(schedulerapp.GroupSyncer), new(*suppliergroupsapp.Service)),
 	wire.Bind(new(schedulerapp.RateSyncer), new(*ratesapp.Service)),
 	wire.Bind(new(schedulerapp.BalanceSyncer), new(*balancesapp.Service)),
-	wire.Bind(new(schedulerapp.AnnouncementSyncer), new(*announcementsapp.Service)),
 	wire.Bind(new(schedulerapp.HealthSyncer), new(*healthapp.Service)),
 	wire.Bind(new(schedulerapp.UsageCostSyncer), new(*usagecostsapp.Service)),
 	wire.Bind(new(schedulerapp.ChannelChecker), new(*channelchecksapp.Service)),
@@ -90,7 +86,6 @@ var ProviderSet = wire.NewSet(
 	healthapp.ProviderSet,
 	mailverificationapp.ProviderSet,
 	notificationsapp.ProviderSet,
-	announcementsapp.ProviderSet,
 	ratesapp.ProviderSet,
 	provisionjobsapp.ProviderSet,
 	proxyapp.ProviderSet,

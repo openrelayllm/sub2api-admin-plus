@@ -74,6 +74,9 @@ func TestServiceSyncUpsertsGroupsAndMarksMissing(t *testing.T) {
 	first, err := svc.Sync(context.Background(), 7)
 	require.NoError(t, err)
 	require.Equal(t, 2, first.Total)
+	require.Len(t, first.Events, 2)
+	require.Equal(t, adminplusdomain.SupplierGroupChangeDirectionNew, first.Events[0].Direction)
+	require.True(t, first.Events[0].LowRate)
 	require.Equal(t, "Low Cost", first.Groups[0].Name)
 	require.NotNil(t, first.Groups[0].UserRateMultiplier)
 	require.Equal(t, 0.7, *first.Groups[0].UserRateMultiplier)
@@ -81,6 +84,11 @@ func TestServiceSyncUpsertsGroupsAndMarksMissing(t *testing.T) {
 	second, err := svc.Sync(context.Background(), 7)
 	require.NoError(t, err)
 	require.Equal(t, 1, second.Total)
+	require.Len(t, second.Events, 1)
+	require.Equal(t, adminplusdomain.SupplierGroupChangeDirectionIncrease, second.Events[0].Direction)
+	require.NotNil(t, second.Events[0].OldEffectiveRateMultiplier)
+	require.Equal(t, 0.7, *second.Events[0].OldEffectiveRateMultiplier)
+	require.Equal(t, 0.9, second.Events[0].NewEffectiveRateMultiplier)
 	require.Equal(t, "Low Cost Updated", second.Groups[0].Name)
 
 	all, err := svc.List(context.Background(), ListFilter{SupplierID: 7})
@@ -90,6 +98,11 @@ func TestServiceSyncUpsertsGroupsAndMarksMissing(t *testing.T) {
 	require.Equal(t, adminplusdomain.SupplierGroupStatusActive, all[0].Status)
 	require.Equal(t, "11", all[1].ExternalGroupID)
 	require.Equal(t, adminplusdomain.SupplierGroupStatusMissing, all[1].Status)
+
+	events, err := svc.ListChangeEvents(context.Background(), EventFilter{SupplierID: 7})
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	require.Equal(t, adminplusdomain.SupplierGroupChangeDirectionIncrease, events[0].Direction)
 }
 
 type stubSessionReader struct {

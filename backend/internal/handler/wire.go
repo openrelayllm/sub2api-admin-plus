@@ -33,7 +33,6 @@ func ProvideAdminPlusHandlers(
 	provisionJobHandler *adminplushandler.ProvisionJobHandler,
 	rateHandler *adminplushandler.RateHandler,
 	balanceHandler *adminplushandler.BalanceHandler,
-	announcementHandler *adminplushandler.AnnouncementHandler,
 	healthHandler *adminplushandler.HealthHandler,
 	notificationHandler *adminplushandler.NotificationHandler,
 	usageCostHandler *adminplushandler.UsageCostHandler,
@@ -48,6 +47,7 @@ func ProvideAdminPlusHandlers(
 	actionHandler *adminplushandler.ActionHandler,
 	sub2apiHandler *adminplushandler.Sub2APIHandler,
 	proxyHandler *adminplushandler.ProxyHandler,
+	backupHandler *adminplushandler.BackupHandler,
 ) *AdminPlusHandlers {
 	return &AdminPlusHandlers{
 		Supplier:         supplierHandler,
@@ -56,7 +56,6 @@ func ProvideAdminPlusHandlers(
 		ProvisionJob:     provisionJobHandler,
 		Rate:             rateHandler,
 		Balance:          balanceHandler,
-		Announcement:     announcementHandler,
 		Health:           healthHandler,
 		Notification:     notificationHandler,
 		UsageCost:        usageCostHandler,
@@ -71,6 +70,7 @@ func ProvideAdminPlusHandlers(
 		Action:           actionHandler,
 		Sub2API:          sub2apiHandler,
 		Proxy:            proxyHandler,
+		Backup:           backupHandler,
 	}
 }
 
@@ -129,7 +129,6 @@ var ProviderSet = wire.NewSet(
 	adminplushandler.NewProvisionJobHandler,
 	adminplushandler.NewRateHandler,
 	adminplushandler.NewBalanceHandler,
-	adminplushandler.NewAnnouncementHandler,
 	adminplushandler.NewHealthHandler,
 	adminplushandler.NewNotificationHandler,
 	adminplushandler.NewUsageCostHandler,
@@ -144,6 +143,7 @@ var ProviderSet = wire.NewSet(
 	adminplushandler.NewActionHandler,
 	adminplushandler.NewSub2APIHandlerWithAccountTest,
 	adminplushandler.NewProxyHandler,
+	adminplushandler.NewBackupHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

@@ -218,6 +218,92 @@ func (r *SQLRepository) List(ctx context.Context, filter ListFilter) ([]*adminpl
 	return items, nil
 }
 
+func (r *SQLRepository) CreateChangeEvents(ctx context.Context, events []*adminplusdomain.SupplierGroupChangeEvent) ([]*adminplusdomain.SupplierGroupChangeEvent, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	out := make([]*adminplusdomain.SupplierGroupChangeEvent, 0, len(events))
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		row := r.db.QueryRowContext(ctx, `
+			INSERT INTO admin_plus_supplier_group_change_events (
+				supplier_id, supplier_group_id, external_group_id, group_name,
+				provider_family, direction, old_effective_rate_multiplier,
+				new_effective_rate_multiplier, change_percent, low_rate, created_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			RETURNING id, supplier_id, supplier_group_id, external_group_id, group_name,
+				provider_family, direction, old_effective_rate_multiplier,
+				new_effective_rate_multiplier, change_percent, low_rate, created_at
+		`,
+			event.SupplierID,
+			event.SupplierGroupID,
+			event.ExternalGroupID,
+			event.GroupName,
+			event.ProviderFamily,
+			string(event.Direction),
+			nullableFloat64(event.OldEffectiveRateMultiplier),
+			event.NewEffectiveRateMultiplier,
+			nullableFloat64(event.ChangePercent),
+			event.LowRate,
+			event.CreatedAt,
+		)
+		created, err := scanSupplierGroupChangeEvent(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, created)
+	}
+	return out, nil
+}
+
+func (r *SQLRepository) ListChangeEvents(ctx context.Context, filter EventFilter) ([]*adminplusdomain.SupplierGroupChangeEvent, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	where := []string{"supplier_id = $1"}
+	args := []any{filter.SupplierID}
+	addArg := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if filter.Direction != "" {
+		where = append(where, "direction = "+addArg(string(filter.Direction)))
+	}
+	if filter.LowRate != nil {
+		where = append(where, "low_rate = "+addArg(*filter.LowRate))
+	}
+	limitRef := addArg(filter.Limit)
+	query := `
+		SELECT id, supplier_id, supplier_group_id, external_group_id, group_name,
+			provider_family, direction, old_effective_rate_multiplier,
+			new_effective_rate_multiplier, change_percent, low_rate, created_at
+		FROM admin_plus_supplier_group_change_events
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY created_at DESC, id DESC
+		LIMIT ` + limitRef
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]*adminplusdomain.SupplierGroupChangeEvent, 0)
+	for rows.Next() {
+		item, err := scanSupplierGroupChangeEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 type supplierGroupScanner interface {
 	Scan(dest ...any) error
 }
@@ -295,6 +381,40 @@ func scanSupplierGroup(scanner supplierGroupScanner) (*adminplusdomain.SupplierG
 		group.RawPayload = payload
 	}
 	return &group, nil
+}
+
+func scanSupplierGroupChangeEvent(scanner supplierGroupScanner) (*adminplusdomain.SupplierGroupChangeEvent, error) {
+	var event adminplusdomain.SupplierGroupChangeEvent
+	var direction string
+	var oldRate sql.NullFloat64
+	var changePercent sql.NullFloat64
+	err := scanner.Scan(
+		&event.ID,
+		&event.SupplierID,
+		&event.SupplierGroupID,
+		&event.ExternalGroupID,
+		&event.GroupName,
+		&event.ProviderFamily,
+		&direction,
+		&oldRate,
+		&event.NewEffectiveRateMultiplier,
+		&changePercent,
+		&event.LowRate,
+		&event.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	event.Direction = adminplusdomain.SupplierGroupChangeDirection(direction)
+	if oldRate.Valid {
+		value := oldRate.Float64
+		event.OldEffectiveRateMultiplier = &value
+	}
+	if changePercent.Valid {
+		value := changePercent.Float64
+		event.ChangePercent = &value
+	}
+	return &event, nil
 }
 
 func marshalRawPayload(value map[string]any) ([]byte, error) {

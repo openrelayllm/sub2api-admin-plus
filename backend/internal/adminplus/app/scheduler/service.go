@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
@@ -47,20 +46,19 @@ type RunInput struct {
 }
 
 type Service struct {
-	repo               Repository
-	supplierService    *suppliersapp.Service
-	extensionService   *extensionapp.Service
-	groupSyncer        GroupSyncer
-	rateSyncer         RateSyncer
-	balanceSyncer      BalanceSyncer
-	announcementSyncer AnnouncementSyncer
-	healthSyncer       HealthSyncer
-	usageCostSyncer    UsageCostSyncer
-	channelChecker     ChannelChecker
-	sessionRefresher   SessionRefresher
-	now                func() time.Time
-	recentRunsMu       sync.Mutex
-	recentRuns         []adminplusdomain.SchedulerRunSummary
+	repo             Repository
+	supplierService  *suppliersapp.Service
+	extensionService *extensionapp.Service
+	groupSyncer      GroupSyncer
+	rateSyncer       RateSyncer
+	balanceSyncer    BalanceSyncer
+	healthSyncer     HealthSyncer
+	usageCostSyncer  UsageCostSyncer
+	channelChecker   ChannelChecker
+	sessionRefresher SessionRefresher
+	now              func() time.Time
+	recentRunsMu     sync.Mutex
+	recentRuns       []adminplusdomain.SchedulerRunSummary
 }
 
 type Repository interface {
@@ -101,10 +99,6 @@ type RateSyncer interface {
 
 type BalanceSyncer interface {
 	SyncFromSession(ctx context.Context, in balancesapp.SyncFromSessionInput) (*balancesapp.SyncFromSessionResult, error)
-}
-
-type AnnouncementSyncer interface {
-	SyncFromSession(ctx context.Context, in announcementsapp.SyncFromSessionInput) (*announcementsapp.SyncFromSessionResult, error)
 }
 
 type HealthSyncer interface {
@@ -151,13 +145,12 @@ func ProvideService(
 	groupSyncer GroupSyncer,
 	rateSyncer RateSyncer,
 	balanceSyncer BalanceSyncer,
-	announcementSyncer AnnouncementSyncer,
 	healthSyncer HealthSyncer,
 	usageCostSyncer UsageCostSyncer,
 	channelChecker ChannelChecker,
 	sessionRefresher SessionRefresher,
 ) *Service {
-	return NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer, channelChecker).
+	return NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, healthSyncer, usageCostSyncer, channelChecker).
 		WithSessionRefresher(sessionRefresher)
 }
 
@@ -175,7 +168,6 @@ func NewServiceWithDependencies(
 	groupSyncer GroupSyncer,
 	rateSyncer RateSyncer,
 	balanceSyncer BalanceSyncer,
-	announcementSyncer AnnouncementSyncer,
 	healthSyncer HealthSyncer,
 	usageCostSyncer UsageCostSyncer,
 	channelChecker ChannelChecker,
@@ -184,7 +176,6 @@ func NewServiceWithDependencies(
 	service.groupSyncer = groupSyncer
 	service.rateSyncer = rateSyncer
 	service.balanceSyncer = balanceSyncer
-	service.announcementSyncer = announcementSyncer
 	service.healthSyncer = healthSyncer
 	service.usageCostSyncer = usageCostSyncer
 	service.channelChecker = channelChecker
@@ -205,12 +196,11 @@ func NewServiceWithDependenciesAndRepository(
 	groupSyncer GroupSyncer,
 	rateSyncer RateSyncer,
 	balanceSyncer BalanceSyncer,
-	announcementSyncer AnnouncementSyncer,
 	healthSyncer HealthSyncer,
 	usageCostSyncer UsageCostSyncer,
 	channelChecker ChannelChecker,
 ) *Service {
-	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer, channelChecker)
+	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, healthSyncer, usageCostSyncer, channelChecker)
 	service.repo = repo
 	return service
 }
@@ -807,7 +797,6 @@ func (s *Service) defaultSettings() adminplusdomain.SchedulerSettings {
 			"supplier.funding_orders.sync",
 			"supplier.redeem_orders.sync",
 			"supplier.usage_costs.sync",
-			"supplier.announcements.sync",
 			"supplier.session.probe",
 		},
 		HighCostTaskTypes: []string{
@@ -1136,18 +1125,8 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 			item.Total = 1
 		}
 	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
-		if s.announcementSyncer == nil {
-			item.Reason = "announcement_syncer_missing"
-			return
-		}
-		result, err := s.announcementSyncer.SyncFromSession(ctx, announcementsapp.SyncFromSessionInput{SupplierID: supplier.ID})
-		if err != nil {
-			item.Reason = encodeSyncFailure(stepFailureInput{TaskType: taskType, Stage: "supplier_announcements_sync", Action: "sync_announcements", Err: err})
-			return
-		}
-		if result != nil {
-			item.Total = result.Total
-		}
+		item.Reason = "announcement_sync_removed"
+		return
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		if s.healthSyncer == nil {
 			item.Reason = "health_syncer_missing"
@@ -1248,7 +1227,7 @@ func (s *Service) defaultPlans() []adminplusdomain.SchedulerPlan {
 		plan("supplier.balance.sync", "余额同步", "supplier.balance.sync", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance}, "enabled", "全部启用供应商", 10*time.Minute, 10, "fire_once", "forbid", false, "读取供应商用户侧余额并刷新余额快照", now),
 		plan("supplier.groups.sync", "分组同步", "supplier.groups.sync", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchGroups}, "enabled", "全部启用供应商", time.Hour, 10, "fire_once", "forbid", false, "同步供应商分组、渠道和协议投影", now),
 		plan("supplier.rates.sync", "倍率同步", "supplier.rates.sync", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchRates}, "enabled", "全部启用供应商", time.Hour, 10, "fire_once", "forbid", false, "同步使用倍率、充值倍率和有效倍率", now),
-		plan("supplier.costs.reconcile", "成本对账", "supplier.costs.reconcile", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance, adminplusdomain.ExtensionTaskTypeFetchUsageCosts, adminplusdomain.ExtensionTaskTypeFetchAnnouncements}, "enabled", "全部启用供应商", time.Hour, 60, "backfill", "forbid", false, "采集充值入口、usage 和余额并刷新成本台账", now),
+		plan("supplier.costs.reconcile", "成本对账", "supplier.costs.reconcile", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance, adminplusdomain.ExtensionTaskTypeFetchUsageCosts}, "enabled", "全部启用供应商", time.Hour, 60, "backfill", "forbid", false, "采集 usage 和余额并刷新成本台账", now),
 		plan("supplier.session.probe", "会话探测", "supplier.session.probe", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchHealth}, "enabled", "全部启用供应商", 30*time.Minute, 30, "fire_once", "forbid", false, "探测供应商会话和只读 capability", now),
 		plan("supplier.channels.check", "渠道健康检测", "supplier.channels.check", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCheckChannels}, "paused", "按供应商启用", 0, 10, "skip", "forbid", true, "使用真实模型请求检测渠道可用性、首 token 和总耗时", now),
 		plan("local.sub2api.schedule.ensure", "加入本地调度", "local.sub2api.schedule.ensure", nil, "paused", "智能动作触发", 0, 10, "skip", "forbid", true, "将低倍率且可用的供应商渠道加入本地 Lime/Sub2API 调度", now),
@@ -1481,17 +1460,16 @@ func taskStatusFromLatest(latestSteps map[adminplusdomain.ExtensionTaskType]admi
 
 func billingStatusFromLatest(latestSteps map[adminplusdomain.ExtensionTaskType]adminplusdomain.SchedulerStepRecord) string {
 	usage := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchUsageCosts, "not_checked")
-	announcements := taskStatusFromLatest(latestSteps, adminplusdomain.ExtensionTaskTypeFetchAnnouncements, "not_checked")
-	if usage == "failed" || announcements == "failed" {
+	if usage == "failed" {
 		return "failed"
 	}
-	if usage == "ready" || announcements == "ready" {
+	if usage == "ready" {
 		return "ready"
 	}
-	if usage == "running" || announcements == "running" {
+	if usage == "running" {
 		return "running"
 	}
-	if usage == "queued" || announcements == "queued" {
+	if usage == "queued" {
 		return "queued"
 	}
 	return "not_checked"
@@ -1576,7 +1554,6 @@ func taskNeedsSession(taskType adminplusdomain.ExtensionTaskType) bool {
 	case adminplusdomain.ExtensionTaskTypeFetchGroups,
 		adminplusdomain.ExtensionTaskTypeFetchRates,
 		adminplusdomain.ExtensionTaskTypeFetchBalance,
-		adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 		adminplusdomain.ExtensionTaskTypeFetchHealth,
 		adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		adminplusdomain.ExtensionTaskTypeCheckChannels:
@@ -1667,8 +1644,6 @@ func syncFailureDefaultMessage(taskType adminplusdomain.ExtensionTaskType) strin
 		return "supplier groups sync failed"
 	case adminplusdomain.ExtensionTaskTypeFetchRates:
 		return "supplier rates sync failed"
-	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
-		return "supplier announcements sync failed"
 	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
 		return "supplier usage costs sync failed"
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
@@ -1869,8 +1844,6 @@ func schedulerTaskTypeLabel(taskType adminplusdomain.ExtensionTaskType) string {
 		return "supplier.rates.sync"
 	case adminplusdomain.ExtensionTaskTypeFetchBalance:
 		return "supplier.balance.sync"
-	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
-		return "supplier.announcements.sync"
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return "supplier.session.probe"
 	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
@@ -1947,6 +1920,9 @@ func normalizeTaskTypes(input []adminplusdomain.ExtensionTaskType) []adminplusdo
 		if !taskType.Valid() {
 			continue
 		}
+		if taskType == adminplusdomain.ExtensionTaskTypeFetchAnnouncements {
+			continue
+		}
 		if _, ok := seen[taskType]; ok {
 			continue
 		}
@@ -1994,7 +1970,6 @@ func actionForTaskType(taskType adminplusdomain.ExtensionTaskType) string {
 	case adminplusdomain.ExtensionTaskTypeFetchGroups,
 		adminplusdomain.ExtensionTaskTypeFetchRates,
 		adminplusdomain.ExtensionTaskTypeFetchBalance,
-		adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 		adminplusdomain.ExtensionTaskTypeFetchHealth,
 		adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		adminplusdomain.ExtensionTaskTypeCheckChannels:
@@ -2029,8 +2004,6 @@ func taskPriority(taskType adminplusdomain.ExtensionTaskType) int {
 		return 90
 	case adminplusdomain.ExtensionTaskTypeFetchRates:
 		return 80
-	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
-		return 70
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return 60
 	case adminplusdomain.ExtensionTaskTypeCheckChannels:

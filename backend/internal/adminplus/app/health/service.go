@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -168,13 +167,8 @@ func (s *Service) RecordSample(ctx context.Context, in RecordSampleInput) (*Reco
 	return result, nil
 }
 
-func (s *Service) notifyHealthEvent(ctx context.Context, event *adminplusdomain.HealthEvent, sample *adminplusdomain.HealthSample) {
-	if s == nil || s.notifier == nil || event == nil {
-		return
-	}
-	if err := s.notifier.NotifyHealthEvent(ctx, event, sample); err != nil {
-		slog.Warn("admin plus health notification failed", "supplier_id", event.SupplierID, "event_id", event.ID, "type", event.Type, "err", err)
-	}
+func (s *Service) notifyHealthEvent(_ context.Context, _ *adminplusdomain.HealthEvent, _ *adminplusdomain.HealthSample) {
+	// Health events stay in Admin Plus history; Feishu push is intentionally balance-only.
 }
 
 type FeishuNotifier struct {

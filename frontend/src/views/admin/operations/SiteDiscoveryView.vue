@@ -88,6 +88,18 @@
               <label class="block">
                 <span class="input-label">采集源</span>
                 <input v-model.trim="sourceURL" class="input font-mono text-sm" />
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <button
+                    v-for="preset in sourcePresets"
+                    :key="preset.url"
+                    type="button"
+                    class="btn btn-sm font-mono"
+                    :class="sourceURL === preset.url ? 'btn-primary' : 'btn-secondary'"
+                    @click="selectSourcePreset(preset.url)"
+                  >
+                    {{ preset.url }}
+                  </button>
+                </div>
               </label>
               <label class="block">
                 <span class="flex items-center justify-between gap-2">
@@ -449,6 +461,18 @@
             <label class="block">
               <span class="input-label">采集源</span>
               <input v-model.trim="sourceURL" class="input font-mono text-sm" />
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button
+                  v-for="preset in sourcePresets"
+                  :key="preset.url"
+                  type="button"
+                  class="btn btn-sm font-mono"
+                  :class="sourceURL === preset.url ? 'btn-primary' : 'btn-secondary'"
+                  @click="selectSourcePreset(preset.url)"
+                >
+                  {{ preset.url }}
+                </button>
+              </div>
             </label>
             <label class="block">
               <span class="flex items-center justify-between gap-2">
@@ -723,6 +747,11 @@ const tabs: { value: SiteDiscoveryTab; label: string }[] = [
   { value: 'settings', label: '设置' }
 ]
 
+const sourcePresets = [
+  { url: 'https://api.daheiai.com/' },
+  { url: 'https://www.kanllm.com/' }
+]
+
 const activeTab = ref<SiteDiscoveryTab>('dashboard')
 const loading = ref(false)
 const running = ref(false)
@@ -878,7 +907,7 @@ const activeTableTitle = computed(() => {
 const activeTableDescription = computed(() => {
   if (activeTab.value === 'registered') return '插件已完成提交的注册记录。'
   if (activeTab.value === 'tasks') return '排队、执行中、待人工验证和失败的注册记录。'
-  return '从 daheiai 第三方中转分区采集到的网址，可按处理状态、类型和注册状态筛选。'
+  return '从索引页或单站 URL 采集到的网址，可按处理状态、类型和注册状态筛选。'
 })
 
 const activeEmptyLabel = computed(() => {
@@ -1009,7 +1038,8 @@ async function runDiscoveryNow() {
     if (failedMessage) throw new Error(failedMessage)
     const run = (completedResult.value as SiteDiscoveryRunResult | null)?.run
     appStore.showSuccess(run ? `采集完成：${run.total} 个站点，支持 ${run.supported_total} 个` : '采集完成')
-    urlPagination.page = 1
+    resetURLFiltersForDiscoveryResult()
+    activeTab.value = 'urls'
     await Promise.all([loadItems(), loadRegisteredItems(), loadRegistrationTasks(), loadRecommendations()])
   } catch (error) {
     appStore.showError(errorMessage(error))
@@ -1232,6 +1262,10 @@ function proxyPolicyFixedNodeID(policy: ProxyPolicy): number {
 
 function proxyPolicyOptionLabel(policy: ProxyPolicy): string {
   return policy.enabled ? policy.name : `${policy.name}（停用）`
+}
+
+function selectSourcePreset(url: string) {
+  sourceURL.value = url
 }
 
 function ensureProxyPolicyUsable(): boolean {
@@ -1493,6 +1527,16 @@ async function refreshActiveLists() {
 function resetURLPagination() {
   urlPagination.page = 1
   void loadItems()
+}
+
+function resetURLFiltersForDiscoveryResult() {
+  urlPagination.page = 1
+  urlFilters.q = ''
+  urlFilters.provider_type = ''
+  urlFilters.classification_status = ''
+  urlFilters.import_status = ''
+  urlFilters.registration_status = ''
+  urlFilters.processed_status = ''
 }
 
 function setProcessedFilter(value: 'processed' | 'unprocessed' | '') {

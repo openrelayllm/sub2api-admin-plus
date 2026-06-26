@@ -34,8 +34,7 @@ func TestServiceRecordSampleCreatesLatencyAndErrorEvents(t *testing.T) {
 	require.Equal(t, adminplusdomain.HealthEventTypeSlowFirstToken, result.Events[0].Type)
 	require.Equal(t, adminplusdomain.HealthEventTypeSlowTotal, result.Events[1].Type)
 	require.Equal(t, adminplusdomain.HealthEventTypeRequestError, result.Events[2].Type)
-	require.Len(t, notifier.events, 3)
-	require.Equal(t, result.Events[0].ID, notifier.events[0].ID)
+	require.Empty(t, notifier.events)
 }
 
 func TestServiceRecordSampleCreatesConcurrencyFullEvent(t *testing.T) {

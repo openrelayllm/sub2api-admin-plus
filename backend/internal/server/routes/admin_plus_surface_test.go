@@ -8,7 +8,6 @@ import (
 	"time"
 
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
-	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
@@ -81,7 +80,6 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			SupplierKey:      adminplushandler.NewSupplierKeyHandler(supplierKeyService),
 			Rate:             adminplushandler.NewRateHandler(ratesapp.NewServiceWithDependencies(newRouteSurfaceRateRepository(), nil, sessionService, &routeSurfaceRateReader{})),
 			Balance:          adminplushandler.NewBalanceHandler(balancesapp.NewService(balancesapp.NewMemoryRepository())),
-			Announcement:     adminplushandler.NewAnnouncementHandler(announcementsapp.NewService(announcementsapp.NewMemoryRepository())),
 			Health:           adminplushandler.NewHealthHandler(healthapp.NewService(healthapp.NewMemoryRepository())),
 			Notification:     adminplushandler.NewNotificationHandler(notificationService),
 			UsageCost:        adminplushandler.NewUsageCostHandler(usagecostsapp.NewServiceWithDependencies(usagecostsapp.NewMemoryRepository(), sessionService, &routeSurfaceUsageCostReader{})),
@@ -95,6 +93,7 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			Action:           adminplushandler.NewActionHandler(actionsapp.NewRuleService()),
 			Sub2API:          adminplushandler.NewSub2APIHandler(sub2apiapp.NewService(newRouteSurfaceSub2APIRepository(), newRouteSurfaceSub2APIRuntimeReader())),
 			Proxy:            adminplushandler.NewProxyHandler(proxyapp.NewService(nil, nil, nil, nil, proxyapp.RuntimeConfig{})),
+			Backup:           adminplushandler.NewBackupHandler(nil, nil, nil, nil),
 		},
 	}
 
@@ -144,6 +143,7 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/suppliers/:id/accounts",
 		"DELETE /api/v1/admin-plus/suppliers/:id/accounts/:accountID",
 		"GET /api/v1/admin-plus/suppliers/:id/groups",
+		"GET /api/v1/admin-plus/suppliers/:id/groups/events",
 		"POST /api/v1/admin-plus/suppliers/:id/groups/sync",
 		"GET /api/v1/admin-plus/suppliers/:id/keys",
 		"POST /api/v1/admin-plus/suppliers/:id/keys/ensure-all",
@@ -183,9 +183,6 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/admin-plus/balances/snapshots",
 		"GET /api/v1/admin-plus/balances/events",
 		"PATCH /api/v1/admin-plus/balances/events/:id/ack",
-		"POST /api/v1/admin-plus/announcements",
-		"GET /api/v1/admin-plus/announcements",
-		"PATCH /api/v1/admin-plus/announcements/:id/ack",
 		"POST /api/v1/admin-plus/health/samples",
 		"GET /api/v1/admin-plus/health/samples",
 		"GET /api/v1/admin-plus/health/events",
@@ -196,6 +193,18 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"POST /api/v1/admin-plus/notifications/test",
 		"GET /api/v1/admin-plus/notifications/deliveries",
 		"POST /api/v1/admin-plus/notifications/deliveries/:id/retry",
+		"GET /api/v1/admin-plus/backups/status",
+		"GET /api/v1/admin-plus/backups/settings",
+		"PUT /api/v1/admin-plus/backups/settings",
+		"POST /api/v1/admin-plus/backups/test-storage",
+		"POST /api/v1/admin-plus/backups",
+		"GET /api/v1/admin-plus/backups",
+		"GET /api/v1/admin-plus/backups/:id",
+		"POST /api/v1/admin-plus/backups/:id/restore",
+		"GET /api/v1/admin-plus/backups/:id/download-url",
+		"DELETE /api/v1/admin-plus/backups/:id",
+		"GET /api/v1/admin-plus/server-renewal",
+		"PUT /api/v1/admin-plus/server-renewal",
 		"GET /api/v1/admin-plus/mails/oauth/config",
 		"PUT /api/v1/admin-plus/mails/oauth/config",
 		"POST /api/v1/admin-plus/mails/oauth/authorize",
@@ -275,6 +284,10 @@ func TestAdminPlusDeadRoutesStayUnregistered(t *testing.T) {
 		"POST /api/v1/admin-plus/suppliers/:id/billing/sync",
 		"POST /api/v1/admin-plus/billing/lines/import",
 		"GET /api/v1/admin-plus/billing/lines",
+		"POST /api/v1/admin-plus/suppliers/:id/announcements/sync",
+		"POST /api/v1/admin-plus/announcements",
+		"GET /api/v1/admin-plus/announcements",
+		"PATCH /api/v1/admin-plus/announcements/:id/ack",
 		"POST /api/v1/admin-plus/reconciliation/run",
 		"GET /v1/chat/completions",
 		"POST /v1/chat/completions",
@@ -306,6 +319,10 @@ func TestAdminPlusDeadPathsReturn404(t *testing.T) {
 		{http.MethodPost, "/api/v1/admin-plus/promotions"},
 		{http.MethodGet, "/api/v1/admin-plus/promotions"},
 		{http.MethodPatch, "/api/v1/admin-plus/promotions/1/ack"},
+		{http.MethodPost, "/api/v1/admin-plus/suppliers/1/announcements/sync"},
+		{http.MethodPost, "/api/v1/admin-plus/announcements"},
+		{http.MethodGet, "/api/v1/admin-plus/announcements"},
+		{http.MethodPatch, "/api/v1/admin-plus/announcements/1/ack"},
 		{http.MethodGet, "/api/v1/admin-plus/site-discovery/registration-tasks"},
 		{http.MethodGet, "/api/v1/admin-plus/site-discovery/registration-tasks/1/logs"},
 		{http.MethodPost, "/api/v1/admin-plus/site-discovery/registration-tasks/1/retry"},

@@ -28,6 +28,7 @@ describe('adminPlusRoutes', () => {
       '/admin/scheduler',
       '/admin/scheduler/notifications',
       '/admin/system-logs',
+      '/admin/backup',
       '/admin/collection/scheduler',
       '/admin/collection/plugin-tasks',
       '/admin/collection/sessions',
@@ -88,7 +89,6 @@ describe('adminPlusRoutes', () => {
       '/admin/payment',
       '/admin/subscriptions',
       '/admin/redeem',
-      '/admin/backup',
       '/admin/finance/billing',
       '/admin/finance/reconciliation',
       '/admin/operations/promotions'
@@ -108,6 +108,7 @@ describe('adminPlusRoutes', () => {
         '/admin/scheduler',
         '/admin/scheduler/notifications',
         '/admin/system-logs',
+        '/admin/backup',
         '/admin/collection/sessions',
         '/admin/collection/site-discovery',
         '/admin/site-catalog',
@@ -119,7 +120,7 @@ describe('adminPlusRoutes', () => {
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(14)
+    expect(adminRoutes).toHaveLength(15)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)

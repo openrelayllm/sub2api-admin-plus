@@ -10,11 +10,11 @@ export type SupplierAutomationAction =
   | 'check_channels'
 
 const supplierActionTasks: Record<SupplierAutomationAction, ExtensionTaskType[]> = {
-  full_collect: ['fetch_balance', 'fetch_groups', 'fetch_rates', 'fetch_announcements', 'fetch_usage_costs'],
+  full_collect: ['fetch_balance', 'fetch_groups', 'fetch_rates', 'fetch_usage_costs'],
   fetch_balance: ['fetch_balance'],
   fetch_groups: ['fetch_groups'],
   fetch_rates: ['fetch_rates'],
-  reconcile_costs: ['fetch_balance', 'fetch_announcements', 'fetch_usage_costs'],
+  reconcile_costs: ['fetch_balance', 'fetch_usage_costs'],
   check_channels: ['check_supplier_channels'],
   login_session: []
 }

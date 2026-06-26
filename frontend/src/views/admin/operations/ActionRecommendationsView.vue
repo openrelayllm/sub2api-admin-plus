@@ -5,7 +5,7 @@
         <div>
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">动作建议</h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
-            汇总供应商余额、健康、公告和利润信号，生成充值、切换、降权和排查建议。
+            汇总供应商余额、健康和利润信号，生成充值、切换、降权和排查建议。
           </p>
         </div>
         <div class="flex flex-wrap gap-2">
@@ -105,14 +105,12 @@ import {
   listActionRecommendations,
   listBalanceEvents,
   listHealthEvents,
-  listAnnouncementEvents,
   listRateSnapshots,
   listSuppliers,
   updateActionRecommendationStatus,
   type ActionRecommendation,
   type BalanceEvent,
   type HealthEvent,
-  type AnnouncementEvent,
   type RateSnapshot,
   type Supplier,
   type SupplierSignal
@@ -125,7 +123,6 @@ const generating = ref(false)
 const suppliers = ref<Supplier[]>([])
 const rateSnapshots = ref<RateSnapshot[]>([])
 const balanceEvents = ref<BalanceEvent[]>([])
-const announcementEvents = ref<AnnouncementEvent[]>([])
 const healthEvents = ref<HealthEvent[]>([])
 const recommendations = ref<ActionRecommendation[]>([])
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0, pages: 0 })
@@ -139,7 +136,6 @@ const switchableCount = computed(() => suppliers.value.filter((supplier) =>
 ).length)
 const openSignalCount = computed(() =>
   balanceEvents.value.filter((event) => event.status === 'open').length +
-  announcementEvents.value.filter((event) => event.status === 'open').length +
   healthEvents.value.filter((event) => event.status === 'open').length
 )
 
@@ -164,11 +160,10 @@ function statusClass(status: ActionRecommendation['status']): string {
 async function loadPage() {
   loading.value = true
   try {
-    const [supplierResult, rateResult, balanceResult, announcementResult, healthResult, actionResult] = await Promise.all([
+    const [supplierResult, rateResult, balanceResult, healthResult, actionResult] = await Promise.all([
       listSuppliers(),
       listRateSnapshots({ limit: 200 }),
       listBalanceEvents({ limit: 100 }),
-      listAnnouncementEvents({ limit: 100 }),
       listHealthEvents({ limit: 100 }),
       listActionRecommendations({
         page: pagination.page,
@@ -178,7 +173,6 @@ async function loadPage() {
     suppliers.value = supplierResult.items
     rateSnapshots.value = rateResult.items
     balanceEvents.value = balanceResult.items
-    announcementEvents.value = announcementResult.items
     healthEvents.value = healthResult.items
     recommendations.value = actionResult.items
     pagination.total = actionResult.total || 0
@@ -230,7 +224,6 @@ async function generate() {
     const result = await generateActions({
       suppliers: supplierSignals(),
       balance_events: balanceEvents.value.filter((event) => event.status === 'open'),
-      announcement_events: announcementEvents.value.filter((event) => event.status === 'open'),
       health_events: healthEvents.value.filter((event) => event.status === 'open'),
       min_profit_margin: 0.1
     })

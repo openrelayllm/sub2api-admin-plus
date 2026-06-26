@@ -1388,7 +1388,7 @@ func newOperationsHandlerTestRouterWithDependencies(dashboardURL string, apiBase
 	if autoSessionBalanceSync {
 		ingestBalanceService = balanceService
 	}
-	processor := extensionapp.NewIngestProcessorWithCipher(nil, ingestBalanceService, nil, nil, nil, sessionSvc, plainSessionCipher{}, nil)
+	processor := extensionapp.NewIngestProcessorWithCipher(nil, ingestBalanceService, nil, nil, sessionSvc, plainSessionCipher{}, nil)
 	extensionHandler := NewExtensionHandler(extensionapp.NewServiceWithDependencies(extensionapp.NewMemoryRepository(), processor, supplierSvc), supplierSvc)
 	actionHandler := NewActionHandler(actionsapp.NewRuleService())
 	notificationRepo := notificationsapp.NewMemoryRepository()

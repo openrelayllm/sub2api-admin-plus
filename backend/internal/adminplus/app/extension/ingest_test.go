@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
@@ -22,7 +21,6 @@ func TestCompleteTaskIngestsRateResult(t *testing.T) {
 	processor := NewIngestProcessor(
 		ratesapp.NewService(rateRepo),
 		balancesapp.NewService(balancesapp.NewMemoryRepository()),
-		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		usagecostsapp.NewService(usagecostsapp.NewMemoryRepository()),
 		sessionsapp.NewService(sessionsapp.NewMemoryRepository(), stubSessionCipher{}),
@@ -83,7 +81,7 @@ func TestCompleteTaskProcessesRegistrationResult(t *testing.T) {
 			"supplier_id":         int64(7),
 		},
 	}
-	processor := NewIngestProcessor(nil, nil, nil, nil, nil, nil).WithRegistrationProcessor(registration)
+	processor := NewIngestProcessor(nil, nil, nil, nil, nil).WithRegistrationProcessor(registration)
 	svc := NewServiceWithResultProcessor(NewMemoryRepository(), processor)
 	task, err := svc.CreateLeasedTask(context.Background(), CreateLeasedTaskInput{
 		Type:     adminplusdomain.ExtensionTaskTypeRegisterSupplier,
@@ -116,7 +114,7 @@ func TestFailTaskProcessesRegistrationManualVerification(t *testing.T) {
 			"manual_required":     true,
 		},
 	}
-	processor := NewIngestProcessor(nil, nil, nil, nil, nil, nil).WithRegistrationProcessor(registration)
+	processor := NewIngestProcessor(nil, nil, nil, nil, nil).WithRegistrationProcessor(registration)
 	svc := NewServiceWithResultProcessor(NewMemoryRepository(), processor)
 	task, err := svc.CreateLeasedTask(context.Background(), CreateLeasedTaskInput{
 		Type:     adminplusdomain.ExtensionTaskTypeRegisterSupplier,
@@ -147,7 +145,6 @@ func TestCompleteTaskIngestsUsageCostResult(t *testing.T) {
 	processor := NewIngestProcessor(
 		ratesapp.NewService(newIngestRateRepository()),
 		balancesapp.NewService(balancesapp.NewMemoryRepository()),
-		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		usagecostsapp.NewService(usageCostRepo),
 		sessionsapp.NewService(sessionsapp.NewMemoryRepository(), stubSessionCipher{}),
@@ -209,7 +206,6 @@ func TestCompleteTaskEncryptsCapturedSessionBundle(t *testing.T) {
 	processor := NewIngestProcessorWithCipher(
 		ratesapp.NewService(newIngestRateRepository()),
 		balancesapp.NewService(balancesapp.NewMemoryRepository()),
-		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		usagecostsapp.NewService(usagecostsapp.NewMemoryRepository()),
 		sessionsapp.NewService(sessionRepo, stubSessionCipher{}),
@@ -288,7 +284,6 @@ func TestCompleteTaskNormalizesNewAPIBrowserSessionWithoutSyncingBalance(t *test
 	processor := NewIngestProcessorWithCipher(
 		ratesapp.NewService(newIngestRateRepository()),
 		balancesapp.NewServiceWithDependencies(balancesapp.NewMemoryRepository(), nil, sessionService, probe),
-		announcementsapp.NewService(announcementsapp.NewMemoryRepository()),
 		healthapp.NewService(healthapp.NewMemoryRepository()),
 		usagecostsapp.NewService(usagecostsapp.NewMemoryRepository()),
 		sessionService,

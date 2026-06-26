@@ -2,6 +2,7 @@ package suppliergroups
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -11,14 +12,17 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+const lowRateOpportunityThreshold = 0.8
+
 type SyncResult struct {
-	SupplierID int64                            `json:"supplier_id"`
-	SystemType string                           `json:"system_type"`
-	Origin     string                           `json:"origin"`
-	APIBaseURL string                           `json:"api_base_url"`
-	Groups     []*adminplusdomain.SupplierGroup `json:"groups"`
-	SyncedAt   time.Time                        `json:"synced_at"`
-	Total      int                              `json:"total"`
+	SupplierID int64                                       `json:"supplier_id"`
+	SystemType string                                      `json:"system_type"`
+	Origin     string                                      `json:"origin"`
+	APIBaseURL string                                      `json:"api_base_url"`
+	Groups     []*adminplusdomain.SupplierGroup            `json:"groups"`
+	Events     []*adminplusdomain.SupplierGroupChangeEvent `json:"events,omitempty"`
+	SyncedAt   time.Time                                   `json:"synced_at"`
+	Total      int                                         `json:"total"`
 }
 
 type ListFilter struct {
@@ -28,10 +32,19 @@ type ListFilter struct {
 	Limit      int
 }
 
+type EventFilter struct {
+	SupplierID int64
+	Direction  adminplusdomain.SupplierGroupChangeDirection
+	LowRate    *bool
+	Limit      int
+}
+
 type Repository interface {
 	GetSupplierName(ctx context.Context, supplierID int64) (string, error)
 	UpsertMany(ctx context.Context, supplierID int64, groups []*adminplusdomain.SupplierGroup, seenAt time.Time) ([]*adminplusdomain.SupplierGroup, error)
 	List(ctx context.Context, filter ListFilter) ([]*adminplusdomain.SupplierGroup, error)
+	ListChangeEvents(ctx context.Context, filter EventFilter) ([]*adminplusdomain.SupplierGroupChangeEvent, error)
+	CreateChangeEvents(ctx context.Context, events []*adminplusdomain.SupplierGroupChangeEvent) ([]*adminplusdomain.SupplierGroupChangeEvent, error)
 }
 
 type SessionReader interface {
@@ -91,7 +104,15 @@ func (s *Service) Sync(ctx context.Context, supplierID int64) (*SyncResult, erro
 		}
 		groups = append(groups, group)
 	}
+	previous, err := s.repo.List(ctx, ListFilter{SupplierID: supplierID, Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
 	saved, err := s.repo.UpsertMany(ctx, supplierID, groups, seenAt)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.recordChangeEvents(ctx, previous, saved, seenAt)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +122,7 @@ func (s *Service) Sync(ctx context.Context, supplierID int64) (*SyncResult, erro
 		Origin:     result.Origin,
 		APIBaseURL: result.APIBaseURL,
 		Groups:     saved,
+		Events:     events,
 		SyncedAt:   seenAt,
 		Total:      len(saved),
 	}, nil
@@ -119,6 +141,28 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]*adminplusdoma
 	filter.Query = normalizeQuery(filter.Query)
 	filter.Limit = normalizeLimit(filter.Limit)
 	return s.repo.List(ctx, filter)
+}
+
+func (s *Service) ListChangeEvents(ctx context.Context, filter EventFilter) ([]*adminplusdomain.SupplierGroupChangeEvent, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("supplier group service is not configured")
+	}
+	if filter.SupplierID <= 0 {
+		return nil, badRequest("SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	if filter.Direction != "" && !filter.Direction.Valid() {
+		return nil, badRequest("SUPPLIER_GROUP_EVENT_DIRECTION_INVALID", "invalid supplier group event direction")
+	}
+	filter.Limit = normalizeEventLimit(filter.Limit)
+	return s.repo.ListChangeEvents(ctx, filter)
+}
+
+func (s *Service) recordChangeEvents(ctx context.Context, previous []*adminplusdomain.SupplierGroup, current []*adminplusdomain.SupplierGroup, createdAt time.Time) ([]*adminplusdomain.SupplierGroupChangeEvent, error) {
+	events := buildChangeEvents(previous, current, createdAt)
+	if len(events) == 0 {
+		return nil, nil
+	}
+	return s.repo.CreateChangeEvents(ctx, events)
 }
 
 func buildSupplierGroup(supplierID int64, supplierName string, in *ports.ProviderGroup, seenAt time.Time) *adminplusdomain.SupplierGroup {
@@ -170,6 +214,76 @@ func buildSupplierGroup(supplierID int64, supplierName string, in *ports.Provide
 	return group
 }
 
+func buildChangeEvents(previous []*adminplusdomain.SupplierGroup, current []*adminplusdomain.SupplierGroup, createdAt time.Time) []*adminplusdomain.SupplierGroupChangeEvent {
+	previousByExternalID := make(map[string]*adminplusdomain.SupplierGroup, len(previous))
+	for _, group := range previous {
+		if group == nil {
+			continue
+		}
+		previousByExternalID[group.ExternalGroupID] = group
+	}
+	events := make([]*adminplusdomain.SupplierGroupChangeEvent, 0)
+	for _, group := range current {
+		if group == nil || group.ID <= 0 {
+			continue
+		}
+		previousGroup := previousByExternalID[group.ExternalGroupID]
+		if previousGroup == nil || previousGroup.Status == adminplusdomain.SupplierGroupStatusMissing {
+			events = append(events, newChangeEvent(group, nil, adminplusdomain.SupplierGroupChangeDirectionNew, createdAt))
+			continue
+		}
+		oldRate := effectiveRate(previousGroup)
+		newRate := effectiveRate(group)
+		if oldRate <= 0 || newRate <= 0 || math.Abs(newRate-oldRate) < 0.000001 {
+			continue
+		}
+		direction := adminplusdomain.SupplierGroupChangeDirectionDecrease
+		if newRate > oldRate {
+			direction = adminplusdomain.SupplierGroupChangeDirectionIncrease
+		}
+		events = append(events, newChangeEvent(group, &oldRate, direction, createdAt))
+	}
+	return events
+}
+
+func newChangeEvent(group *adminplusdomain.SupplierGroup, oldRate *float64, direction adminplusdomain.SupplierGroupChangeDirection, createdAt time.Time) *adminplusdomain.SupplierGroupChangeEvent {
+	newRate := effectiveRate(group)
+	var changePercent *float64
+	if oldRate != nil && *oldRate > 0 {
+		value := (newRate - *oldRate) / *oldRate * 100
+		changePercent = &value
+	}
+	return &adminplusdomain.SupplierGroupChangeEvent{
+		SupplierID:                 group.SupplierID,
+		SupplierGroupID:            group.ID,
+		ExternalGroupID:            group.ExternalGroupID,
+		GroupName:                  group.Name,
+		ProviderFamily:             group.ProviderFamily,
+		Direction:                  direction,
+		OldEffectiveRateMultiplier: oldRate,
+		NewEffectiveRateMultiplier: newRate,
+		ChangePercent:              changePercent,
+		LowRate:                    newRate > 0 && newRate <= lowRateOpportunityThreshold,
+		CreatedAt:                  createdAt,
+	}
+}
+
+func effectiveRate(group *adminplusdomain.SupplierGroup) float64 {
+	if group == nil {
+		return 0
+	}
+	if group.EffectiveRateMultiplier > 0 {
+		return group.EffectiveRateMultiplier
+	}
+	if group.UserRateMultiplier != nil && *group.UserRateMultiplier > 0 {
+		return *group.UserRateMultiplier
+	}
+	if group.RateMultiplier > 0 {
+		return group.RateMultiplier
+	}
+	return 0
+}
+
 func normalizeProviderFamily(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
 	if v == "" {
@@ -189,6 +303,16 @@ func normalizeLimit(limit int) int {
 	}
 	if limit > 1000 {
 		return 1000
+	}
+	return limit
+}
+
+func normalizeEventLimit(limit int) int {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 200 {
+		return 200
 	}
 	return limit
 }

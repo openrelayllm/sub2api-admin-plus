@@ -314,7 +314,7 @@
           <div class="flex flex-col gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">业务规则 Checklist</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">控制余额、健康、倍率、公告和对账异常的通知策略。</p>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">控制余额、健康、倍率和对账异常的通知策略。</p>
             </div>
             <button type="button" class="btn btn-primary btn-sm" :disabled="saving" @click="saveSettings">
               {{ saving ? '保存中...' : '保存规则' }}
@@ -737,7 +737,6 @@ function eventGroupLabel(eventType: string): string {
     balance: '余额',
     health: '健康',
     rate: '倍率',
-    announcement: '公告',
     cost: '对账',
     system: '系统'
   }[group] || group

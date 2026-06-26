@@ -213,6 +213,7 @@ func (s *Service) ClaimTask(ctx context.Context, in ClaimTaskInput) (*adminplusd
 			return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
 		}
 	}
+	in.Types = supportedClaimTypes(in.Types)
 	now := s.now().UTC()
 	token, err := s.newToken()
 	if err != nil {
@@ -239,6 +240,9 @@ func (s *Service) buildTask(in CreateTaskInput) (*adminplusdomain.ExtensionTask,
 	if !in.Type.Valid() {
 		return nil, badRequest("EXTENSION_TASK_TYPE_INVALID", "invalid extension task type")
 	}
+	if in.Type == adminplusdomain.ExtensionTaskTypeFetchAnnouncements {
+		return nil, badRequest("EXTENSION_TASK_TYPE_REMOVED", "announcement collection has been removed")
+	}
 	maxAttempts := in.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
@@ -260,6 +264,30 @@ func (s *Service) buildTask(in CreateTaskInput) (*adminplusdomain.ExtensionTask,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}, nil
+}
+
+func supportedClaimTypes(types []adminplusdomain.ExtensionTaskType) []adminplusdomain.ExtensionTaskType {
+	if len(types) == 0 {
+		return []adminplusdomain.ExtensionTaskType{
+			adminplusdomain.ExtensionTaskTypeFetchRates,
+			adminplusdomain.ExtensionTaskTypeFetchGroups,
+			adminplusdomain.ExtensionTaskTypeFetchBalance,
+			adminplusdomain.ExtensionTaskTypeExportBills,
+			adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
+			adminplusdomain.ExtensionTaskTypeFetchHealth,
+			adminplusdomain.ExtensionTaskTypeCheckChannels,
+			adminplusdomain.ExtensionTaskTypeCaptureSession,
+			adminplusdomain.ExtensionTaskTypeRegisterSupplier,
+		}
+	}
+	out := make([]adminplusdomain.ExtensionTaskType, 0, len(types))
+	for _, taskType := range types {
+		if taskType == adminplusdomain.ExtensionTaskTypeFetchAnnouncements {
+			continue
+		}
+		out = append(out, taskType)
+	}
+	return out
 }
 
 func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) (*adminplusdomain.ExtensionTask, error) {

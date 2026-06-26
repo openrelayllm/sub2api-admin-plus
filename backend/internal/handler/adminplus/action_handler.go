@@ -19,11 +19,10 @@ func NewActionHandler(service *actionsapp.Service) *ActionHandler {
 }
 
 type generateActionsRequest struct {
-	Suppliers          []supplierSignalDTO                  `json:"suppliers" binding:"required"`
-	BalanceEvents      []*adminplusdomain.BalanceEvent      `json:"balance_events"`
-	AnnouncementEvents []*adminplusdomain.AnnouncementEvent `json:"announcement_events"`
-	HealthEvents       []*adminplusdomain.HealthEvent       `json:"health_events"`
-	MinProfitMargin    float64                              `json:"min_profit_margin"`
+	Suppliers       []supplierSignalDTO             `json:"suppliers" binding:"required"`
+	BalanceEvents   []*adminplusdomain.BalanceEvent `json:"balance_events"`
+	HealthEvents    []*adminplusdomain.HealthEvent  `json:"health_events"`
+	MinProfitMargin float64                         `json:"min_profit_margin"`
 }
 
 type supplierSignalDTO struct {
@@ -59,11 +58,10 @@ func (h *ActionHandler) Generate(c *gin.Context) {
 		})
 	}
 	result, err := h.service.Generate(c.Request.Context(), actionsapp.GenerateInput{
-		Suppliers:          suppliers,
-		BalanceEvents:      req.BalanceEvents,
-		AnnouncementEvents: req.AnnouncementEvents,
-		HealthEvents:       req.HealthEvents,
-		MinProfitMargin:    req.MinProfitMargin,
+		Suppliers:       suppliers,
+		BalanceEvents:   req.BalanceEvents,
+		HealthEvents:    req.HealthEvents,
+		MinProfitMargin: req.MinProfitMargin,
 	})
 	if response.ErrorFrom(c, err) {
 		return

@@ -30,7 +30,6 @@ export function planTaskTypes(taskType: string): ExtensionTaskType[] {
     'supplier.balance.sync': ['fetch_balance'],
     'supplier.groups.sync': ['fetch_groups'],
     'supplier.rates.sync': ['fetch_rates'],
-    'supplier.announcements.sync': ['fetch_announcements'],
     'supplier.usage_costs.sync': ['fetch_usage_costs'],
     'supplier.session.probe': ['fetch_health'],
     'supplier.channels.check': ['check_supplier_channels']
@@ -46,7 +45,6 @@ export function taskLabel(value: string): string {
     'supplier.funding_orders.sync': '充值账单',
     'supplier.redeem_orders.sync': '兑换账单',
     'supplier.usage_costs.sync': '用量消耗',
-    'supplier.announcements.sync': '公告/充值入口',
     'supplier.session.probe': '会话探测',
     'supplier.channels.check': '渠道检测',
     'supplier.costs.reconcile': '成本对账',
@@ -55,7 +53,6 @@ export function taskLabel(value: string): string {
     fetch_balance: '余额同步',
     fetch_groups: '分组同步',
     fetch_rates: '倍率同步',
-    fetch_announcements: '公告/充值入口',
     fetch_usage_costs: '用量消耗',
     fetch_health: '会话探测',
     check_supplier_channels: '渠道检测',

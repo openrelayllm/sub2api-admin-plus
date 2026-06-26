@@ -14,6 +14,91 @@ export interface AdminPlusPaginationParams {
   limit?: number
 }
 
+export type BackupStorageProvider = 'cloudflare_r2' | 's3' | 'aliyun_oss'
+export type BackupRecordStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+export interface BackupS3Config {
+  provider: BackupStorageProvider
+  endpoint: string
+  region: string
+  bucket: string
+  access_key_id: string
+  secret_access_key?: string
+  secret_configured?: boolean
+  prefix: string
+  force_path_style: boolean
+}
+
+export interface BackupScheduleConfig {
+  enabled: boolean
+  cron_expr: string
+  retain_days: number
+  retain_count: number
+}
+
+export interface ServerRenewalStatus {
+  enabled: boolean
+  server_name: string
+  provider: string
+  expires_at: string
+  reminder_days: number[]
+  last_notified_at?: string
+  last_notified_key?: string
+  days_remaining: number
+  state: 'unconfigured' | 'active' | 'reminder_due' | 'due_today' | 'expired' | string
+  next_reminder?: string
+}
+
+export interface HistoryCleanupSettings {
+  enabled: boolean
+  retain_days: number
+  cron_expr: string
+  description?: string
+}
+
+export interface BackupSettings {
+  s3: BackupS3Config
+  schedule: BackupScheduleConfig
+  renewal: ServerRenewalStatus
+  cleanup: HistoryCleanupSettings
+}
+
+export interface BackupSettingsUpdatePayload {
+  s3?: BackupS3Config
+  schedule?: BackupScheduleConfig
+  renewal?: Partial<ServerRenewalStatus>
+  cleanup?: HistoryCleanupSettings
+}
+
+export interface BackupRecord {
+  id: string
+  status: BackupRecordStatus
+  backup_type: string
+  file_name: string
+  s3_key: string
+  size_bytes: number
+  triggered_by: string
+  error_message?: string
+  started_at: string
+  finished_at?: string
+  expires_at?: string
+  progress?: string
+  restore_status?: string
+  restore_error?: string
+  restored_at?: string
+}
+
+export interface BackupStatus {
+  storage_configured: boolean
+  storage_provider: BackupStorageProvider | string
+  schedule: BackupScheduleConfig
+  latest_success?: BackupRecord
+  latest_failure?: BackupRecord
+  running?: BackupRecord
+  renewal: ServerRenewalStatus
+  cleanup: HistoryCleanupSettings
+}
+
 export type ProxySubscriptionType = 'clash' | 'shadowrocket' | 'v2ray_ss'
 export type ProxyRefreshStatus = 'never' | 'succeeded' | 'failed' | 'invalid'
 export type ProxyNodeHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'suspect' | 'unhealthy' | 'disabled'
@@ -796,12 +881,28 @@ export interface SupplierGroup {
   updated_at: string
 }
 
+export interface SupplierGroupChangeEvent {
+  id: number
+  supplier_id: number
+  supplier_group_id: number
+  external_group_id: string
+  group_name: string
+  provider_family: string
+  direction: 'new' | 'increase' | 'decrease'
+  old_effective_rate_multiplier?: number | null
+  new_effective_rate_multiplier: number
+  change_percent?: number | null
+  low_rate: boolean
+  created_at: string
+}
+
 export interface SyncSupplierGroupsResponse {
   supplier_id: number
   system_type: string
   origin: string
   api_base_url?: string
   groups: SupplierGroup[]
+  events?: SupplierGroupChangeEvent[]
   synced_at: string
   total: number
 }
@@ -1141,7 +1242,7 @@ export interface LocalAccountUsageSummary {
 export interface ExtensionTask {
   id: number
   supplier_id: number
-  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_announcements' | 'fetch_usage_costs' | 'fetch_health' | 'check_supplier_channels' | 'capture_supplier_session' | 'register_supplier_account'
+  type: 'fetch_rates' | 'fetch_groups' | 'fetch_balance' | 'fetch_usage_costs' | 'fetch_health' | 'check_supplier_channels' | 'capture_supplier_session' | 'register_supplier_account'
   schedule_key?: string
   status: 'pending' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   priority: number
@@ -2047,6 +2148,11 @@ export async function listSupplierGroups(supplierId: number, params?: { status?:
   return data
 }
 
+export async function listSupplierGroupChangeEvents(supplierId: number, params?: { direction?: SupplierGroupChangeEvent['direction'] | ''; low_rate?: boolean } & AdminPlusPaginationParams): Promise<AdminPlusListResponse<SupplierGroupChangeEvent>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<SupplierGroupChangeEvent>>(`/admin-plus/suppliers/${supplierId}/groups/events`, { params })
+  return data
+}
+
 export async function syncSupplierGroups(supplierId: number): Promise<SubmitProvisionJobResponse> {
   const { data } = await apiClient.post<SubmitProvisionJobResponse>(`/admin-plus/suppliers/${supplierId}/groups/sync`, {}, {
     headers: { 'Idempotency-Key': createAdminPlusIdempotencyKey('supplier-groups-sync') }
@@ -2165,47 +2271,6 @@ export async function listRateSnapshots(params?: { supplier_id?: number; model?:
 
 export async function listBalanceEvents(params?: { supplier_id?: number; status?: string } & AdminPlusPaginationParams) {
   const { data } = await apiClient.get<AdminPlusListResponse<BalanceEvent>>('/admin-plus/balances/events', { params })
-  return data
-}
-
-export async function recordAnnouncement(payload: {
-  supplier_id: number
-  source?: string
-  type: AnnouncementEvent['type']
-  title: string
-  description?: string
-  currency?: string
-  min_recharge_cents?: number
-  bonus_percent?: number | null
-  discount_percent?: number | null
-  runtime_status?: SupplierRuntimeStatus
-  balance_cents?: number
-  raw_payload?: Record<string, unknown>
-}) {
-  const { data } = await apiClient.post<AnnouncementEvent>('/admin-plus/announcements', payload)
-  return data
-}
-
-export async function syncSupplierAnnouncements(supplierId: number) {
-  const { data } = await apiClient.post<{
-    supplier_id: number
-    system_type: string
-    origin: string
-    api_base_url: string
-    synced_at: string
-    total: number
-    events: AnnouncementEvent[]
-  }>(`/admin-plus/suppliers/${supplierId}/announcements/sync`)
-  return data
-}
-
-export async function listAnnouncementEvents(params?: { supplier_id?: number; status?: string; recommendation?: string } & AdminPlusPaginationParams) {
-  const { data } = await apiClient.get<AdminPlusListResponse<AnnouncementEvent>>('/admin-plus/announcements', { params })
-  return data
-}
-
-export async function acknowledgeAnnouncementEvent(id: number): Promise<AnnouncementEvent> {
-  const { data } = await apiClient.patch<AnnouncementEvent>(`/admin-plus/announcements/${id}/ack`)
   return data
 }
 
@@ -2688,7 +2753,6 @@ export async function bulkAddDiscoveryCandidatesToCatalogStream(
 export async function generateActions(payload: {
   suppliers: SupplierSignal[]
   balance_events?: BalanceEvent[]
-  announcement_events?: AnnouncementEvent[]
   health_events?: HealthEvent[]
   min_profit_margin?: number
 }) {
@@ -2969,6 +3033,66 @@ export async function downloadProxyAuditEvents(params?: {
   return data
 }
 
+export async function getBackupStatus(): Promise<BackupStatus> {
+  const { data } = await apiClient.get<BackupStatus>('/admin-plus/backups/status')
+  return data
+}
+
+export async function getBackupSettings(): Promise<BackupSettings> {
+  const { data } = await apiClient.get<BackupSettings>('/admin-plus/backups/settings')
+  return data
+}
+
+export async function updateBackupSettings(payload: BackupSettingsUpdatePayload): Promise<BackupSettings> {
+  const { data } = await apiClient.put<BackupSettings>('/admin-plus/backups/settings', payload)
+  return data
+}
+
+export async function testBackupStorage(payload: BackupS3Config): Promise<{ ok: boolean }> {
+  const { data } = await apiClient.post<{ ok: boolean }>('/admin-plus/backups/test-storage', payload)
+  return data
+}
+
+export async function createBackup(payload?: { expire_days?: number }): Promise<BackupRecord> {
+  const { data } = await apiClient.post<BackupRecord>('/admin-plus/backups', payload || {})
+  return data
+}
+
+export async function listBackups(): Promise<BackupRecord[]> {
+  const { data } = await apiClient.get<BackupRecord[]>('/admin-plus/backups')
+  return data
+}
+
+export async function getBackup(id: string): Promise<BackupRecord> {
+  const { data } = await apiClient.get<BackupRecord>(`/admin-plus/backups/${id}`)
+  return data
+}
+
+export async function restoreBackup(id: string, confirmation: string): Promise<BackupRecord> {
+  const { data } = await apiClient.post<BackupRecord>(`/admin-plus/backups/${id}/restore`, { confirmation })
+  return data
+}
+
+export async function getBackupDownloadURL(id: string): Promise<{ url: string }> {
+  const { data } = await apiClient.get<{ url: string }>(`/admin-plus/backups/${id}/download-url`)
+  return data
+}
+
+export async function deleteBackup(id: string): Promise<{ deleted: boolean }> {
+  const { data } = await apiClient.delete<{ deleted: boolean }>(`/admin-plus/backups/${id}`)
+  return data
+}
+
+export async function getServerRenewal(): Promise<ServerRenewalStatus> {
+  const { data } = await apiClient.get<ServerRenewalStatus>('/admin-plus/server-renewal')
+  return data
+}
+
+export async function updateServerRenewal(payload: Partial<ServerRenewalStatus>): Promise<ServerRenewalStatus> {
+  const { data } = await apiClient.put<ServerRenewalStatus>('/admin-plus/server-renewal', payload)
+  return data
+}
+
 export const adminPlusAPI = {
   listSuppliers,
   createSupplier,
@@ -2988,6 +3112,7 @@ export const adminPlusAPI = {
   pauseSupplierChannelScheduling,
   upsertSupplierBrowserSession,
   listSupplierGroups,
+  listSupplierGroupChangeEvents,
   syncSupplierGroups,
   listSupplierKeys,
   ensureSupplierKeys,
@@ -3006,10 +3131,6 @@ export const adminPlusAPI = {
   deleteSupplierAccount,
   listRateSnapshots,
   listBalanceEvents,
-  recordAnnouncement,
-  syncSupplierAnnouncements,
-  listAnnouncementEvents,
-  acknowledgeAnnouncementEvent,
   listHealthEvents,
   importUsageCostLines,
   syncSupplierUsageCosts,
@@ -3105,6 +3226,18 @@ export const adminPlusAPI = {
   reportProxyAssignmentFailure,
   listProxyAuditEvents,
   downloadProxyAuditEvents,
+  getBackupStatus,
+  getBackupSettings,
+  updateBackupSettings,
+  testBackupStorage,
+  createBackup,
+  listBackups,
+  getBackup,
+  restoreBackup,
+  getBackupDownloadURL,
+  deleteBackup,
+  getServerRenewal,
+  updateServerRenewal,
   listAdminPlusSystemLogs
 }
 

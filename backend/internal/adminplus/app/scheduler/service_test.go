@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
@@ -79,10 +78,9 @@ func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
 	groupSyncer := &stubGroupSyncer{total: 2}
 	rateSyncer := &stubRateSyncer{total: 3}
 	balanceSyncer := &stubBalanceSyncer{total: 1}
-	announcementSyncer := &stubAnnouncementSyncer{total: 5}
 	healthSyncer := &stubHealthSyncer{total: 1}
 	usageCostSyncer := &stubUsageCostSyncer{total: 4}
-	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, announcementSyncer, healthSyncer, usageCostSyncer, nil)
+	service := NewServiceWithDependencies(supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, healthSyncer, usageCostSyncer, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -104,16 +102,15 @@ func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
 			adminplusdomain.ExtensionTaskTypeFetchGroups,
 			adminplusdomain.ExtensionTaskTypeFetchRates,
 			adminplusdomain.ExtensionTaskTypeFetchBalance,
-			adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 			adminplusdomain.ExtensionTaskTypeFetchHealth,
 			adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 0, run.CreatedCount)
-	require.Equal(t, 6, run.EligibleCount)
+	require.Equal(t, 5, run.EligibleCount)
 	require.Equal(t, 0, run.SkippedCount)
-	require.Len(t, run.Items, 6)
+	require.Len(t, run.Items, 5)
 	for _, item := range run.Items {
 		require.Equal(t, actionDirectSync, item.Action)
 		require.True(t, item.Synced)
@@ -124,7 +121,6 @@ func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
 	require.Equal(t, 1, groupSyncer.calls)
 	require.Equal(t, 1, rateSyncer.calls)
 	require.Equal(t, 1, balanceSyncer.calls)
-	require.Equal(t, 1, announcementSyncer.calls)
 	require.Equal(t, 1, healthSyncer.calls)
 	require.Equal(t, 1, usageCostSyncer.calls)
 	require.Equal(t, time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC), usageCostSyncer.startedAt)
@@ -181,7 +177,7 @@ func TestServiceRunDefaultsToBalanceRefreshTask(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	balanceSyncer := &stubBalanceSyncer{total: 1}
-	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil, nil)
+	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -214,6 +210,47 @@ func TestServiceRunDefaultsToBalanceRefreshTask(t *testing.T) {
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
 	require.NoError(t, err)
 	require.Empty(t, tasks)
+}
+
+func TestServiceRunFiltersRemovedAnnouncementTask(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	service := NewServiceWithDependencies(
+		supplierService,
+		extensionService,
+		nil,
+		nil,
+		&stubBalanceSyncer{total: 1},
+		nil,
+		nil,
+		nil,
+	)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+
+	createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:            "relay-a",
+		Kind:            adminplusdomain.SupplierKindRelay,
+		Type:            adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:   adminplusdomain.SupplierRuntimeStatusActive,
+		HealthStatus:    adminplusdomain.SupplierHealthStatusNormal,
+		DashboardURL:    "https://relay-a.example.com",
+		BalanceCents:    500_00,
+		BalanceCurrency: "CNY",
+	})
+
+	run, err := service.Run(context.Background(), RunInput{
+		Mode: "manual",
+		TaskTypes: []adminplusdomain.ExtensionTaskType{
+			adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+			adminplusdomain.ExtensionTaskTypeFetchBalance,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, run.Items, 1)
+	require.Equal(t, adminplusdomain.ExtensionTaskTypeFetchBalance, run.Items[0].TaskType)
 }
 
 func TestServiceCenterSurfacesPlansSupplierStatusesAndActions(t *testing.T) {
@@ -266,7 +303,7 @@ func TestServiceUpdatePlanConfigPersistsUserSchedule(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil, nil)
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -299,7 +336,7 @@ func TestServicePlanStatsOnlyCountsIssuesAfterLastSuccess(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil, nil)
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil)
 	beforeSuccess := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	lastSuccess := time.Date(2026, 6, 20, 10, 5, 0, 0, time.UTC)
 	afterSuccess := time.Date(2026, 6, 20, 10, 8, 0, 0, time.UTC)
@@ -322,7 +359,7 @@ func TestServiceCenterStatusDoesNotExposePastNextRunAt(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil, nil)
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil)
 	now := time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	service.now = func() time.Time {
 		return now
@@ -353,7 +390,7 @@ func TestServiceEnqueueRunDefersExecutionUntilWorkerClaimsStep(t *testing.T) {
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	balanceSyncer := &stubBalanceSyncer{total: 1}
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil, nil)
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -404,7 +441,7 @@ func TestServiceProcessNextRefreshesMissingSessionBeforeBalanceSync(t *testing.T
 		}},
 	}
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil, nil).
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil).
 		WithSessionRefresher(sessionRefresher)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
@@ -448,7 +485,7 @@ func TestServiceProcessNextMarksManualRequiredWhenAutoLoginNeedsBrowser(t *testi
 		loginErr:    infraerrors.New(http.StatusConflict, "BROWSER_CHALLENGE_REQUIRED", "supplier direct login requires browser verification"),
 	}
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil, nil).
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil).
 		WithSessionRefresher(sessionRefresher)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
@@ -502,7 +539,7 @@ func TestServiceProcessNextRefreshesSessionOnceAfterSyncExpired(t *testing.T) {
 		}},
 	}
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil, nil).
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil).
 		WithSessionRefresher(sessionRefresher)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
@@ -541,7 +578,7 @@ func TestServiceRetryStepRequeuesFailedStep(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, &stubBalanceSyncer{total: 1}, nil, nil, nil, nil)
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, &stubBalanceSyncer{total: 1}, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -578,7 +615,7 @@ func TestServiceCancelAndRetryFailedRunSteps(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
 	repo := newFakeSchedulerRepository()
-	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, &stubBalanceSyncer{total: 1}, nil, nil, nil, nil)
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, &stubBalanceSyncer{total: 1}, nil, nil, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
 	}
@@ -624,7 +661,6 @@ func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
 		&stubGroupSyncer{total: 1},
 		&stubRateSyncer{total: 1},
 		&stubBalanceSyncer{total: 1},
-		&stubAnnouncementSyncer{total: 1},
 		&stubHealthSyncer{total: 1},
 		nil,
 		nil,
@@ -652,14 +688,13 @@ func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
 			adminplusdomain.ExtensionTaskTypeFetchRates,
 			adminplusdomain.ExtensionTaskTypeFetchGroups,
 			adminplusdomain.ExtensionTaskTypeFetchBalance,
-			adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
 			adminplusdomain.ExtensionTaskTypeFetchHealth,
 			adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 0, run.CreatedCount)
-	require.Equal(t, 4, run.EligibleCount)
+	require.Equal(t, 3, run.EligibleCount)
 	require.Equal(t, 2, run.SkippedCount)
 
 	reasons := make(map[adminplusdomain.ExtensionTaskType]string)
@@ -669,11 +704,10 @@ func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
 	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchGroups])
 	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchRates])
 	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchBalance])
-	require.Empty(t, reasons[adminplusdomain.ExtensionTaskTypeFetchAnnouncements])
 	require.Equal(t, "not_switch_eligible", reasons[adminplusdomain.ExtensionTaskTypeFetchHealth])
 	require.Equal(t, "not_switch_eligible", reasons[adminplusdomain.ExtensionTaskTypeFetchUsageCosts])
 	for _, item := range run.Items {
-		if item.TaskType == adminplusdomain.ExtensionTaskTypeFetchGroups || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchRates || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchBalance || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchAnnouncements {
+		if item.TaskType == adminplusdomain.ExtensionTaskTypeFetchGroups || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchRates || item.TaskType == adminplusdomain.ExtensionTaskTypeFetchBalance {
 			require.Equal(t, actionDirectSync, item.Action)
 			require.True(t, item.Synced)
 		}
@@ -782,16 +816,6 @@ func (s *stubSessionRefresher) Login(_ context.Context, _ sessionsapp.LoginInput
 		return s.loginResult, nil
 	}
 	return &sessionsapp.LoginResult{Session: &adminplusdomain.SupplierBrowserSession{}}, nil
-}
-
-type stubAnnouncementSyncer struct {
-	calls int
-	total int
-}
-
-func (s *stubAnnouncementSyncer) SyncFromSession(_ context.Context, in announcementsapp.SyncFromSessionInput) (*announcementsapp.SyncFromSessionResult, error) {
-	s.calls++
-	return &announcementsapp.SyncFromSessionResult{SupplierID: in.SupplierID, Total: s.total}, nil
 }
 
 type stubHealthSyncer struct {

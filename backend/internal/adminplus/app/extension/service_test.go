@@ -48,6 +48,41 @@ func TestServiceClaimTaskUsesPriorityAndCreatesLease(t *testing.T) {
 	require.NotNil(t, task.LeaseExpiresAt)
 }
 
+func TestServiceCreateTaskRejectsRemovedAnnouncementTask(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+
+	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
+		SupplierID: 1,
+		Type:       adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "EXTENSION_TASK_TYPE_REMOVED", infraerrors.Reason(err))
+}
+
+func TestServiceClaimTaskSkipsHistoricalAnnouncementTasks(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	svc.newToken = func() (string, error) { return "lease-token", nil }
+	_, err := repo.CreateTask(context.Background(), &adminplusdomain.ExtensionTask{
+		SupplierID:     1,
+		Type:           adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+		Status:         adminplusdomain.ExtensionTaskStatusPending,
+		MaxAttempts:    3,
+		AvailableAfter: now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.ClaimTask(context.Background(), ClaimTaskInput{DeviceID: "chrome-1"})
+
+	require.Error(t, err)
+	require.Equal(t, "EXTENSION_TASK_NOT_AVAILABLE", infraerrors.Reason(err))
+}
+
 func TestServiceHeartbeatAndCompleteRequireLease(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewService(repo)
@@ -123,7 +158,7 @@ func TestServiceFailTaskRetriesUntilMaxAttempts(t *testing.T) {
 	svc.newToken = func() (string, error) { return "lease-token", nil }
 	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
 		SupplierID:  1,
-		Type:        adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+		Type:        adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		MaxAttempts: 2,
 	})
 	require.NoError(t, err)
@@ -164,7 +199,7 @@ func TestServiceFailTaskRecordsDiagnosticsWithoutLeaseToken(t *testing.T) {
 	svc.newToken = func() (string, error) { return "lease-token", nil }
 	_, err := svc.CreateTask(context.Background(), CreateTaskInput{
 		SupplierID:  1,
-		Type:        adminplusdomain.ExtensionTaskTypeFetchAnnouncements,
+		Type:        adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		MaxAttempts: 1,
 	})
 	require.NoError(t, err)

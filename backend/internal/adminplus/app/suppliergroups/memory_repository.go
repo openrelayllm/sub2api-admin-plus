@@ -12,15 +12,19 @@ import (
 )
 
 type MemoryRepository struct {
-	mu     sync.Mutex
-	nextID int64
-	items  map[int64]*adminplusdomain.SupplierGroup
+	mu          sync.Mutex
+	nextID      int64
+	nextEventID int64
+	items       map[int64]*adminplusdomain.SupplierGroup
+	events      map[int64]*adminplusdomain.SupplierGroupChangeEvent
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		nextID: 1,
-		items:  make(map[int64]*adminplusdomain.SupplierGroup),
+		nextID:      1,
+		nextEventID: 1,
+		items:       make(map[int64]*adminplusdomain.SupplierGroup),
+		events:      make(map[int64]*adminplusdomain.SupplierGroupChangeEvent),
 	}
 }
 
@@ -98,6 +102,53 @@ func (r *MemoryRepository) List(_ context.Context, filter ListFilter) ([]*adminp
 	return items, nil
 }
 
+func (r *MemoryRepository) CreateChangeEvents(_ context.Context, events []*adminplusdomain.SupplierGroupChangeEvent) ([]*adminplusdomain.SupplierGroupChangeEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	out := make([]*adminplusdomain.SupplierGroupChangeEvent, 0, len(events))
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		cp := cloneSupplierGroupChangeEvent(event)
+		cp.ID = r.nextEventID
+		r.nextEventID++
+		r.events[cp.ID] = cp
+		out = append(out, cloneSupplierGroupChangeEvent(cp))
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) ListChangeEvents(_ context.Context, filter EventFilter) ([]*adminplusdomain.SupplierGroupChangeEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	items := make([]*adminplusdomain.SupplierGroupChangeEvent, 0)
+	for _, event := range r.events {
+		if event.SupplierID != filter.SupplierID {
+			continue
+		}
+		if filter.Direction != "" && event.Direction != filter.Direction {
+			continue
+		}
+		if filter.LowRate != nil && event.LowRate != *filter.LowRate {
+			continue
+		}
+		items = append(items, cloneSupplierGroupChangeEvent(event))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if filter.Limit > 0 && len(items) > filter.Limit {
+		items = items[:filter.Limit]
+	}
+	return items, nil
+}
+
 func sortSupplierGroups(items []*adminplusdomain.SupplierGroup) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].LastSeenAt.Equal(items[j].LastSeenAt) {
@@ -137,6 +188,22 @@ func cloneSupplierGroup(in *adminplusdomain.SupplierGroup) *adminplusdomain.Supp
 		for key, value := range in.RawPayload {
 			out.RawPayload[key] = value
 		}
+	}
+	return &out
+}
+
+func cloneSupplierGroupChangeEvent(in *adminplusdomain.SupplierGroupChangeEvent) *adminplusdomain.SupplierGroupChangeEvent {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.OldEffectiveRateMultiplier != nil {
+		value := *in.OldEffectiveRateMultiplier
+		out.OldEffectiveRateMultiplier = &value
+	}
+	if in.ChangePercent != nil {
+		value := *in.ChangePercent
+		out.ChangePercent = &value
 	}
 	return &out
 }

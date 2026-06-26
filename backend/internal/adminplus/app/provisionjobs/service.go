@@ -386,7 +386,7 @@ func (s *Service) executeJobPayload(ctx context.Context, job *adminplusdomain.Su
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"total": result.Total, "synced_at": result.SyncedAt}, nil
+		return map[string]any{"total": result.Total, "events": len(result.Events), "synced_at": result.SyncedAt}, nil
 	case adminplusdomain.SupplierProvisionJobTypeProvisionGroupKey:
 		if s.keyProvisioner == nil {
 			return nil, internalError("supplier key provisioner is not configured")

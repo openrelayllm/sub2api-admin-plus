@@ -3,7 +3,9 @@ package proxy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/stretchr/testify/require"
@@ -86,6 +88,50 @@ rules:
 	require.True(t, filepath.IsAbs(result.LogPath))
 }
 
+func TestConfigureSlotPassesWritableMihomoHomeAndConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "args.log")
+	binaryPath := filepath.Join(tmpDir, "mihomo-shim")
+	script := "#!/usr/bin/env sh\n" +
+		"printf 'args=%s\\n' \"$*\" > " + shellQuote(logPath) + "\n" +
+		"printf 'home=%s\\nxdg=%s\\n' \"$HOME\" \"$XDG_CONFIG_HOME\" >> " + shellQuote(logPath) + "\n"
+	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
+
+	runtime := NewLocalMihomoRuntime(RuntimeConfig{BinaryPath: binaryPath, RuntimeDir: filepath.Join(tmpDir, "runtime")})
+	result, err := runtime.ConfigureSlot(
+		t.Context(),
+		&adminplusdomain.ProxyRuntimeSlot{ID: 1, SlotKey: "proxy-slot-001"},
+		&adminplusdomain.ProxyNode{DisplayName: "香港Y01"},
+		[]byte(`
+proxies:
+  - name: "香港Y01"
+    type: ss
+    server: hk.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+proxy-groups:
+  - name: GLOBAL
+    type: select
+    proxies:
+      - "香港Y01"
+`),
+		"runtime-secret",
+	)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(logPath)
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+
+	content, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	slotDir := filepath.Dir(result.ConfigPath)
+	require.Contains(t, string(content), "-d "+slotDir)
+	require.Contains(t, string(content), "home="+slotDir)
+	require.Contains(t, string(content), "xdg="+slotDir)
+}
+
 func TestMihomoLogSummaryReturnsLastWarningOrError(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "mihomo.log")
 	require.NoError(t, os.WriteFile(logPath, []byte(`
@@ -95,4 +141,8 @@ time="2026-06-26T19:00:02+08:00" level=info msg="shutdown"
 `), 0o600))
 
 	require.Contains(t, mihomoLogSummary(logPath), "127.127.127.5:19273")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

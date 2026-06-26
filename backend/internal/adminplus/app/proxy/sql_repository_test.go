@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,4 +56,23 @@ func TestSQLRepositoryCenterStatusScansMetrics(t *testing.T) {
 	require.Equal(t, 11, status.EgressVerifyFailures24h)
 	require.Equal(t, 12, status.CompletedAssignments24h)
 	require.Equal(t, 125, status.AvgAssignmentSeconds24h)
+}
+
+func TestSQLRepositoryCreateRuntimeSlotMapsSlotKeyConflict(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("INSERT INTO admin_plus_proxy_runtime_slots").
+		WillReturnError(&pq.Error{Code: "23505", Constraint: "idx_admin_plus_proxy_runtime_slots_key"})
+
+	_, err = NewSQLRepository(db).CreateRuntimeSlot(context.Background(), &adminplusdomain.ProxyRuntimeSlot{
+		SlotKey:        "proxy-slot-001",
+		Status:         adminplusdomain.ProxyRuntimeSlotIdle,
+		MixedPort:      17890,
+		ControllerPort: 19090,
+	}, "secret")
+	require.Error(t, err)
+	require.Equal(t, "PROXY_RUNTIME_SLOT_KEY_EXISTS", infraerrors.Reason(err))
+	require.NoError(t, mock.ExpectationsWereMet())
 }

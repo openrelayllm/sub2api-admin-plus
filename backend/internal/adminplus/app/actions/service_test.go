@@ -39,32 +39,6 @@ func TestServiceGenerateSwitchesFromDepletedActiveSupplierToEligibleCandidate(t 
 	require.Equal(t, int64(2), *switchAction.TargetSupplierID)
 }
 
-func TestServiceGenerateDoesNotSwitchToMonitorOnlyAnnouncementSupplier(t *testing.T) {
-	svc := NewRuleService()
-
-	result, err := svc.Generate(context.Background(), GenerateInput{
-		Suppliers: []SupplierSignal{
-			{
-				SupplierID:    7,
-				RuntimeStatus: adminplusdomain.SupplierRuntimeStatusMonitorOnly,
-				HealthStatus:  adminplusdomain.SupplierHealthStatusNormal,
-				BalanceCents:  0,
-			},
-		},
-		AnnouncementEvents: []*adminplusdomain.AnnouncementEvent{
-			{
-				SupplierID:     7,
-				Recommendation: adminplusdomain.AnnouncementRecommendationRechargeToUnlock,
-				Status:         adminplusdomain.AnnouncementStatusOpen,
-			},
-		},
-	})
-
-	require.NoError(t, err)
-	requireAction(t, result.Items, adminplusdomain.ActionTypeRechargeSupplier, "announcement_recharge_to_unlock")
-	requireNoAction(t, result.Items, adminplusdomain.ActionTypeSwitchSupplier)
-}
-
 func TestServiceGeneratePausesAndSwitchesFromFailingActiveSupplier(t *testing.T) {
 	svc := NewRuleService()
 

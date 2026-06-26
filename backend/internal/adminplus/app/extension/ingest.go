@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	announcementsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/announcements"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
@@ -21,14 +20,13 @@ type ResultProcessor interface {
 }
 
 type IngestProcessor struct {
-	rates         *ratesapp.Service
-	balances      *balancesapp.Service
-	announcements *announcementsapp.Service
-	health        *healthapp.Service
-	billing       *usagecostsapp.Service
-	sessions      *sessionsapp.Service
-	cipher        SessionCipher
-	registration  RegistrationResultProcessor
+	rates        *ratesapp.Service
+	balances     *balancesapp.Service
+	health       *healthapp.Service
+	billing      *usagecostsapp.Service
+	sessions     *sessionsapp.Service
+	cipher       SessionCipher
+	registration RegistrationResultProcessor
 }
 
 type SessionCipher interface {
@@ -43,32 +41,29 @@ type RegistrationResultProcessor interface {
 func NewIngestProcessor(
 	rates *ratesapp.Service,
 	balances *balancesapp.Service,
-	announcements *announcementsapp.Service,
 	health *healthapp.Service,
 	billing *usagecostsapp.Service,
 	sessions *sessionsapp.Service,
 ) *IngestProcessor {
 	return &IngestProcessor{
-		rates:         rates,
-		balances:      balances,
-		announcements: announcements,
-		health:        health,
-		billing:       billing,
-		sessions:      sessions,
+		rates:    rates,
+		balances: balances,
+		health:   health,
+		billing:  billing,
+		sessions: sessions,
 	}
 }
 
 func NewIngestProcessorWithCipher(
 	rates *ratesapp.Service,
 	balances *balancesapp.Service,
-	announcements *announcementsapp.Service,
 	health *healthapp.Service,
 	billing *usagecostsapp.Service,
 	sessions *sessionsapp.Service,
 	cipher SessionCipher,
 	registration RegistrationResultProcessor,
 ) *IngestProcessor {
-	processor := NewIngestProcessor(rates, balances, announcements, health, billing, sessions)
+	processor := NewIngestProcessor(rates, balances, health, billing, sessions)
 	processor.cipher = cipher
 	processor.registration = registration
 	return processor
@@ -94,7 +89,7 @@ func (p *IngestProcessor) ProcessTaskResult(ctx context.Context, task *adminplus
 	case adminplusdomain.ExtensionTaskTypeFetchBalance:
 		return p.processBalance(ctx, task, result)
 	case adminplusdomain.ExtensionTaskTypeFetchAnnouncements:
-		return p.processAnnouncements(ctx, task, result)
+		return map[string]any{"skipped": "announcement_ingest_removed"}, nil
 	case adminplusdomain.ExtensionTaskTypeFetchHealth:
 		return p.processHealth(ctx, task, result)
 	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts, adminplusdomain.ExtensionTaskTypeExportBills:
@@ -232,45 +227,6 @@ func (p *IngestProcessor) processBalance(ctx context.Context, task *adminplusdom
 		out["balance_event_type"] = string(event.Type)
 	}
 	return out, nil
-}
-
-func (p *IngestProcessor) processAnnouncements(ctx context.Context, task *adminplusdomain.ExtensionTask, result map[string]any) (map[string]any, error) {
-	itemsRaw, ok := result["announcements"].([]any)
-	if !ok || len(itemsRaw) == 0 {
-		return nil, nil
-	}
-	count := 0
-	for _, raw := range itemsRaw {
-		item, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		startsAt := optionalTimeValue(item, "starts_at")
-		endsAt := optionalTimeValue(item, "ends_at")
-		capturedAt := optionalTimeValue(item, "captured_at")
-		_, err := p.announcements.RecordAnnouncement(ctx, announcementsapp.RecordAnnouncementInput{
-			SupplierID:       task.SupplierID,
-			Source:           sourceValue(result),
-			Type:             adminplusdomain.AnnouncementType(stringValue(item, "type")),
-			Title:            stringValue(item, "title"),
-			Description:      stringValue(item, "description"),
-			Currency:         stringValue(item, "currency"),
-			MinRechargeCents: int64Value(item, "min_recharge_cents"),
-			BonusPercent:     optionalFloat64Value(item, "bonus_percent"),
-			DiscountPercent:  optionalFloat64Value(item, "discount_percent"),
-			RuntimeStatus:    adminplusdomain.SupplierRuntimeStatus(stringValue(item, "runtime_status")),
-			BalanceCents:     int64Value(item, "balance_cents"),
-			StartsAt:         startsAt,
-			EndsAt:           endsAt,
-			CapturedAt:       capturedAt,
-			RawPayload:       mapValue(item, "raw_payload"),
-		})
-		if err != nil {
-			return nil, err
-		}
-		count++
-	}
-	return map[string]any{"announcement_events": count}, nil
 }
 
 func (p *IngestProcessor) processHealth(ctx context.Context, task *adminplusdomain.ExtensionTask, result map[string]any) (map[string]any, error) {

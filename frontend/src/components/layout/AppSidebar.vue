@@ -313,7 +313,8 @@ const adminNavItems = computed((): NavItem[] => [
     children: [
       { path: '/admin/scheduler', label: '工作台', icon: OperationsIcon },
       { path: '/admin/scheduler/notifications', label: '通知中心', icon: OperationsIcon },
-      { path: '/admin/system-logs', label: '系统日志', icon: OperationsIcon }
+      { path: '/admin/system-logs', label: '系统日志', icon: OperationsIcon },
+      { path: '/admin/backup', label: '数据备份', icon: OperationsIcon }
     ]
   },
   {

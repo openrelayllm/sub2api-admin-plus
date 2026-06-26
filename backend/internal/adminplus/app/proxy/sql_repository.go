@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -678,7 +679,11 @@ func (r *SQLRepository) CreateRuntimeSlot(ctx context.Context, slot *adminplusdo
 		RETURNING `+slotColumns(),
 		slot.SlotKey, string(slot.Status), slot.MixedPort, slot.ControllerPort, controllerSecretCiphertext,
 	)
-	return scanSlot(row)
+	created, err := scanSlot(row)
+	if err != nil && isRuntimeSlotKeyUniqueViolation(err) {
+		return nil, conflict("PROXY_RUNTIME_SLOT_KEY_EXISTS", "proxy runtime slot key already exists")
+	}
+	return created, err
 }
 
 func (r *SQLRepository) GetRuntimeSlotSecret(ctx context.Context, id int64) (*adminplusdomain.ProxyRuntimeSlot, string, error) {
@@ -1337,6 +1342,17 @@ func nilSafeMap(value map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return value
+}
+
+func isRuntimeSlotKeyUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) || pqErr.Code != "23505" {
+		return false
+	}
+	constraint := string(pqErr.Constraint)
+	return constraint == "" ||
+		constraint == "idx_admin_plus_proxy_runtime_slots_key" ||
+		strings.Contains(err.Error(), "idx_admin_plus_proxy_runtime_slots_key")
 }
 
 func normalizedLimit(limit int, fallback int) int {

@@ -394,6 +394,11 @@ func defaultSettings() adminplusdomain.NotificationSettings {
 			{EventType: "announcement.notice", Label: "普通公告", Description: "供应商发布普通通知", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
 			{EventType: "announcement.other", Label: "其他公告", Description: "无法归类的供应商公告", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
 			{EventType: "cost.reconcile_anomaly", Label: "对账异常", Description: "成本台账差异超过阈值", Enabled: true, Severity: "critical", QuietWindowMinutes: 60, DedupeScope: "supplier_period"},
+			{EventType: "system.server_renewal_due", Label: "服务器续费", Description: "服务器即将到期或已到期", Enabled: true, Severity: "critical", QuietWindowMinutes: 720, DedupeScope: "none"},
+			{EventType: "system.backup_succeeded", Label: "备份成功", Description: "数据库备份已成功上传", Enabled: true, Severity: "info", QuietWindowMinutes: 60, DedupeScope: "none"},
+			{EventType: "system.backup_failed", Label: "备份失败", Description: "数据库备份失败，需要排查存储或数据库连接", Enabled: true, Severity: "critical", QuietWindowMinutes: 60, DedupeScope: "none"},
+			{EventType: "system.restore_completed", Label: "恢复完成", Description: "数据库恢复任务已完成", Enabled: true, Severity: "warning", QuietWindowMinutes: 60, DedupeScope: "none"},
+			{EventType: "system.restore_failed", Label: "恢复失败", Description: "数据库恢复任务失败", Enabled: true, Severity: "critical", QuietWindowMinutes: 60, DedupeScope: "none"},
 			{EventType: "system.test", Label: "测试通知", Description: "管理员手动测试飞书通道", Enabled: true, Severity: "info", QuietWindowMinutes: 0, DedupeScope: "none"},
 		},
 	}

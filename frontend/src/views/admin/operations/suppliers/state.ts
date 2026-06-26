@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { supplierDisplayUsageCents, supplierRechargeTotalCents } from '../supplierCostPresentation'
 import type { Column } from '@/components/common/types'
 import type { AdminGroup } from '@/types'
-import type { LocalSub2APIAccount, Supplier, SupplierAccount, SupplierBrowserSession, SupplierChannelCheckSnapshot, SupplierChannelMonitorView, SupplierCostSnapshot, SupplierCurrentBalance, SupplierGroup, SupplierGroupStatus, SupplierHealthStatus, SupplierKey, SupplierProvisionJob, SupplierSessionProbeResult, SupplierKind, SupplierRuntimeStatus, SupplierType } from '@/api/admin/adminPlus'
+import type { LocalSub2APIAccount, Supplier, SupplierAccount, SupplierBrowserSession, SupplierChannelCheckSnapshot, SupplierChannelMonitorView, SupplierCostSnapshot, SupplierCurrentBalance, SupplierGroup, SupplierGroupChangeEvent, SupplierGroupStatus, SupplierHealthStatus, SupplierKey, SupplierProvisionJob, SupplierSessionProbeResult, SupplierKind, SupplierRuntimeStatus, SupplierType } from '@/api/admin/adminPlus'
 import type { ChannelStatusWindow, ScheduleListStatusFilter, ScheduleListLocalGroupFilter, ChannelProtocol } from './types'
 
 export function createSuppliersState() {
@@ -49,6 +49,7 @@ export function createSuppliersState() {
   const rowActionsMenuStyle = ref<Record<string, string>>({})
   const suppliers = ref<Supplier[]>([])
   const supplierGroups = ref<SupplierGroup[]>([])
+  const supplierGroupEvents = ref<SupplierGroupChangeEvent[]>([])
   const supplierKeys = ref<SupplierKey[]>([])
   const supplierCostSnapshots = ref<Record<number, SupplierCostSnapshot | undefined>>({})
   const supplierBestChannels = ref<Record<number, SupplierChannelCheckSnapshot[] | undefined>>({})
@@ -290,6 +291,7 @@ export function createSuppliersState() {
     rowActionsMenuStyle,
     suppliers,
     supplierGroups,
+    supplierGroupEvents,
     supplierKeys,
     supplierCostSnapshots,
     supplierBestChannels,

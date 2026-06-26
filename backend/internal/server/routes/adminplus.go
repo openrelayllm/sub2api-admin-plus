@@ -28,6 +28,7 @@ func RegisterAdminPlusRoutes(
 			suppliers.PUT("/:id/accounts/:accountID", h.AdminPlus.Supplier.UpdateAccount)
 			suppliers.DELETE("/:id/accounts/:accountID", h.AdminPlus.Supplier.DeleteAccount)
 			suppliers.GET("/:id/groups", h.AdminPlus.SupplierGroup.List)
+			suppliers.GET("/:id/groups/events", h.AdminPlus.SupplierGroup.ListEvents)
 			suppliers.POST("/:id/groups/sync", h.AdminPlus.SupplierGroup.Sync)
 			suppliers.GET("/:id/keys", h.AdminPlus.SupplierKey.List)
 			suppliers.POST("/:id/keys/ensure-all", h.AdminPlus.SupplierKey.EnsureAll)
@@ -36,7 +37,6 @@ func RegisterAdminPlusRoutes(
 			suppliers.POST("/:id/keys/:keyID/repair-binding", h.AdminPlus.SupplierKey.RepairBinding)
 			suppliers.POST("/:id/rates/sync", h.AdminPlus.Rate.SyncSupplierRates)
 			suppliers.GET("/:id/balance/current", h.AdminPlus.Balance.GetSupplierCurrent)
-			suppliers.POST("/:id/announcements/sync", h.AdminPlus.Announcement.SyncSupplierAnnouncements)
 			suppliers.POST("/:id/usage-costs/sync", h.AdminPlus.UsageCost.SyncSupplierUsageCosts)
 			suppliers.POST("/:id/costs/sync", h.AdminPlus.Cost.SyncSupplierCosts)
 			suppliers.GET("/:id/costs/summary", h.AdminPlus.Cost.GetSupplierSummary)
@@ -117,13 +117,6 @@ func RegisterAdminPlusRoutes(
 			balances.PATCH("/events/:id/ack", h.AdminPlus.Balance.AcknowledgeEvent)
 		}
 
-		announcements := adminPlus.Group("/announcements")
-		{
-			announcements.POST("", h.AdminPlus.Announcement.RecordAnnouncement)
-			announcements.GET("", h.AdminPlus.Announcement.ListEvents)
-			announcements.PATCH("/:id/ack", h.AdminPlus.Announcement.AcknowledgeEvent)
-		}
-
 		health := adminPlus.Group("/health")
 		{
 			health.POST("/probe", h.AdminPlus.Health.ProbeOpenAIResponses)
@@ -142,6 +135,23 @@ func RegisterAdminPlusRoutes(
 			notifications.GET("/deliveries", h.AdminPlus.Notification.ListDeliveries)
 			notifications.POST("/deliveries/:id/retry", h.AdminPlus.Notification.RetryDelivery)
 		}
+
+		backups := adminPlus.Group("/backups")
+		{
+			backups.GET("/status", h.AdminPlus.Backup.Status)
+			backups.GET("/settings", h.AdminPlus.Backup.Settings)
+			backups.PUT("/settings", h.AdminPlus.Backup.UpdateSettings)
+			backups.POST("/test-storage", h.AdminPlus.Backup.TestStorage)
+			backups.POST("", h.AdminPlus.Backup.CreateBackup)
+			backups.GET("", h.AdminPlus.Backup.ListBackups)
+			backups.GET("/:id", h.AdminPlus.Backup.GetBackup)
+			backups.POST("/:id/restore", h.AdminPlus.Backup.RestoreBackup)
+			backups.GET("/:id/download-url", h.AdminPlus.Backup.DownloadURL)
+			backups.DELETE("/:id", h.AdminPlus.Backup.DeleteBackup)
+		}
+
+		adminPlus.GET("/server-renewal", h.AdminPlus.Backup.GetServerRenewal)
+		adminPlus.PUT("/server-renewal", h.AdminPlus.Backup.UpdateServerRenewal)
 
 		proxy := adminPlus.Group("/proxy")
 		{

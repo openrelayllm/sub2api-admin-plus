@@ -2,7 +2,6 @@ package costs
 
 import (
 	"context"
-	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -13,8 +12,6 @@ import (
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 )
-
-const defaultReconcileAnomalyThresholdCents int64 = 100
 
 type SyncInput struct {
 	SupplierID                     int64
@@ -300,13 +297,8 @@ func (s *Service) Sync(ctx context.Context, in SyncInput) (*SyncResult, error) {
 	return result, nil
 }
 
-func (s *Service) notifyCostReconcileAnomaly(ctx context.Context, snapshot *adminplusdomain.SupplierCostSnapshot) {
-	if s == nil || s.notifier == nil || snapshot == nil || !shouldNotifyCostReconcileAnomaly(snapshot) {
-		return
-	}
-	if err := s.notifier.NotifyCostReconcileAnomaly(ctx, snapshot); err != nil {
-		slog.Warn("admin plus cost reconcile notification failed", "supplier_id", snapshot.SupplierID, "snapshot_id", snapshot.ID, "currency", snapshot.Currency, "err", err)
-	}
+func (s *Service) notifyCostReconcileAnomaly(_ context.Context, _ *adminplusdomain.SupplierCostSnapshot) {
+	// Cost snapshots stay in Admin Plus history; Feishu push is intentionally balance-only.
 }
 
 func (s *Service) ListSnapshots(ctx context.Context, filter SummaryFilter) ([]*adminplusdomain.SupplierCostSnapshot, error) {
@@ -597,20 +589,6 @@ func nonNegative(value int64) int64 {
 func normalizeRechargeMultiplier(value float64) float64 {
 	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 		return 1
-	}
-	return value
-}
-
-func shouldNotifyCostReconcileAnomaly(snapshot *adminplusdomain.SupplierCostSnapshot) bool {
-	if snapshot == nil || snapshot.BalanceDeltaCents == nil {
-		return false
-	}
-	return absInt64(*snapshot.BalanceDeltaCents) >= defaultReconcileAnomalyThresholdCents
-}
-
-func absInt64(value int64) int64 {
-	if value < 0 {
-		return -value
 	}
 	return value
 }

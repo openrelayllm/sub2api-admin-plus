@@ -1699,80 +1699,96 @@ func fixedNodeIDFromPolicy(policy *adminplusdomain.ProxyPolicy) int64 {
 }
 
 func (s *Service) acquireSlot(ctx context.Context, policy *adminplusdomain.ProxyPolicy, taskType string, taskID string, nodeID int64) (*adminplusdomain.ProxyRuntimeSlot, string, error) {
-	slots, err := s.repo.ListRuntimeSlots(ctx, RuntimeSlotFilter{Limit: s.runtimeCfg.MaxSlots + 10})
-	if err != nil {
-		return nil, "", err
-	}
-	for _, slot := range slots {
-		if slot.Status == adminplusdomain.ProxyRuntimeSlotIdle || slot.Status == adminplusdomain.ProxyRuntimeSlotStopped {
-			return s.assignSlotSecret(ctx, slot, taskType, taskID, nodeID)
+	for attempt := 0; attempt < 3; attempt++ {
+		slots, err := s.repo.ListRuntimeSlots(ctx, RuntimeSlotFilter{Limit: s.runtimeCfg.MaxSlots + 10})
+		if err != nil {
+			return nil, "", err
 		}
+		for _, slot := range slots {
+			if slot.Status == adminplusdomain.ProxyRuntimeSlotIdle || slot.Status == adminplusdomain.ProxyRuntimeSlotStopped {
+				return s.assignSlotSecret(ctx, slot, taskType, taskID, nodeID)
+			}
+		}
+		if len(slots) >= policy.MaxConcurrency || len(slots) >= s.runtimeCfg.MaxSlots {
+			return nil, "", unavailable("PROXY_SLOT_EXHAUSTED", "no proxy runtime slot is available")
+		}
+		index := len(slots) + 1
+		secret := randomSecret()
+		ciphertext, err := s.cipher.Encrypt(secret)
+		if err != nil {
+			return nil, "", err
+		}
+		slot, err := s.repo.CreateRuntimeSlot(ctx, &adminplusdomain.ProxyRuntimeSlot{
+			SlotKey:        fmt.Sprintf("proxy-slot-%03d", index),
+			Status:         adminplusdomain.ProxyRuntimeSlotIdle,
+			MixedPort:      s.runtimeCfg.BaseMixedPort + index - 1,
+			ControllerPort: s.runtimeCfg.BaseControllerPort + index - 1,
+		}, ciphertext)
+		if err != nil {
+			if isRuntimeSlotKeyConflict(err) {
+				continue
+			}
+			return nil, "", err
+		}
+		_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+			EventType: "slot_created",
+			SlotID:    slot.ID,
+			Level:     adminplusdomain.ProxyAuditInfo,
+			Message:   "代理运行槽位已创建",
+		})
+		return s.assignSlotSecret(ctx, slot, taskType, taskID, nodeID)
 	}
-	if len(slots) >= policy.MaxConcurrency || len(slots) >= s.runtimeCfg.MaxSlots {
-		return nil, "", unavailable("PROXY_SLOT_EXHAUSTED", "no proxy runtime slot is available")
-	}
-	index := len(slots) + 1
-	secret := randomSecret()
-	ciphertext, err := s.cipher.Encrypt(secret)
-	if err != nil {
-		return nil, "", err
-	}
-	slot, err := s.repo.CreateRuntimeSlot(ctx, &adminplusdomain.ProxyRuntimeSlot{
-		SlotKey:        fmt.Sprintf("proxy-slot-%03d", index),
-		Status:         adminplusdomain.ProxyRuntimeSlotIdle,
-		MixedPort:      s.runtimeCfg.BaseMixedPort + index - 1,
-		ControllerPort: s.runtimeCfg.BaseControllerPort + index - 1,
-	}, ciphertext)
-	if err != nil {
-		return nil, "", err
-	}
-	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
-		EventType: "slot_created",
-		SlotID:    slot.ID,
-		Level:     adminplusdomain.ProxyAuditInfo,
-		Message:   "代理运行槽位已创建",
-	})
-	return s.assignSlotSecret(ctx, slot, taskType, taskID, nodeID)
+	return nil, "", unavailable("PROXY_SLOT_EXHAUSTED", "no proxy runtime slot is available")
 }
 
 func (s *Service) acquireManualCheckSlot(ctx context.Context, node *adminplusdomain.ProxyNode) (*adminplusdomain.ProxyRuntimeSlot, string, error) {
 	if node == nil {
 		return nil, "", invalidInput("PROXY_NODE_REQUIRED", "proxy node is required")
 	}
-	slots, err := s.repo.ListRuntimeSlots(ctx, RuntimeSlotFilter{Limit: s.runtimeCfg.MaxSlots + 10})
-	if err != nil {
-		return nil, "", err
-	}
-	for _, slot := range slots {
-		if slot.Status == adminplusdomain.ProxyRuntimeSlotIdle || slot.Status == adminplusdomain.ProxyRuntimeSlotStopped {
-			return s.assignSlotSecret(ctx, slot, "manual_test", "node:"+fmt.Sprint(node.ID), node.ID)
+	for attempt := 0; attempt < 3; attempt++ {
+		slots, err := s.repo.ListRuntimeSlots(ctx, RuntimeSlotFilter{Limit: s.runtimeCfg.MaxSlots + 10})
+		if err != nil {
+			return nil, "", err
 		}
+		for _, slot := range slots {
+			if slot.Status == adminplusdomain.ProxyRuntimeSlotIdle || slot.Status == adminplusdomain.ProxyRuntimeSlotStopped {
+				return s.assignSlotSecret(ctx, slot, "manual_test", "node:"+fmt.Sprint(node.ID), node.ID)
+			}
+		}
+		if len(slots) >= s.runtimeCfg.MaxSlots {
+			return nil, "", unavailable("PROXY_SLOT_EXHAUSTED", "no proxy runtime slot is available")
+		}
+		index := len(slots) + 1
+		secret := randomSecret()
+		ciphertext, err := s.cipher.Encrypt(secret)
+		if err != nil {
+			return nil, "", err
+		}
+		slot, err := s.repo.CreateRuntimeSlot(ctx, &adminplusdomain.ProxyRuntimeSlot{
+			SlotKey:        fmt.Sprintf("proxy-slot-%03d", index),
+			Status:         adminplusdomain.ProxyRuntimeSlotIdle,
+			MixedPort:      s.runtimeCfg.BaseMixedPort + index - 1,
+			ControllerPort: s.runtimeCfg.BaseControllerPort + index - 1,
+		}, ciphertext)
+		if err != nil {
+			if isRuntimeSlotKeyConflict(err) {
+				continue
+			}
+			return nil, "", err
+		}
+		_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+			EventType: "slot_created",
+			SlotID:    slot.ID,
+			Level:     adminplusdomain.ProxyAuditInfo,
+			Message:   "代理运行槽位已创建",
+		})
+		return s.assignSlotSecret(ctx, slot, "manual_test", "node:"+fmt.Sprint(node.ID), node.ID)
 	}
-	if len(slots) >= s.runtimeCfg.MaxSlots {
-		return nil, "", unavailable("PROXY_SLOT_EXHAUSTED", "no proxy runtime slot is available")
-	}
-	index := len(slots) + 1
-	secret := randomSecret()
-	ciphertext, err := s.cipher.Encrypt(secret)
-	if err != nil {
-		return nil, "", err
-	}
-	slot, err := s.repo.CreateRuntimeSlot(ctx, &adminplusdomain.ProxyRuntimeSlot{
-		SlotKey:        fmt.Sprintf("proxy-slot-%03d", index),
-		Status:         adminplusdomain.ProxyRuntimeSlotIdle,
-		MixedPort:      s.runtimeCfg.BaseMixedPort + index - 1,
-		ControllerPort: s.runtimeCfg.BaseControllerPort + index - 1,
-	}, ciphertext)
-	if err != nil {
-		return nil, "", err
-	}
-	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
-		EventType: "slot_created",
-		SlotID:    slot.ID,
-		Level:     adminplusdomain.ProxyAuditInfo,
-		Message:   "代理运行槽位已创建",
-	})
-	return s.assignSlotSecret(ctx, slot, "manual_test", "node:"+fmt.Sprint(node.ID), node.ID)
+	return nil, "", unavailable("PROXY_SLOT_EXHAUSTED", "no proxy runtime slot is available")
+}
+
+func isRuntimeSlotKeyConflict(err error) bool {
+	return infraerrors.Reason(err) == "PROXY_RUNTIME_SLOT_KEY_EXISTS"
 }
 
 func (s *Service) recordNodeCheckFailure(ctx context.Context, node *adminplusdomain.ProxyNode, code string, message string, checkedAt *time.Time) (*adminplusdomain.ProxyNode, error) {
