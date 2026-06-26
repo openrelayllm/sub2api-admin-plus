@@ -418,6 +418,9 @@ func (r *SQLRepository) hydrateSites(ctx context.Context, sites []*adminplusdoma
 	if err := r.hydrateLinks(ctx, byID, ids); err != nil {
 		return nil, err
 	}
+	if err := r.hydrateSources(ctx, byID, ids); err != nil {
+		return nil, err
+	}
 	if err := r.hydrateCategories(ctx, byID, ids); err != nil {
 		return nil, err
 	}
@@ -445,6 +448,31 @@ func (r *SQLRepository) hydrateLinks(ctx context.Context, byID map[int64]*adminp
 		}
 		if site := byID[link.SiteID]; site != nil {
 			site.Links = append(site.Links, link)
+		}
+	}
+	return rows.Err()
+}
+
+func (r *SQLRepository) hydrateSources(ctx context.Context, byID map[int64]*adminplusdomain.SiteCatalogSite, ids []int64) error {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, site_id, source_type, source_name, source_url, source_external_id,
+			COALESCE(discovery_candidate_id, 0), observed_payload,
+			first_seen_at, last_seen_at, created_at
+		FROM admin_plus_site_catalog_sources
+		WHERE site_id = ANY($1)
+		ORDER BY last_seen_at DESC, id DESC
+	`, pqInt64Array(ids))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		source, err := scanSiteCatalogSource(rows)
+		if err != nil {
+			return err
+		}
+		if site := byID[source.SiteID]; site != nil {
+			site.Sources = append(site.Sources, source)
 		}
 	}
 	return rows.Err()
@@ -591,6 +619,31 @@ func scanSiteCatalogLink(row scanner) (*adminplusdomain.SiteCatalogLink, error) 
 		link.LastCheckedAt = &t
 	}
 	return &link, nil
+}
+
+func scanSiteCatalogSource(row scanner) (*adminplusdomain.SiteCatalogSource, error) {
+	var source adminplusdomain.SiteCatalogSource
+	var payload []byte
+	err := row.Scan(
+		&source.ID,
+		&source.SiteID,
+		&source.SourceType,
+		&source.SourceName,
+		&source.SourceURL,
+		&source.SourceExternalID,
+		&source.DiscoveryCandidateID,
+		&payload,
+		&source.FirstSeenAt,
+		&source.LastSeenAt,
+		&source.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > 0 {
+		_ = json.Unmarshal(payload, &source.ObservedPayload)
+	}
+	return &source, nil
 }
 
 func scanSiteCatalogCategory(row scanner) (*adminplusdomain.SiteCatalogCategory, error) {

@@ -30,6 +30,7 @@ type AdminPlusHandlers struct {
 	Extension        *adminplushandler.ExtensionHandler
 	SiteDiscovery    *adminplushandler.SiteDiscoveryHandler
 	SiteCatalog      *adminplushandler.SiteCatalogHandler
+	PublicProxyAI    *adminplushandler.PublicProxyAIHandler
 	MailVerification *adminplushandler.MailVerificationHandler
 	Session          *adminplushandler.SessionHandler
 	Scheduler        *adminplushandler.SchedulerHandler

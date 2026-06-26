@@ -97,6 +97,7 @@ func registerRoutes(
 	// API v1
 	v1 := r.Group("/api/v1")
 
+	routes.RegisterPublicProxyAIRoutes(v1, h)
 	routes.RegisterAuthRoutes(v1, h, jwtAuth, redisClient, settingService)
 	routes.RegisterAdminRoutes(v1, h, adminAuth)
 	routes.RegisterAdminPlusRoutes(v1, h, adminAuth)

@@ -87,6 +87,7 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			ChannelCheck:     adminplushandler.NewChannelCheckHandler(channelchecksapp.NewService(nil, supplierService, sessionService, healthapp.NewService(healthapp.NewMemoryRepository()))),
 			Extension:        adminplushandler.NewExtensionHandler(extensionService, nil),
 			SiteDiscovery:    adminplushandler.NewSiteDiscoveryHandler(siteDiscoveryService),
+			PublicProxyAI:    adminplushandler.NewPublicProxyAIHandler(nil),
 			MailVerification: adminplushandler.NewMailVerificationHandler(mailVerificationService),
 			Session:          adminplushandler.NewSessionHandler(sessionService, nil),
 			Scheduler:        adminplushandler.NewSchedulerHandler(schedulerapp.NewService(supplierService, extensionService)),
@@ -104,6 +105,7 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 		nil,
 		nil,
 	)
+	RegisterPublicProxyAIRoutes(v1, handlers)
 	RegisterAdminRoutes(
 		v1,
 		handlers,
@@ -124,6 +126,9 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 
 	currentRoutes := []string{
 		"GET /api/v1/settings/public",
+		"GET /api/v1/public/proxyai/summary",
+		"GET /api/v1/public/proxyai/sites",
+		"GET /api/v1/public/proxyai/sites/:slug",
 		"POST /api/v1/auth/login",
 		"POST /api/v1/auth/login/2fa",
 		"POST /api/v1/auth/refresh",

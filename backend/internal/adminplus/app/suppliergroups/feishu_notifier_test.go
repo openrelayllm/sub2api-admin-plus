@@ -2,6 +2,8 @@ package suppliergroups
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,11 +13,18 @@ import (
 )
 
 func TestFeishuNotifierDispatchesOpenAISuperLowRate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	}))
+	t.Cleanup(server.Close)
+
 	repo := notifications.NewMemoryRepository()
 	service := notifications.NewService(repo)
 	settings := service.Settings(context.Background())
 	settings.Feishu.Enabled = true
-	settings.Feishu.WebhookURL = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+	settings.Feishu.WebhookURL = server.URL
 	require.NoError(t, repo.SaveSettings(context.Background(), settings))
 	notifier := NewFeishuNotifier(service)
 
