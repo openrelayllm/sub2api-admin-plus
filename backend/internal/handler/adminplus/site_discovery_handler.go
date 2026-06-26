@@ -249,7 +249,12 @@ func (h *SiteDiscoveryHandler) RerunRegistration(c *gin.Context) {
 	if !ok {
 		return
 	}
-	credential, task, err := h.service.RerunRegistration(c.Request.Context(), id)
+	var req registerSiteDiscoveryItemRequest
+	_ = c.ShouldBindJSON(&req)
+	credential, task, err := h.service.RerunRegistrationWithOptions(c.Request.Context(), sitediscoveryapp.RerunRegistrationInput{
+		RegistrationID: id,
+		ProxyPolicyID:  req.ProxyPolicyID,
+	})
 	if response.ErrorFrom(c, err) {
 		return
 	}

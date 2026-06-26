@@ -35,6 +35,26 @@ rules:
 	require.Contains(t, generated, "proxy-groups")
 }
 
+func TestSubscriptionNormalizerDropsProviderRules(t *testing.T) {
+	normalizer := NewSubscriptionNormalizer()
+	config, err := normalizer.Normalize(adminplusdomain.ProxySubscriptionClash, "test", []byte(`
+proxies:
+  - name: "香港Y01"
+    type: ss
+    server: hk.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+rules:
+  - DOMAIN,example.com,missing-policy
+`))
+	require.NoError(t, err)
+
+	var generated map[string]any
+	require.NoError(t, yaml.Unmarshal(config.MihomoYAML, &generated))
+	require.Equal(t, []any{"MATCH,GLOBAL"}, generated["rules"])
+}
+
 func TestSubscriptionNormalizerURIList(t *testing.T) {
 	normalizer := NewSubscriptionNormalizer()
 	config, err := normalizer.Normalize(adminplusdomain.ProxySubscriptionV2RaySS, "uri", []byte("trojan://pass@jp.example.com:443?security=tls#日本Y01"))

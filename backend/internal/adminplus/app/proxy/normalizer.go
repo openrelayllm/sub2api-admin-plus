@@ -118,9 +118,6 @@ func (n *SubscriptionNormalizer) normalizeClash(providerName string, content []b
 		},
 		"rules": []string{"MATCH,GLOBAL"},
 	}
-	if rules, ok := doc["rules"]; ok {
-		normalizedDoc["rules"] = rules
-	}
 	mihomoYAML, err := yaml.Marshal(normalizedDoc)
 	if err != nil {
 		return nil, err

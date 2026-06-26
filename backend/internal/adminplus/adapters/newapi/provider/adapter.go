@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -84,7 +86,7 @@ func (c *Client) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*p
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_LOGIN_FAILED", "failed to request new api login endpoint").WithCause(err)
+		return nil, withRequestDiagnostics(err, loginEndpoint, "SUPPLIER_DIRECT_LOGIN_FAILED", "new api login endpoint is unreachable")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -148,7 +150,7 @@ func (c *Client) doSessionJSON(ctx context.Context, method string, endpoint stri
 	applySessionHeaders(req, bundle)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_SESSION_REQUEST_FAILED", "failed to request new api session endpoint").WithCause(err)
+		return nil, withRequestDiagnostics(err, endpoint, "SUPPLIER_SESSION_REQUEST_FAILED", "new api session endpoint is unreachable")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -200,6 +202,87 @@ func withHTTPDiagnostics(err error, endpoint string, statusCode int, contentType
 		}
 	}
 	return appErr.WithMetadata(metadata)
+}
+
+func withRequestDiagnostics(err error, endpoint string, reason string, message string) error {
+	if err == nil {
+		return nil
+	}
+	appErr := infraerrors.New(http.StatusBadGateway, reason, message).WithCause(err)
+	metadata := map[string]string{}
+	if strings.TrimSpace(endpoint) != "" {
+		metadata["endpoint"] = endpoint
+	}
+	kind, detail := requestErrorDiagnostic(err)
+	if kind != "" {
+		metadata["error_kind"] = kind
+	}
+	if detail != "" {
+		metadata["error_detail"] = detail
+	}
+	return appErr.WithMetadata(metadata)
+}
+
+func requestErrorDiagnostic(err error) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled", "request was canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout", "request timed out"
+	}
+	cause := unwrapURLRequestError(err)
+	var dnsErr *net.DNSError
+	if errors.As(cause, &dnsErr) {
+		return "dns", safeRequestErrorDetail(dnsErr.Err)
+	}
+	var netErr net.Error
+	if errors.As(cause, &netErr) && netErr.Timeout() {
+		return "timeout", safeRequestErrorDetail(cause.Error())
+	}
+	lower := strings.ToLower(cause.Error())
+	switch {
+	case strings.Contains(lower, "no such host"):
+		return "dns", safeRequestErrorDetail(cause.Error())
+	case strings.Contains(lower, "connection refused"):
+		return "connection_refused", safeRequestErrorDetail(cause.Error())
+	case strings.Contains(lower, "connection reset"):
+		return "connection_reset", safeRequestErrorDetail(cause.Error())
+	case strings.Contains(lower, "tls"):
+		return "tls", safeRequestErrorDetail(cause.Error())
+	case strings.Contains(lower, "proxyconnect") || strings.Contains(lower, "proxy"):
+		return "proxy", safeRequestErrorDetail(cause.Error())
+	case strings.Contains(lower, "timeout"):
+		return "timeout", safeRequestErrorDetail(cause.Error())
+	default:
+		var opErr *net.OpError
+		if errors.As(cause, &opErr) && strings.TrimSpace(opErr.Op) != "" {
+			return "network_" + strings.ToLower(strings.TrimSpace(opErr.Op)), safeRequestErrorDetail(cause.Error())
+		}
+		return "request_error", safeRequestErrorDetail(cause.Error())
+	}
+}
+
+func unwrapURLRequestError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err
+	}
+	return err
+}
+
+func safeRequestErrorDetail(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) <= 240 {
+		return value
+	}
+	return value[:240]
 }
 
 func responseExcerpt(body []byte, limit int) string {

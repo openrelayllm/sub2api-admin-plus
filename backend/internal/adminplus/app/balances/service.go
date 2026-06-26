@@ -94,20 +94,25 @@ type Notifier interface {
 	NotifyBalanceEvent(ctx context.Context, event *adminplusdomain.BalanceEvent, snapshot *adminplusdomain.BalanceSnapshot) error
 }
 
+type RecentSupplierUsageReader interface {
+	HasSupplierUsageSince(ctx context.Context, supplierID int64, since time.Time) (bool, error)
+}
+
 type SessionReader interface {
 	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
 }
 
 type Service struct {
-	repo     Repository
-	notifier Notifier
-	session  SessionReader
-	reader   ports.SessionProbeAdapter
-	cache    BalanceCache
-	bizlog   *bizlogs.Recorder
-	freshFor time.Duration
-	cacheTTL time.Duration
-	now      func() time.Time
+	repo        Repository
+	notifier    Notifier
+	session     SessionReader
+	reader      ports.SessionProbeAdapter
+	recentUsage RecentSupplierUsageReader
+	cache       BalanceCache
+	bizlog      *bizlogs.Recorder
+	freshFor    time.Duration
+	cacheTTL    time.Duration
+	now         func() time.Time
 }
 
 var ErrCurrentBalanceCacheMiss = errors.New("admin plus current balance cache miss")
@@ -115,6 +120,7 @@ var ErrCurrentBalanceCacheMiss = errors.New("admin plus current balance cache mi
 const (
 	defaultCurrentBalanceFreshFor = 6 * time.Minute
 	defaultCurrentBalanceCacheTTL = 15 * time.Minute
+	recentSupplierUsageWindow     = time.Hour
 	legacyNewAPIQuotaUnitsPerUSD  = 500000.0
 )
 
@@ -143,6 +149,13 @@ func NewServiceWithCurrentCache(repo Repository, notifier Notifier, session Sess
 	service := NewServiceWithDependencies(repo, notifier, session, reader)
 	service.cache = cache
 	return service
+}
+
+func (s *Service) WithRecentUsageReader(reader RecentSupplierUsageReader) *Service {
+	if s != nil {
+		s.recentUsage = reader
+	}
+	return s
 }
 
 func (s *Service) WithDiagnostics(recorder *bizlogs.Recorder) *Service {
@@ -189,9 +202,33 @@ func (s *Service) notifyBalanceEvent(ctx context.Context, event *adminplusdomain
 	if s == nil || s.notifier == nil || event == nil {
 		return
 	}
+	if s.shouldSkipProviderSessionBalanceNotification(ctx, event, snapshot) {
+		return
+	}
 	if err := s.notifier.NotifyBalanceEvent(ctx, event, snapshot); err != nil {
 		slog.Warn("admin plus balance notification failed", "supplier_id", event.SupplierID, "event_id", event.ID, "type", event.Type, "err", err)
 	}
+}
+
+func (s *Service) shouldSkipProviderSessionBalanceNotification(ctx context.Context, event *adminplusdomain.BalanceEvent, snapshot *adminplusdomain.BalanceSnapshot) bool {
+	if snapshot == nil || !isProviderSessionSource(snapshot.Source) {
+		return false
+	}
+	if s.recentUsage == nil {
+		slog.Warn("admin plus provider session balance notification skipped without recent usage reader", "supplier_id", event.SupplierID, "event_id", event.ID)
+		return true
+	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	since := now().UTC().Add(-recentSupplierUsageWindow)
+	hasUsage, err := s.recentUsage.HasSupplierUsageSince(ctx, event.SupplierID, since)
+	if err != nil {
+		slog.Warn("admin plus provider session balance notification usage lookup failed", "supplier_id", event.SupplierID, "event_id", event.ID, "err", err)
+		return true
+	}
+	return !hasUsage
 }
 
 func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {
@@ -653,6 +690,10 @@ func normalizeSource(value string) string {
 		return v[:60]
 	}
 	return v
+}
+
+func isProviderSessionSource(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "provider_session")
 }
 
 func normalizeCurrency(value string) string {

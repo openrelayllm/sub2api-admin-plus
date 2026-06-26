@@ -185,6 +185,22 @@ type ProxyHealthCheck struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type ProxyNodeCheckResult struct {
+	NodeID       int64      `json:"node_id"`
+	NodeName     string     `json:"node_name,omitempty"`
+	Succeeded    bool       `json:"succeeded"`
+	Node         *ProxyNode `json:"node,omitempty"`
+	ErrorCode    string     `json:"error_code,omitempty"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+}
+
+type ProxyNodeBatchCheckResult struct {
+	Total     int                    `json:"total"`
+	Succeeded int                    `json:"succeeded"`
+	Failed    int                    `json:"failed"`
+	Results   []ProxyNodeCheckResult `json:"results"`
+}
+
 type ProxyAuditEvent struct {
 	ID             int64           `json:"id"`
 	EventType      string          `json:"event_type"`
@@ -203,14 +219,23 @@ type ProxyAuditEvent struct {
 }
 
 type ProxyCenterStatus struct {
-	SubscriptionsTotal  int `json:"subscriptions_total"`
-	SubscriptionsActive int `json:"subscriptions_active"`
-	NodesTotal          int `json:"nodes_total"`
-	HealthyNodes        int `json:"healthy_nodes"`
-	PoliciesTotal       int `json:"policies_total"`
-	TargetsTotal        int `json:"targets_total"`
-	SlotsTotal          int `json:"slots_total"`
-	SlotsAssigned       int `json:"slots_assigned"`
-	AssignmentsActive   int `json:"assignments_active"`
-	RecentErrors        int `json:"recent_errors"`
+	SubscriptionsTotal      int  `json:"subscriptions_total"`
+	SubscriptionsActive     int  `json:"subscriptions_active"`
+	NodesTotal              int  `json:"nodes_total"`
+	HealthyNodes            int  `json:"healthy_nodes"`
+	PoliciesTotal           int  `json:"policies_total"`
+	TargetsTotal            int  `json:"targets_total"`
+	SlotsTotal              int  `json:"slots_total"`
+	SlotsAssigned           int  `json:"slots_assigned"`
+	AssignmentsActive       int  `json:"assignments_active"`
+	RecentErrors            int  `json:"recent_errors"`
+	NodeSwitches24h         int  `json:"node_switches_24h"`
+	NodeFailures24h         int  `json:"node_failures_24h"`
+	PolicyDenials24h        int  `json:"policy_denials_24h"`
+	EgressVerifyFailures24h int  `json:"egress_verify_failures_24h"`
+	CompletedAssignments24h int  `json:"completed_assignments_24h"`
+	AvgAssignmentSeconds24h int  `json:"avg_assignment_seconds_24h"`
+	ProxyEnabled            bool `json:"proxy_enabled"`
+	MihomoConfigured        bool `json:"mihomo_configured"`
+	MaxSlots                int  `json:"max_slots,omitempty"`
 }

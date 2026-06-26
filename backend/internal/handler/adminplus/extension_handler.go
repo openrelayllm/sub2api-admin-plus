@@ -226,6 +226,40 @@ func (h *ExtensionHandler) ReportSupplierCandidate(c *gin.Context) {
 	}
 	if err == nil && len(match.Suppliers) == 1 {
 		supplier := match.Suppliers[0]
+		if reportHasBrowserCredential(req) {
+			updated, updateErr := h.suppliers.Update(c.Request.Context(), supplier.ID, suppliersapp.UpdateSupplierInput{
+				Name:                  supplier.Name,
+				Kind:                  supplier.Kind,
+				Type:                  supplier.Type,
+				RuntimeStatus:         supplier.RuntimeStatus,
+				HealthStatus:          supplier.HealthStatus,
+				DashboardURL:          supplier.DashboardURL,
+				APIBaseURL:            supplier.APIBaseURL,
+				ThirdPartyRechargeURL: supplier.ThirdPartyRechargeURL,
+				LocalRechargeURL:      supplier.LocalRechargeURL,
+				Contact:               supplier.Contact,
+				Notes:                 supplier.Notes,
+				BrowserLoginEnabled:   true,
+				BrowserLoginUsername:  req.BrowserLoginUsername,
+				BrowserLoginPassword:  req.BrowserLoginPassword,
+				BrowserLoginToken:     req.BrowserLoginToken,
+				BalanceCents:          supplier.BalanceCents,
+				BalanceCurrency:       supplier.BalanceCurrency,
+				RechargeMultiplier:    supplier.RechargeMultiplier,
+			})
+			if response.ErrorFrom(c, updateErr) {
+				return
+			}
+			response.Success(c, reportSupplierCandidateResponse{
+				SupplierID:      updated.ID,
+				SupplierName:    updated.Name,
+				AlreadyExists:   true,
+				CredentialSaved: updated.Credential.BrowserLoginEnabled && (updated.Credential.BrowserLoginUsernameConfigured || updated.Credential.BrowserLoginPasswordConfigured || updated.Credential.BrowserLoginTokenConfigured),
+				MaskedUsername:  updated.Credential.MaskedBrowserLoginUsername,
+				Message:         "供应商已存在，已更新浏览器登录凭据",
+			})
+			return
+		}
 		response.Success(c, reportSupplierCandidateResponse{
 			SupplierID:      supplier.ID,
 			SupplierName:    supplier.Name,
@@ -303,6 +337,12 @@ func (h *ExtensionHandler) ReportSupplierCandidate(c *gin.Context) {
 		MaskedUsername:  supplier.Credential.MaskedBrowserLoginUsername,
 		Message:         "供应商已创建并保存采集信息",
 	})
+}
+
+func reportHasBrowserCredential(req reportSupplierCandidateRequest) bool {
+	return strings.TrimSpace(req.BrowserLoginUsername) != "" ||
+		strings.TrimSpace(req.BrowserLoginPassword) != "" ||
+		strings.TrimSpace(req.BrowserLoginToken) != ""
 }
 
 func (h *ExtensionHandler) resolveCaptureSessionSupplier(c *gin.Context, req captureSessionTaskRequest) (int64, map[string]any, error) {

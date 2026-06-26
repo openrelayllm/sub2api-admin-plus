@@ -12,6 +12,7 @@ ARG ALPINE_IMAGE=alpine:3.21
 ARG POSTGRES_IMAGE=postgres:18-alpine
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
+ARG MIHOMO_VERSION=v1.19.27
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -84,7 +85,26 @@ RUN VERSION_VALUE="${VERSION}" && \
 FROM ${POSTGRES_IMAGE} AS pg-client
 
 # -----------------------------------------------------------------------------
-# Stage 4: Final Runtime Image
+# Stage 4: Mihomo Core
+# -----------------------------------------------------------------------------
+FROM ${ALPINE_IMAGE} AS mihomo-core
+
+ARG TARGETARCH
+ARG MIHOMO_VERSION
+
+RUN apk add --no-cache ca-certificates curl gzip && \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) MIHOMO_ASSET="mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz" ;; \
+      arm64) MIHOMO_ASSET="mihomo-linux-arm64-${MIHOMO_VERSION}.gz" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${MIHOMO_ASSET}" -o /tmp/mihomo.gz && \
+    gzip -dc /tmp/mihomo.gz > /mihomo && \
+    chmod +x /mihomo && \
+    test -s /mihomo
+
+# -----------------------------------------------------------------------------
+# Stage 5: Final Runtime Image
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
@@ -119,9 +139,12 @@ RUN addgroup -g 1000 sub2api && \
 # Set working directory
 WORKDIR /app
 
+RUN mkdir -p /app/bin
+
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api-admin-plus /app/sub2api-admin-plus
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
+COPY --from=mihomo-core --chown=sub2api:sub2api /mihomo /app/bin/mihomo
 COPY --chown=sub2api:sub2api extension /app/extension
 
 # Create data directory

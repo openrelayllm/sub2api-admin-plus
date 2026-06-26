@@ -3,7 +3,6 @@ package rates
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -225,13 +224,8 @@ func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) 
 	}, nil
 }
 
-func (s *Service) notifyRateChange(ctx context.Context, event *adminplusdomain.RateChangeEvent, snapshot *adminplusdomain.RateSnapshot) {
-	if s == nil || s.notifier == nil || event == nil {
-		return
-	}
-	if err := s.notifier.NotifyRateChange(ctx, event, snapshot); err != nil {
-		slog.Warn("admin plus rate notification failed", "supplier_id", event.SupplierID, "event_id", event.ID, "direction", event.Direction, "err", err)
-	}
+func (s *Service) notifyRateChange(_ context.Context, _ *adminplusdomain.RateChangeEvent, _ *adminplusdomain.RateSnapshot) {
+	// Rate events stay in Admin Plus history; Feishu push is intentionally balance-only.
 }
 
 type FeishuNotifier struct {

@@ -33,6 +33,15 @@ export interface ProxyCenterStatus {
   slots_assigned: number
   assignments_active: number
   recent_errors: number
+  node_switches_24h?: number
+  node_failures_24h?: number
+  policy_denials_24h?: number
+  egress_verify_failures_24h?: number
+  completed_assignments_24h?: number
+  avg_assignment_seconds_24h?: number
+  proxy_enabled?: boolean
+  mihomo_configured?: boolean
+  max_slots?: number
 }
 
 export interface ProxySubscription {
@@ -71,6 +80,22 @@ export interface ProxyNode {
   raw_metadata?: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+export interface ProxyNodeCheckResult {
+  node_id: number
+  node_name?: string
+  succeeded: boolean
+  node?: ProxyNode
+  error_code?: string
+  error_message?: string
+}
+
+export interface ProxyNodeBatchCheckResult {
+  total: number
+  succeeded: number
+  failed: number
+  results: ProxyNodeCheckResult[]
 }
 
 export interface ProxyPolicy {
@@ -2568,8 +2593,8 @@ export async function listSiteDiscoveryRegistrationTasks(params?: {
   return data
 }
 
-export async function rerunSiteDiscoveryRegistration(id: number): Promise<RegisterSiteDiscoveryItemResponse> {
-  const { data } = await apiClient.post<RegisterSiteDiscoveryItemResponse>(`/admin-plus/site-discovery/registrations/${id}/rerun`)
+export async function rerunSiteDiscoveryRegistration(id: number, payload?: { proxy_policy_id?: number }): Promise<RegisterSiteDiscoveryItemResponse> {
+  const { data } = await apiClient.post<RegisterSiteDiscoveryItemResponse>(`/admin-plus/site-discovery/registrations/${id}/rerun`, payload || {})
   return data
 }
 
@@ -2768,6 +2793,16 @@ export async function checkProxyNode(id: number): Promise<ProxyNode> {
   return data
 }
 
+export async function checkProxyNodes(params?: {
+  subscription_id?: number
+  health_status?: ProxyNodeHealthStatus | ''
+  q?: string
+  limit?: number
+}): Promise<ProxyNodeBatchCheckResult> {
+  const { data } = await apiClient.post<ProxyNodeBatchCheckResult>('/admin-plus/proxy/nodes/check', undefined, { params })
+  return data
+}
+
 export async function disableProxyNode(id: number, reason?: string): Promise<ProxyNode> {
   const { data } = await apiClient.post<ProxyNode>(`/admin-plus/proxy/nodes/${id}/disable`, { reason })
   return data
@@ -2860,6 +2895,11 @@ export async function restartProxyRuntimeSlot(id: number): Promise<ProxyRuntimeS
   return data
 }
 
+export async function rotateProxyRuntimeSlotSecret(id: number): Promise<ProxyRuntimeSlot> {
+  const { data } = await apiClient.post<ProxyRuntimeSlot>(`/admin-plus/proxy/runtime-slots/${id}/rotate-secret`)
+  return data
+}
+
 export async function listProxyAssignments(params?: {
   task_type?: string
   task_id?: string
@@ -2891,6 +2931,11 @@ export async function switchProxyAssignment(id: number, payload: { node_id: numb
   return data
 }
 
+export async function reportProxyAssignmentFailure(id: number, payload: { error_code?: string; error_message?: string; business_rejected?: boolean }): Promise<ProxyAssignment> {
+  const { data } = await apiClient.post<ProxyAssignment>(`/admin-plus/proxy/assignments/${id}/failure`, payload)
+  return data
+}
+
 export async function listProxyAuditEvents(params?: {
   event_type?: string
   task_type?: string
@@ -2903,6 +2948,24 @@ export async function listProxyAuditEvents(params?: {
   target_host?: string
 } & AdminPlusPaginationParams): Promise<AdminPlusListResponse<ProxyAuditEvent>> {
   const { data } = await apiClient.get<AdminPlusListResponse<ProxyAuditEvent>>('/admin-plus/proxy/audit-events', { params })
+  return data
+}
+
+export async function downloadProxyAuditEvents(params?: {
+  event_type?: string
+  task_type?: string
+  task_id?: string
+  policy_id?: number
+  slot_id?: number
+  node_id?: number
+  subscription_id?: number
+  level?: ProxyAuditLevel | ''
+  target_host?: string
+}): Promise<Blob> {
+  const { data } = await apiClient.get<Blob>('/admin-plus/proxy/audit-events/export', {
+    params,
+    responseType: 'blob'
+  })
   return data
 }
 
@@ -3021,6 +3084,7 @@ export const adminPlusAPI = {
   deleteProxySubscription,
   listProxyNodes,
   checkProxyNode,
+  checkProxyNodes,
   disableProxyNode,
   enableProxyNode,
   listProxyPolicies,
@@ -3033,11 +3097,14 @@ export const adminPlusAPI = {
   deleteProxyTarget,
   listProxyRuntimeSlots,
   restartProxyRuntimeSlot,
+  rotateProxyRuntimeSlotSecret,
   listProxyAssignments,
   createProxyAssignment,
   releaseProxyAssignment,
   switchProxyAssignment,
+  reportProxyAssignmentFailure,
   listProxyAuditEvents,
+  downloadProxyAuditEvents,
   listAdminPlusSystemLogs
 }
 

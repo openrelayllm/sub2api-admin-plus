@@ -41,8 +41,34 @@ func TestServiceRecordSnapshotCreatesNewEventForFirstRate(t *testing.T) {
 	require.True(t, result.Events[0].ThresholdExceeded)
 	require.Equal(t, adminplusdomain.RateChangeStatusOpen, result.Events[0].Status)
 	require.Equal(t, "USD", result.Snapshots[0].Currency)
-	require.Len(t, notifier.events, 1)
-	require.Equal(t, result.Events[0].ID, notifier.events[0].ID)
+	require.Empty(t, notifier.events)
+}
+
+func TestServiceRecordSnapshotSkipsProviderSessionNotification(t *testing.T) {
+	repo := newFakeRateRepository()
+	notifier := &fakeRateNotifier{}
+	svc := NewServiceWithNotifier(repo, notifier)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.RecordSnapshot(context.Background(), RecordSnapshotInput{
+		SupplierID: 7,
+		Source:     "provider_session",
+		Entries: []RateEntryInput{
+			{
+				Model:       "gpt-4o-mini",
+				BillingMode: "token",
+				PriceItem:   "input",
+				Unit:        "1m_tokens",
+				Currency:    "USD",
+				PriceMicros: 150000,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Events, 1)
+	require.Empty(t, notifier.events)
 }
 
 func TestServiceRecordSnapshotSkipsEventWhenPriceIsUnchanged(t *testing.T) {

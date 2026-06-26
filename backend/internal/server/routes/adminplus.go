@@ -152,6 +152,7 @@ func RegisterAdminPlusRoutes(
 			proxy.POST("/subscriptions/:id/refresh", h.AdminPlus.Proxy.RefreshSubscription)
 			proxy.DELETE("/subscriptions/:id", h.AdminPlus.Proxy.DeleteSubscription)
 			proxy.GET("/nodes", h.AdminPlus.Proxy.ListNodes)
+			proxy.POST("/nodes/check", h.AdminPlus.Proxy.CheckNodes)
 			proxy.POST("/nodes/:id/check", h.AdminPlus.Proxy.CheckNode)
 			proxy.POST("/nodes/:id/disable", h.AdminPlus.Proxy.DisableNode)
 			proxy.POST("/nodes/:id/enable", h.AdminPlus.Proxy.EnableNode)
@@ -165,10 +166,13 @@ func RegisterAdminPlusRoutes(
 			proxy.DELETE("/policies/:id/targets/:targetID", h.AdminPlus.Proxy.DeleteTarget)
 			proxy.GET("/runtime-slots", h.AdminPlus.Proxy.ListRuntimeSlots)
 			proxy.POST("/runtime-slots/:id/restart", h.AdminPlus.Proxy.RestartRuntimeSlot)
+			proxy.POST("/runtime-slots/:id/rotate-secret", h.AdminPlus.Proxy.RotateRuntimeSlotSecret)
 			proxy.GET("/assignments", h.AdminPlus.Proxy.ListAssignments)
 			proxy.POST("/assignments", h.AdminPlus.Proxy.CreateAssignment)
 			proxy.POST("/assignments/:id/release", h.AdminPlus.Proxy.ReleaseAssignment)
 			proxy.POST("/assignments/:id/switch", h.AdminPlus.Proxy.SwitchAssignment)
+			proxy.POST("/assignments/:id/failure", h.AdminPlus.Proxy.ReportAssignmentFailure)
+			proxy.GET("/audit-events/export", h.AdminPlus.Proxy.ExportAuditEvents)
 			proxy.GET("/audit-events", h.AdminPlus.Proxy.ListAuditEvents)
 		}
 

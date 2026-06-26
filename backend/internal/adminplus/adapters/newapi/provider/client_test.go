@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -587,6 +588,31 @@ func TestClientRegisterAccountDirectSuccess(t *testing.T) {
 	require.Equal(t, server.URL, result.APIBaseURL)
 }
 
+func TestClientRegisterAccountRequestErrorIncludesDiagnostics(t *testing.T) {
+	client := NewClient(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, &net.DNSError{Err: "no such host", Name: req.URL.Host}
+		}),
+	})
+
+	_, err := client.RegisterAccount(context.Background(), ports.DirectRegistrationInput{
+		ProviderType: "new_api",
+		Origin:       "https://missing.example/sign-up",
+		APIBaseURL:   "https://missing.example",
+		Email:        "ops@example.com",
+		Password:     " secret ",
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "SUPPLIER_DIRECT_REGISTRATION_FAILED", infraerrors.Reason(err))
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "https://missing.example/api/user/register", appErr.Metadata["endpoint"])
+	require.Equal(t, "dns", appErr.Metadata["error_kind"])
+	require.Contains(t, appErr.Metadata["error_detail"], "no such host")
+	require.NotContains(t, appErr.Metadata["error_detail"], "ops@example.com")
+	require.NotContains(t, appErr.Metadata["error_detail"], " secret ")
+}
+
 func TestClientRegisterAccountRequestsEmailVerificationCode(t *testing.T) {
 	var sawVerification bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -877,4 +903,10 @@ func TestClientRegisterAccountEmailVerificationMessageDoesNotRequireBrowserFallb
 func TestIsRetryableRegistrationStatusError(t *testing.T) {
 	require.True(t, isRetryableRegistrationStatusError(io.EOF))
 	require.False(t, isRetryableRegistrationStatusError(context.DeadlineExceeded))
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

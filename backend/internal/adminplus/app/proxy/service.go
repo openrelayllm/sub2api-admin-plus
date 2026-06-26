@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -223,12 +225,19 @@ type SwitchAssignmentInput struct {
 	ErrorMessage string
 }
 
+type ReportFailureInput struct {
+	ErrorCode        string
+	ErrorMessage     string
+	BusinessRejected bool
+}
+
 type Service struct {
 	repo        Repository
 	cipher      SecretCipher
 	normalizer  *SubscriptionNormalizer
 	runtime     Runtime
 	runtimeCfg  RuntimeConfig
+	checkCache  NodeCheckCache
 	client      *http.Client
 	rateLimiter *targetRateLimiter
 	now         func() time.Time
@@ -238,6 +247,7 @@ func NewService(repo Repository, cipher SecretCipher, normalizer *SubscriptionNo
 	if normalizer == nil {
 		normalizer = NewSubscriptionNormalizer()
 	}
+	runtimeCfg = normalizeRuntimeConfig(runtimeCfg)
 	if runtime == nil {
 		runtime = NewLocalMihomoRuntime(runtimeCfg)
 	}
@@ -255,11 +265,25 @@ func NewService(repo Repository, cipher SecretCipher, normalizer *SubscriptionNo
 	}
 }
 
+func (s *Service) WithNodeCheckCache(cache NodeCheckCache) *Service {
+	if s != nil {
+		s.checkCache = cache
+	}
+	return s
+}
+
 func (s *Service) CenterStatus(ctx context.Context) (*adminplusdomain.ProxyCenterStatus, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("proxy service is not configured")
 	}
-	return s.repo.CenterStatus(ctx)
+	status, err := s.repo.CenterStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status.ProxyEnabled = s.runtimeCfg.Enabled
+	status.MihomoConfigured = strings.TrimSpace(s.runtimeCfg.BinaryPath) != ""
+	status.MaxSlots = s.runtimeCfg.MaxSlots
+	return status, nil
 }
 
 func (s *Service) ListSubscriptions(ctx context.Context, filter SubscriptionFilter) ([]*adminplusdomain.ProxySubscription, error) {
@@ -476,21 +500,36 @@ func (s *Service) ListNodes(ctx context.Context, filter NodeFilter) ([]*adminplu
 	if s == nil || s.repo == nil {
 		return nil, internalError("proxy service is not configured")
 	}
-	return s.repo.ListNodes(ctx, filter)
+	nodes, err := s.repo.ListNodes(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	s.applyCachedNodeChecks(ctx, nodes)
+	return nodes, nil
 }
 
 func (s *Service) CheckNode(ctx context.Context, id int64) (*adminplusdomain.ProxyNode, error) {
 	if s == nil || s.repo == nil || s.cipher == nil || s.runtime == nil {
 		return nil, internalError("proxy service is not configured")
 	}
+	if err := s.ensureProxyEnabled(ctx, "node_check", adminplusdomain.ProxyAuditEvent{NodeID: id}); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(s.runtimeCfg.BinaryPath) == "" {
-		return nil, unavailable("PROXY_MIHOMO_BINARY_NOT_CONFIGURED", "mihomo binary path is required for real proxy node checks")
+		return nil, unavailable("PROXY_MIHOMO_BINARY_NOT_CONFIGURED", "未配置 Mihomo core：请设置 admin_plus.proxy_mihomo_binary_path 或环境变量 ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH，或将 mihomo 放入 PATH 后重启服务")
 	}
 	node, err := s.repo.GetNode(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
+	if code, message, failed := preflightProxyNodeServer(ctx, node); failed {
+		checked, updateErr := s.recordNodeCheckFailure(ctx, node, code, message, &now)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		return checked, unavailable(code, message)
+	}
 	slot, controllerSecret, err := s.acquireManualCheckSlot(ctx, node)
 	if err != nil {
 		return nil, err
@@ -534,12 +573,16 @@ func (s *Service) CheckNode(ctx context.Context, id int64) (*adminplusdomain.Pro
 		return nil, err
 	}
 	egressIP, err := s.runtime.VerifyEgress(ctx, slot.MixedPort)
+	egressIP = strings.TrimSpace(egressIP)
 	latency := int(s.now().Sub(started).Milliseconds())
 	if latency < 0 {
 		latency = 0
 	}
-	if err != nil {
-		checked, updateErr := s.recordNodeCheckFailure(ctx, node, "PROXY_EGRESS_VERIFY_FAILED", err.Error(), &now)
+	if err != nil || egressIP == "" {
+		if err == nil {
+			err = unavailable("PROXY_EGRESS_IP_EMPTY", "proxy egress ip response is empty")
+		}
+		checked, updateErr := s.recordNodeCheckFailure(ctx, node, "PROXY_EGRESS_VERIFY_FAILED", withMihomoLogSummary(err.Error(), slotResult.LogPath), &now)
 		if updateErr != nil {
 			return nil, updateErr
 		}
@@ -550,6 +593,7 @@ func (s *Service) CheckNode(ctx context.Context, id int64) (*adminplusdomain.Pro
 	if err != nil {
 		return nil, err
 	}
+	s.cacheNodeCheck(ctx, checked)
 	_, _ = s.repo.RecordHealthCheck(ctx, &adminplusdomain.ProxyHealthCheck{
 		NodeID:    node.ID,
 		CheckType: "egress_ip",
@@ -567,6 +611,166 @@ func (s *Service) CheckNode(ctx context.Context, id int64) (*adminplusdomain.Pro
 		Payload:        map[string]any{"latency_ms": latency, "egress_ip": egressIP},
 	})
 	return checked, nil
+}
+
+func withMihomoLogSummary(message string, logPath string) string {
+	summary := mihomoLogSummary(logPath)
+	if summary == "" {
+		return message
+	}
+	return strings.TrimSpace(message) + " mihomo_log=" + summary
+}
+
+func mihomoLogSummary(logPath string) string {
+	logPath = strings.TrimSpace(logPath)
+	if logPath == "" {
+		return ""
+	}
+	content, err := os.ReadFile(logPath)
+	if err != nil || len(content) == 0 {
+		return ""
+	}
+	lines := strings.Split(string(content), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "level=warning") || strings.Contains(line, "level=error") {
+			return compactWhitespace(line)
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return compactWhitespace(line)
+		}
+	}
+	return ""
+}
+
+func compactWhitespace(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func preflightProxyNodeServer(ctx context.Context, node *adminplusdomain.ProxyNode) (string, string, bool) {
+	_ = ctx
+	host, port := proxyNodeServerEndpoint(node)
+	if host == "" {
+		return "", "", false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isInvalidProxyServerIP(ip) {
+			endpoint := proxyNodeEndpointLabel(ip.String(), port)
+			return "PROXY_NODE_SERVER_RESOLVES_RESERVED_IP", fmt.Sprintf("节点服务器解析到不可用地址（%s）", endpoint), true
+		}
+		return "", "", false
+	}
+	return "", "", false
+}
+
+func proxyNodeServerEndpoint(node *adminplusdomain.ProxyNode) (string, string) {
+	if node == nil || len(node.RawMetadata) == 0 {
+		return "", ""
+	}
+	host := strings.TrimSpace(fmt.Sprint(node.RawMetadata["server"]))
+	if host == "" || host == "<nil>" {
+		return "", ""
+	}
+	return host, proxyNodePortText(node.RawMetadata["port"])
+}
+
+func proxyNodePortText(raw any) string {
+	switch value := raw.(type) {
+	case int:
+		if value > 0 {
+			return strconv.Itoa(value)
+		}
+	case int64:
+		if value > 0 {
+			return strconv.FormatInt(value, 10)
+		}
+	case float64:
+		if value > 0 {
+			return strconv.Itoa(int(value))
+		}
+	case json.Number:
+		if port, err := value.Int64(); err == nil && port > 0 {
+			return strconv.FormatInt(port, 10)
+		}
+	case string:
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func proxyNodeEndpointLabel(host string, port string) string {
+	host = strings.TrimSpace(host)
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return host
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func isInvalidProxyServerIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	return v4[0] == 198 && (v4[1] == 18 || v4[1] == 19)
+}
+
+func (s *Service) CheckNodes(ctx context.Context, filter NodeFilter) (*adminplusdomain.ProxyNodeBatchCheckResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("proxy service is not configured")
+	}
+	if err := s.ensureProxyEnabled(ctx, "node_batch_check", adminplusdomain.ProxyAuditEvent{}); err != nil {
+		return nil, err
+	}
+	filter.IncludeDisabled = false
+	nodes, err := s.repo.ListNodes(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	result := &adminplusdomain.ProxyNodeBatchCheckResult{
+		Total:   len(nodes),
+		Results: make([]adminplusdomain.ProxyNodeCheckResult, 0, len(nodes)),
+	}
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		item := adminplusdomain.ProxyNodeCheckResult{
+			NodeID:   node.ID,
+			NodeName: node.DisplayName,
+		}
+		checked, checkErr := s.CheckNode(ctx, node.ID)
+		if checkErr != nil {
+			item.ErrorCode = infraerrors.Reason(checkErr)
+			item.ErrorMessage = infraerrors.Message(checkErr)
+			if item.ErrorMessage == "" {
+				item.ErrorMessage = checkErr.Error()
+			}
+			if checked != nil {
+				item.Node = checked
+			}
+			result.Failed++
+		} else {
+			item.Succeeded = true
+			item.Node = checked
+			result.Succeeded++
+		}
+		result.Results = append(result.Results, item)
+	}
+	result.Total = len(result.Results)
+	return result, nil
 }
 
 func (s *Service) UpdateNodeDisabled(ctx context.Context, id int64, disabled bool, reason string) (*adminplusdomain.ProxyNode, error) {
@@ -802,6 +1006,40 @@ func (s *Service) RestartSlot(ctx context.Context, id int64) (*adminplusdomain.P
 	return updated, nil
 }
 
+func (s *Service) RotateRuntimeSlotSecret(ctx context.Context, id int64) (*adminplusdomain.ProxyRuntimeSlot, error) {
+	if s == nil || s.repo == nil || s.cipher == nil {
+		return nil, internalError("proxy service is not configured")
+	}
+	if id <= 0 {
+		return nil, invalidInput("PROXY_RUNTIME_SLOT_ID_INVALID", "invalid proxy runtime slot id")
+	}
+	slot, _, err := s.repo.GetRuntimeSlotSecret(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if slot.Status == adminplusdomain.ProxyRuntimeSlotAssigned || slot.Status == adminplusdomain.ProxyRuntimeSlotDraining {
+		return nil, conflict("PROXY_SLOT_SECRET_ROTATION_BUSY", "proxy runtime slot is assigned")
+	}
+	secret := randomSecret()
+	ciphertext, err := s.cipher.Encrypt(secret)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := s.repo.UpdateRuntimeSlot(ctx, id, UpdateRuntimeSlotInput{
+		ControllerSecretCiphertext: &ciphertext,
+	})
+	if err != nil {
+		return nil, err
+	}
+	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+		EventType: "slot_secret_rotated",
+		SlotID:    id,
+		Level:     adminplusdomain.ProxyAuditWarning,
+		Message:   "代理运行槽位 controller secret 已轮换",
+	})
+	return updated, nil
+}
+
 func (s *Service) RequestAssignment(ctx context.Context, input RequestAssignmentInput) (*adminplusdomain.ProxyAssignment, error) {
 	if s == nil || s.repo == nil || s.cipher == nil || s.runtime == nil {
 		return nil, internalError("proxy service is not configured")
@@ -815,6 +1053,14 @@ func (s *Service) RequestAssignment(ctx context.Context, input RequestAssignment
 	}
 	if input.TaskType == "" || input.TaskID == "" {
 		return nil, invalidInput("PROXY_TASK_REQUIRED", "task type and task id are required")
+	}
+	if err := s.ensureProxyEnabled(ctx, "assignment_request", adminplusdomain.ProxyAuditEvent{
+		TaskType:   input.TaskType,
+		TaskID:     input.TaskID,
+		PolicyID:   input.PolicyID,
+		TargetHost: input.TargetHost,
+	}); err != nil {
+		return nil, err
 	}
 	policy, err := s.repo.GetPolicy(ctx, input.PolicyID)
 	if err != nil {
@@ -932,7 +1178,7 @@ func (s *Service) ReleaseAssignment(ctx context.Context, id int64, failed bool, 
 		status = adminplusdomain.ProxyAssignmentFailed
 	}
 	releasedAt := s.now()
-	updated, err := s.repo.UpdateAssignment(ctx, id, UpdateAssignmentInput{
+	updated, err := s.repo.UpdateAssignment(ctx, assignment.ID, UpdateAssignmentInput{
 		Status:       &status,
 		ErrorCode:    &errorCode,
 		ErrorMessage: &errorMessage,
@@ -979,6 +1225,16 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ensureProxyEnabled(ctx, "node_switch", adminplusdomain.ProxyAuditEvent{
+		TaskType:   assignment.TaskType,
+		TaskID:     assignment.TaskID,
+		PolicyID:   assignment.PolicyID,
+		SlotID:     assignment.SlotID,
+		NodeID:     assignment.NodeID,
+		TargetHost: assignment.TargetHost,
+	}); err != nil {
+		return nil, err
+	}
 	if assignment.Status != adminplusdomain.ProxyAssignmentActive {
 		return nil, conflict("PROXY_ASSIGNMENT_NOT_ACTIVE", "proxy assignment is not active")
 	}
@@ -986,7 +1242,75 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 	if err != nil {
 		return nil, err
 	}
-	if policy.MaxSwitchesPerTask >= 0 && assignment.SwitchCount >= policy.MaxSwitchesPerTask {
+	if err := s.enforceSwitchBudget(ctx, assignment, policy); err != nil {
+		return nil, err
+	}
+	node, err := s.repo.GetNode(ctx, input.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureNodeAllowedByAssignment(ctx, assignment, node); err != nil {
+		return nil, err
+	}
+	return s.switchAssignmentToNode(ctx, assignment, node, input.ErrorCode, input.ErrorMessage, "node_switched", "代理节点已切换")
+}
+
+func (s *Service) ReportFailure(ctx context.Context, id int64, input ReportFailureInput) (*adminplusdomain.ProxyAssignment, error) {
+	assignment, err := s.repo.GetAssignment(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProxyEnabled(ctx, "node_auto_switch", adminplusdomain.ProxyAuditEvent{
+		TaskType:   assignment.TaskType,
+		TaskID:     assignment.TaskID,
+		PolicyID:   assignment.PolicyID,
+		SlotID:     assignment.SlotID,
+		NodeID:     assignment.NodeID,
+		TargetHost: assignment.TargetHost,
+	}); err != nil {
+		return nil, err
+	}
+	if assignment.Status != adminplusdomain.ProxyAssignmentActive {
+		return nil, conflict("PROXY_ASSIGNMENT_NOT_ACTIVE", "proxy assignment is not active")
+	}
+	if input.BusinessRejected {
+		_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+			EventType:  "target_business_rejected",
+			TaskType:   assignment.TaskType,
+			TaskID:     assignment.TaskID,
+			PolicyID:   assignment.PolicyID,
+			SlotID:     assignment.SlotID,
+			NodeID:     assignment.NodeID,
+			TargetHost: assignment.TargetHost,
+			Level:      adminplusdomain.ProxyAuditInfo,
+			Message:    "目标返回业务拒绝，未触发代理切换",
+			Payload:    map[string]any{"error_code": input.ErrorCode, "error_message": trimLimit(input.ErrorMessage, 500)},
+		})
+		return assignment, nil
+	}
+	code := strings.TrimSpace(input.ErrorCode)
+	if code == "" {
+		code = "PROXY_TARGET_NETWORK_FAILED"
+	}
+	message := strings.TrimSpace(input.ErrorMessage)
+	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+		EventType:  "node_failure_reported",
+		TaskType:   assignment.TaskType,
+		TaskID:     assignment.TaskID,
+		PolicyID:   assignment.PolicyID,
+		SlotID:     assignment.SlotID,
+		NodeID:     assignment.NodeID,
+		TargetHost: assignment.TargetHost,
+		Level:      adminplusdomain.ProxyAuditWarning,
+		Message:    "代理节点网络失败已上报",
+		Payload:    map[string]any{"error_code": code, "error_message": trimLimit(message, 500)},
+	})
+	s.markAssignmentNodeSuspect(ctx, assignment, code, message)
+	policy, err := s.repo.GetPolicy(ctx, assignment.PolicyID)
+	if err != nil {
+		return nil, err
+	}
+	if !autoSwitchEnabled(policy) {
 		_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
 			EventType:  "node_switch_denied",
 			TaskType:   assignment.TaskType,
@@ -996,21 +1320,56 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 			NodeID:     assignment.NodeID,
 			TargetHost: assignment.TargetHost,
 			Level:      adminplusdomain.ProxyAuditWarning,
-			Message:    "代理节点切换超过策略预算",
-			Payload: map[string]any{
-				"switch_count":          assignment.SwitchCount,
-				"max_switches_per_task": policy.MaxSwitchesPerTask,
-			},
+			Message:    "代理策略未启用自动切换",
+			Payload:    map[string]any{"selection_mode": fmt.Sprint(policy.Config["selection_mode"]), "error_code": code},
 		})
-		return nil, conflict("PROXY_SWITCH_BUDGET_EXHAUSTED", "proxy switch budget is exhausted")
+		return nil, conflict("PROXY_AUTO_SWITCH_DISABLED", "proxy policy does not allow automatic switching")
 	}
-	node, err := s.repo.GetNode(ctx, input.NodeID)
+	if err := s.enforceSwitchBudget(ctx, assignment, policy); err != nil {
+		return nil, err
+	}
+	node, err := s.selectReplacementNode(ctx, policy, assignment.NodeID)
 	if err != nil {
+		_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+			EventType:  "node_switch_failed",
+			TaskType:   assignment.TaskType,
+			TaskID:     assignment.TaskID,
+			PolicyID:   assignment.PolicyID,
+			SlotID:     assignment.SlotID,
+			NodeID:     assignment.NodeID,
+			TargetHost: assignment.TargetHost,
+			Level:      adminplusdomain.ProxyAuditError,
+			Message:    "代理自动切换没有可用替代节点",
+			Payload:    map[string]any{"error_code": code, "error_message": trimLimit(err.Error(), 500)},
+		})
 		return nil, err
 	}
-	if err := s.ensureNodeAllowedByAssignment(ctx, assignment, node); err != nil {
-		return nil, err
+	return s.switchAssignmentToNode(ctx, assignment, node, code, message, "node_auto_switched", "代理节点已自动切换")
+}
+
+func (s *Service) enforceSwitchBudget(ctx context.Context, assignment *adminplusdomain.ProxyAssignment, policy *adminplusdomain.ProxyPolicy) error {
+	if assignment == nil || policy == nil || policy.MaxSwitchesPerTask < 0 || assignment.SwitchCount < policy.MaxSwitchesPerTask {
+		return nil
 	}
+	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+		EventType:  "node_switch_denied",
+		TaskType:   assignment.TaskType,
+		TaskID:     assignment.TaskID,
+		PolicyID:   assignment.PolicyID,
+		SlotID:     assignment.SlotID,
+		NodeID:     assignment.NodeID,
+		TargetHost: assignment.TargetHost,
+		Level:      adminplusdomain.ProxyAuditWarning,
+		Message:    "代理节点切换超过策略预算",
+		Payload: map[string]any{
+			"switch_count":          assignment.SwitchCount,
+			"max_switches_per_task": policy.MaxSwitchesPerTask,
+		},
+	})
+	return conflict("PROXY_SWITCH_BUDGET_EXHAUSTED", "proxy switch budget is exhausted")
+}
+
+func (s *Service) switchAssignmentToNode(ctx context.Context, assignment *adminplusdomain.ProxyAssignment, node *adminplusdomain.ProxyNode, errorCode string, errorMessage string, eventType string, auditMessage string) (*adminplusdomain.ProxyAssignment, error) {
 	slot, secretCiphertext, err := s.repo.GetRuntimeSlotSecret(ctx, assignment.SlotID)
 	if err != nil {
 		return nil, err
@@ -1034,19 +1393,19 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 		}
 	}
 	switchCount := assignment.SwitchCount + 1
-	updated, err := s.repo.UpdateAssignment(ctx, id, UpdateAssignmentInput{
+	updated, err := s.repo.UpdateAssignment(ctx, assignment.ID, UpdateAssignmentInput{
 		NodeID:       &node.ID,
 		EgressIP:     &egressIP,
 		SwitchCount:  &switchCount,
-		ErrorCode:    &input.ErrorCode,
-		ErrorMessage: &input.ErrorMessage,
+		ErrorCode:    &errorCode,
+		ErrorMessage: &errorMessage,
 	})
 	if err != nil {
 		return nil, err
 	}
 	_, _ = s.repo.UpdateRuntimeSlot(ctx, slot.ID, UpdateRuntimeSlotInput{SelectedNodeID: &node.ID})
 	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
-		EventType:  "node_switched",
+		EventType:  eventType,
 		TaskType:   assignment.TaskType,
 		TaskID:     assignment.TaskID,
 		PolicyID:   assignment.PolicyID,
@@ -1054,11 +1413,11 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 		NodeID:     node.ID,
 		TargetHost: assignment.TargetHost,
 		Level:      adminplusdomain.ProxyAuditWarning,
-		Message:    "代理节点已切换",
+		Message:    auditMessage,
 		Payload: map[string]any{
 			"switch_count":  switchCount,
 			"previous_node": assignment.NodeID,
-			"error_code":    input.ErrorCode,
+			"error_code":    errorCode,
 		},
 	})
 	return updated, nil
@@ -1107,6 +1466,44 @@ func (s *Service) ListAssignments(ctx context.Context, filter AssignmentFilter) 
 
 func (s *Service) ListAuditEvents(ctx context.Context, filter AuditFilter) ([]*adminplusdomain.ProxyAuditEvent, error) {
 	return s.repo.ListAuditEvents(ctx, filter)
+}
+
+func normalizeRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
+	if !cfg.Enabled && cfg.BinaryPath == "" && cfg.RuntimeDir == "" && cfg.BaseMixedPort == 0 && cfg.BaseControllerPort == 0 && cfg.MaxSlots == 0 && cfg.EgressCheckURL == "" {
+		cfg.Enabled = true
+	}
+	cfg.BinaryPath = normalizeMihomoBinaryPath(cfg.BinaryPath)
+	if cfg.RuntimeDir == "" {
+		cfg.RuntimeDir = defaultProxyRuntimeDir
+	}
+	if cfg.BaseMixedPort <= 0 {
+		cfg.BaseMixedPort = defaultProxyBaseMixedPort
+	}
+	if cfg.BaseControllerPort <= 0 {
+		cfg.BaseControllerPort = defaultProxyBaseControllerPort
+	}
+	if cfg.MaxSlots <= 0 {
+		cfg.MaxSlots = defaultProxyMaxSlots
+	}
+	if cfg.EgressCheckURL == "" {
+		cfg.EgressCheckURL = defaultProxyEgressCheckURL
+	}
+	return cfg
+}
+
+func (s *Service) ensureProxyEnabled(ctx context.Context, action string, event adminplusdomain.ProxyAuditEvent) error {
+	if s == nil || s.runtimeCfg.Enabled {
+		return nil
+	}
+	event.EventType = "proxy_disabled"
+	event.Level = adminplusdomain.ProxyAuditWarning
+	event.Message = "代理出口已被全局停用"
+	if event.Payload == nil {
+		event.Payload = map[string]any{}
+	}
+	event.Payload["action"] = action
+	_, _ = s.audit(ctx, &event)
+	return forbidden("PROXY_DISABLED", "proxy manager is disabled")
 }
 
 func (s *Service) fetchSubscription(ctx context.Context, rawURL string) ([]byte, error) {
@@ -1201,6 +1598,39 @@ func (s *Service) selectNode(ctx context.Context, policy *adminplusdomain.ProxyP
 		}
 		return nil, unavailable("PROXY_FIXED_NODE_UNAVAILABLE", "configured fixed proxy node is not available")
 	}
+	sortProxyNodeCandidates(candidates, policy)
+	return candidates[0], nil
+}
+
+func (s *Service) selectReplacementNode(ctx context.Context, policy *adminplusdomain.ProxyPolicy, currentNodeID int64) (*adminplusdomain.ProxyNode, error) {
+	nodes, err := s.repo.ListNodes(ctx, NodeFilter{
+		SubscriptionIDs: policy.SubscriptionIDs,
+		IncludeDisabled: false,
+		Limit:           1000,
+	})
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]*adminplusdomain.ProxyNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node.ID == currentNodeID {
+			continue
+		}
+		if node.HealthStatus == adminplusdomain.ProxyNodeHealthDisabled ||
+			node.HealthStatus == adminplusdomain.ProxyNodeHealthUnhealthy ||
+			node.HealthStatus == adminplusdomain.ProxyNodeHealthSuspect {
+			continue
+		}
+		candidates = append(candidates, node)
+	}
+	if len(candidates) == 0 {
+		return nil, unavailable("PROXY_NODE_NO_HEALTHY_NODE", "no replacement proxy node is available")
+	}
+	sortProxyNodeCandidates(candidates, policy)
+	return candidates[0], nil
+}
+
+func sortProxyNodeCandidates(candidates []*adminplusdomain.ProxyNode, policy *adminplusdomain.ProxyPolicy) {
 	regionRank := make(map[string]int, len(policy.PreferredRegions))
 	for i, region := range policy.PreferredRegions {
 		regionRank[strings.ToUpper(strings.TrimSpace(region))] = i
@@ -1226,7 +1656,24 @@ func (s *Service) selectNode(ctx context.Context, policy *adminplusdomain.ProxyP
 		}
 		return left.ID < right.ID
 	})
-	return candidates[0], nil
+}
+
+func autoSwitchEnabled(policy *adminplusdomain.ProxyPolicy) bool {
+	if policy == nil {
+		return false
+	}
+	if fixedNodeIDFromPolicy(policy) > 0 {
+		return false
+	}
+	switch value := policy.Config["auto_switch"].(type) {
+	case bool:
+		return value
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		return normalized != "false" && normalized != "0" && normalized != "off"
+	default:
+		return true
+	}
 }
 
 func fixedNodeIDFromPolicy(policy *adminplusdomain.ProxyPolicy) int64 {
@@ -1337,6 +1784,7 @@ func (s *Service) recordNodeCheckFailure(ctx context.Context, node *adminplusdom
 	if err != nil {
 		return nil, err
 	}
+	s.cacheNodeCheck(ctx, checked)
 	when := s.now()
 	if checkedAt != nil {
 		when = *checkedAt
@@ -1358,6 +1806,34 @@ func (s *Service) recordNodeCheckFailure(ctx context.Context, node *adminplusdom
 		Payload:        map[string]any{"error_code": code, "error_message": trimLimit(message, 500)},
 	})
 	return checked, nil
+}
+
+func (s *Service) cacheNodeCheck(ctx context.Context, node *adminplusdomain.ProxyNode) {
+	if s == nil || s.checkCache == nil || node == nil {
+		return
+	}
+	_ = s.checkCache.SetNodeCheck(ctx, node, nodeCheckCacheTTL)
+}
+
+func (s *Service) applyCachedNodeChecks(ctx context.Context, nodes []*adminplusdomain.ProxyNode) {
+	if s == nil || s.checkCache == nil || len(nodes) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(nodes))
+	for _, node := range nodes {
+		if node != nil {
+			ids = append(ids, node.ID)
+		}
+	}
+	snapshots, err := s.checkCache.GetNodeChecks(ctx, ids)
+	if err != nil {
+		return
+	}
+	for _, node := range nodes {
+		if node != nil {
+			applyNodeCheckSnapshot(node, snapshots[node.ID])
+		}
+	}
 }
 
 func (s *Service) assignSlotSecret(ctx context.Context, slot *adminplusdomain.ProxyRuntimeSlot, taskType string, taskID string, nodeID int64) (*adminplusdomain.ProxyRuntimeSlot, string, error) {

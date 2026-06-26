@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -211,6 +212,28 @@ func (r *SQLRepository) ListLocalAccountUsageSummaries(ctx context.Context, filt
 		return nil, err
 	}
 	return items, nil
+}
+
+func (r *SQLRepository) HasSupplierUsageSince(ctx context.Context, supplierID int64, since time.Time) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, infraerrors.New(http.StatusInternalServerError, "SUB2API_READ_DB_NOT_CONFIGURED", "sub2api read database is not configured")
+	}
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM usage_logs ul
+			INNER JOIN admin_plus_supplier_accounts asa
+				ON asa.local_sub2api_account_id = ul.account_id
+			WHERE asa.supplier_id = $1
+				AND ul.created_at >= $2
+			LIMIT 1
+		)
+	`, supplierID, since.UTC()).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func buildUsageWhere(filter UsageFilter) ([]string, []any) {

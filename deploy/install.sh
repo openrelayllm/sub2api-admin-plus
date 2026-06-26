@@ -45,6 +45,8 @@ LEGACY_BINARY_NAME="sub2api"
 LEGACY_SERVICE_FILE="/etc/systemd/system/${LEGACY_SERVICE_NAME}.service"
 COMMAND_NAME="sub2apiplus"
 COMMAND_PATH="/usr/local/bin/${COMMAND_NAME}"
+MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.27}"
+MIHOMO_BINARY_PATH="${INSTALL_DIR}/bin/mihomo"
 MIGRATING_LEGACY=false
 
 # Server configuration (will be set by user)
@@ -91,6 +93,8 @@ declare -A MSG_ZH=(
     ["checksum_not_found"]="无法验证校验和（checksums.txt 未找到）"
     ["extracting"]="正在解压..."
     ["binary_installed"]="二进制文件已安装到"
+    ["installing_mihomo"]="正在安装 Mihomo core..."
+    ["mihomo_installed"]="Mihomo core 已安装到"
     ["user_exists"]="用户已存在"
     ["creating_user"]="正在创建系统用户"
     ["user_created"]="用户已创建"
@@ -221,6 +225,8 @@ declare -A MSG_EN=(
     ["checksum_not_found"]="Could not verify checksum (checksums.txt not found)"
     ["extracting"]="Extracting..."
     ["binary_installed"]="Binary installed to"
+    ["installing_mihomo"]="Installing Mihomo core..."
+    ["mihomo_installed"]="Mihomo core installed to"
     ["user_exists"]="User already exists"
     ["creating_user"]="Creating system user"
     ["user_created"]="User created"
@@ -527,6 +533,10 @@ check_dependencies() {
         missing+=("sha256sum")
     fi
 
+    if ! command -v gzip &> /dev/null; then
+        missing+=("gzip")
+    fi
+
     if [ ${#missing[@]} -gt 0 ]; then
         print_error "$(msg 'missing_deps'): ${missing[*]}"
         print_info "$(msg 'install_deps_first')"
@@ -702,6 +712,7 @@ download_and_extract() {
     fi
     cp "$extracted_dir/$ARCHIVE_BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
+    install_mihomo_core
 
     # Copy deploy files if they exist in the archive
     if [ -d "$extracted_dir/deploy" ]; then
@@ -709,6 +720,50 @@ download_and_extract() {
     fi
 
     print_success "$(msg 'binary_installed') $INSTALL_DIR/$BINARY_NAME"
+}
+
+mihomo_asset_name() {
+    case "${OS}_${ARCH}" in
+        linux_amd64)
+            echo "mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz"
+            ;;
+        linux_arm64)
+            echo "mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
+            ;;
+        *)
+            print_error "$(msg 'unsupported_os'): ${OS}_${ARCH}"
+            exit 1
+            ;;
+    esac
+}
+
+install_mihomo_core() {
+    local asset_name
+    local url
+    local mihomo_tmp_dir
+
+    print_info "$(msg 'installing_mihomo')"
+    asset_name="$(mihomo_asset_name)"
+    url="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${asset_name}"
+    mkdir -p "$INSTALL_DIR/bin"
+    mihomo_tmp_dir=$(mktemp -d)
+
+    if curl -fsSL "$url" -o "$mihomo_tmp_dir/mihomo.gz"; then
+        gzip -dc "$mihomo_tmp_dir/mihomo.gz" > "$mihomo_tmp_dir/mihomo"
+        chmod +x "$mihomo_tmp_dir/mihomo"
+        mv "$mihomo_tmp_dir/mihomo" "$MIHOMO_BINARY_PATH"
+        rm -rf "$mihomo_tmp_dir"
+        print_success "$(msg 'mihomo_installed') $MIHOMO_BINARY_PATH"
+        return 0
+    fi
+
+    rm -rf "$mihomo_tmp_dir"
+    if [ -x "$MIHOMO_BINARY_PATH" ]; then
+        print_warning "Mihomo core download failed; keeping existing binary: $MIHOMO_BINARY_PATH"
+        return 0
+    fi
+    print_error "$(msg 'download_failed'): $asset_name"
+    exit 1
 }
 
 install_command_wrapper() {
@@ -883,6 +938,7 @@ Environment=GIN_MODE=release
 Environment=DATA_DIR=${CONFIG_DIR}
 Environment=SERVER_HOST=${SERVER_HOST}
 Environment=SERVER_PORT=${SERVER_PORT}
+Environment=ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH=${MIHOMO_BINARY_PATH}
 
 [Install]
 WantedBy=multi-user.target

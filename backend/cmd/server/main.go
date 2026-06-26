@@ -90,6 +90,10 @@ func main() {
 		}
 	}
 
+	if err := setup.EnsureDevAdminFromEnv(); err != nil {
+		log.Fatalf("Dev admin reset failed: %v", err)
+	}
+
 	// Normal server mode
 	runMainServer()
 }

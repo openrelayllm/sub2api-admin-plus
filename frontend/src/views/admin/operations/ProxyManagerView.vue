@@ -14,8 +14,11 @@
 
       <section class="grid gap-4 md:grid-cols-5">
         <div class="card p-4">
-          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">启用订阅</p>
-          <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ status.subscriptions_active }}</p>
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">代理运行</p>
+          <p class="mt-2 text-2xl font-semibold" :class="status.proxy_enabled === false ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'">
+            {{ status.proxy_enabled === false ? '停用' : '启用' }}
+          </p>
+          <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ status.mihomo_configured ? 'Mihomo 已配置' : '未配置 Mihomo' }}</p>
         </div>
         <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">健康节点</p>
@@ -27,11 +30,38 @@
         </div>
         <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">运行槽位</p>
-          <p class="mt-2 text-2xl font-semibold text-sky-600 dark:text-sky-400">{{ status.slots_assigned }} / {{ status.slots_total }}</p>
+          <p class="mt-2 text-2xl font-semibold text-sky-600 dark:text-sky-400">{{ status.slots_assigned }} / {{ status.max_slots || status.slots_total }}</p>
         </div>
         <div class="card p-4">
           <p class="text-xs font-medium text-gray-500 dark:text-dark-400">24h 错误</p>
           <p class="mt-2 text-2xl font-semibold text-rose-600 dark:text-rose-400">{{ status.recent_errors }}</p>
+        </div>
+      </section>
+
+      <section class="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">24h 切换</p>
+          <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ status.node_switches_24h || 0 }}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">24h 失败上报</p>
+          <p class="mt-2 text-xl font-semibold text-amber-600 dark:text-amber-400">{{ status.node_failures_24h || 0 }}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">24h 策略拒绝</p>
+          <p class="mt-2 text-xl font-semibold text-rose-600 dark:text-rose-400">{{ status.policy_denials_24h || 0 }}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">24h 出口验证失败</p>
+          <p class="mt-2 text-xl font-semibold text-rose-600 dark:text-rose-400">{{ status.egress_verify_failures_24h || 0 }}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">24h 完成绑定</p>
+          <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ status.completed_assignments_24h || 0 }}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-xs font-medium text-gray-500 dark:text-dark-400">平均绑定时长</p>
+          <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatDurationSeconds(status.avg_assignment_seconds_24h || 0) }}</p>
         </div>
       </section>
 
@@ -48,7 +78,159 @@
         </button>
       </nav>
 
-      <section v-if="activeTab === 'subscriptions'" class="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <section v-if="status.proxy_enabled === false" class="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
+        代理出口已被全局停用，新节点检测、任务绑定和出口切换都会被后端拒绝。
+      </section>
+
+      <section v-else-if="!status.mihomo_configured" class="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+        未配置 Mihomo core，节点检测暂不可用。请设置 <span class="font-mono">ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH=/path/to/mihomo</span> 后重启服务，或将 <span class="font-mono">mihomo</span> 放入服务进程的 PATH。
+      </section>
+
+      <section v-if="activeTab === 'egress'" class="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+        <div class="card p-5">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">出口选择</h2>
+          <div class="mt-4 space-y-4">
+            <label class="block">
+              <span class="input-label">代理策略</span>
+              <select v-model.number="egressForm.policy_id" class="input">
+                <option :value="0">请选择策略</option>
+                <option v-for="policy in policies" :key="policy.id" :value="policy.id">{{ policy.name }}</option>
+              </select>
+            </label>
+            <div v-if="selectedEgressPolicy" class="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-300">
+              <div>订阅：{{ selectedEgressPolicy.subscription_ids.join(', ') || '-' }}</div>
+              <div>可用节点：{{ selectedEgressPolicy.healthy_nodes_available || 0 }} · 切换预算：{{ selectedEgressPolicy.max_switches_per_task }}</div>
+              <div>{{ policySelectionLabel(selectedEgressPolicy) }}</div>
+            </div>
+            <div v-if="selectedEgressPolicy" class="rounded-md border border-sky-100 bg-sky-50 px-3 py-3 text-sm dark:border-sky-900/50 dark:bg-sky-950/30">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p class="text-xs font-medium text-sky-700 dark:text-sky-300">当前生效出口</p>
+                  <p class="mt-1 font-semibold text-gray-900 dark:text-white">{{ egressEffectiveLabel }}</p>
+                  <p class="mt-1 text-xs text-gray-600 dark:text-dark-300">{{ egressEffectiveDetail }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="savingEgressPolicy || selectedEgressPolicyMode === 'auto'"
+                  @click="saveAutoEgressPolicyNow"
+                >
+                  切回自动
+                </button>
+              </div>
+            </div>
+            <label class="block">
+              <span class="input-label">出口模式</span>
+              <select v-model="egressForm.selection_mode" class="input">
+                <option value="auto">自动选择健康节点</option>
+                <option value="fixed">固定指定节点 / 出口 IP</option>
+              </select>
+            </label>
+            <label v-if="egressForm.selection_mode === 'fixed'" class="block">
+              <span class="input-label">指定出口节点</span>
+              <select v-model.number="egressForm.fixed_node_id" class="input">
+                <option :value="0">请选择节点</option>
+                <option v-for="node in egressNodeOptions" :key="node.id" :value="node.id">
+                  {{ node.display_name }} · {{ node.region || '-' }} · {{ node.last_egress_ip || '未检测出口 IP' }}
+                </option>
+              </select>
+            </label>
+            <div v-if="selectedEgressNode" class="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300">
+              当前固定出口：{{ selectedEgressNode.display_name }} · {{ selectedEgressNode.last_egress_ip || '未检测出口 IP' }}
+            </div>
+            <button type="button" class="btn btn-primary w-full" :disabled="savingEgressPolicy || !selectedEgressPolicy" @click="saveEgressPolicyNow">
+              保存出口设置
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-6">
+          <div class="card overflow-hidden">
+            <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">运行中任务快速切换</h2>
+            </div>
+            <div class="divide-y divide-gray-100 dark:divide-dark-700">
+              <div v-if="activeAssignments.length === 0" class="px-5 py-8 text-center text-sm text-gray-500">暂无运行中的代理绑定</div>
+              <div v-for="assignment in activeAssignments" :key="assignment.id" class="px-5 py-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div class="font-medium text-gray-900 dark:text-white">{{ assignment.task_type }} #{{ assignment.task_id }}</div>
+                    <div class="mt-1 font-mono text-xs text-gray-500">{{ assignment.target_host }} · slot {{ assignment.slot_id }} · node {{ assignment.node_id || '-' }}</div>
+                    <div class="mt-1 text-xs text-gray-500">出口 IP：{{ assignment.egress_ip || '-' }} · 已切换 {{ assignment.switch_count }} 次</div>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <select v-model.number="assignmentSwitchNodeIDs[assignment.id]" class="input h-9 w-72 py-1 text-sm">
+                      <option :value="0">选择新的出口节点</option>
+                      <option v-for="node in eligibleNodesForAssignment(assignment)" :key="node.id" :value="node.id">
+                        {{ node.display_name }} · {{ node.last_egress_ip || node.region || '-' }}
+                      </option>
+                    </select>
+                    <button type="button" class="btn btn-secondary btn-sm" @click="autoSwitchAssignmentNow(assignment)">自动换出口</button>
+                    <button type="button" class="btn btn-primary btn-sm" @click="switchAssignmentNow(assignment)">切换出口</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card overflow-hidden">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">可选节点</h2>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="loading || checkingNodes || egressNodeOptions.length === 0 || !canCheckProxyNodes" @click="checkAllNodesNow">
+                {{ batchCheckLabel() }}
+              </button>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full min-w-[760px] divide-y divide-gray-200 dark:divide-dark-700">
+                <thead class="bg-gray-50 dark:bg-dark-800">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">节点</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">状态</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">出口 IP</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">操作</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
+                  <tr v-if="egressNodeOptions.length === 0">
+                    <td colspan="4" class="px-4 py-8 text-center text-sm text-gray-500">请选择策略或先刷新节点</td>
+                  </tr>
+                  <tr v-for="node in egressNodeOptions" :key="node.id">
+                    <td class="px-4 py-4">
+                      <div class="max-w-[360px] truncate font-medium text-gray-900 dark:text-white">{{ node.display_name }}</div>
+                      <div class="mt-1 text-xs text-gray-500">{{ node.region || '-' }} · {{ node.protocol }}</div>
+                    </td>
+                    <td class="px-4 py-4">
+                      <span class="badge" :class="nodeStatusClass(node)">{{ nodeStatusLabel(node) }}</span>
+                      <div v-if="nodeCheckMessage(node)" class="mt-1 max-w-[220px] truncate text-xs" :class="nodeCheckMessageClass(node)" :title="nodeCheckMessageTitle(node)">
+                        {{ nodeCheckMessage(node) }}
+                      </div>
+                    </td>
+                    <td class="px-4 py-4 font-mono text-xs text-gray-600 dark:text-dark-300">{{ nodeEgressLabel(node) }}</td>
+                    <td class="px-4 py-4 text-right">
+                      <div class="flex flex-wrap justify-end gap-2">
+                        <span v-if="isCurrentEgressNode(node)" class="badge badge-success">当前固定</span>
+                        <button type="button" class="btn btn-secondary btn-sm" :disabled="loading || isNodeChecking(node.id) || !canCheckProxyNodes" @click="checkNodeNow(node.id)">
+                          {{ isNodeChecking(node.id) ? '检测中...' : '检测出口 IP' }}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-primary btn-sm"
+                          :disabled="savingEgressPolicy || !selectedEgressPolicy || isCurrentEgressNode(node)"
+                          @click="fixEgressNodeNow(node)"
+                        >
+                          {{ isCurrentEgressNode(node) ? '已固定' : '固定并保存' }}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section v-else-if="activeTab === 'subscriptions'" class="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div class="card p-5">
           <div class="flex items-center justify-between gap-3">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ editingSubscriptionID ? '编辑订阅' : '导入订阅' }}</h2>
@@ -158,10 +340,15 @@
               <option value="disabled">停用</option>
             </select>
           </label>
-          <button type="button" class="btn btn-primary" :disabled="loading" @click="loadNodes">
-            <Icon name="search" size="sm" />
-            查询
-          </button>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" class="btn btn-secondary" :disabled="loading || checkingNodes || !canCheckProxyNodes" @click="checkFilteredNodesNow">
+              {{ batchCheckLabel() }}
+            </button>
+            <button type="button" class="btn btn-primary" :disabled="loading" @click="loadNodes">
+              <Icon name="search" size="sm" />
+              查询
+            </button>
+          </div>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full min-w-[1120px] divide-y divide-gray-200 dark:divide-dark-700">
@@ -188,14 +375,18 @@
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-dark-300">{{ node.protocol }}</td>
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-dark-300">{{ node.region || '-' }}</td>
                 <td class="px-4 py-4">
-                  <span class="badge" :class="healthClass(node.health_status)">{{ healthLabel(node.health_status) }}</span>
-                  <div v-if="node.last_error_message" class="mt-1 max-w-[260px] truncate text-xs text-rose-500">{{ node.last_error_message }}</div>
+                  <span class="badge" :class="nodeStatusClass(node)">{{ nodeStatusLabel(node) }}</span>
+                  <div v-if="nodeCheckMessage(node)" class="mt-1 max-w-[260px] truncate text-xs" :class="nodeCheckMessageClass(node)" :title="nodeCheckMessageTitle(node)">
+                    {{ nodeCheckMessage(node) }}
+                  </div>
                 </td>
-                <td class="px-4 py-4 text-sm text-gray-600 dark:text-dark-300">{{ node.last_latency_ms ?? '-' }}</td>
-                <td class="px-4 py-4 font-mono text-xs text-gray-600 dark:text-dark-300">{{ node.last_egress_ip || '-' }}</td>
+                <td class="px-4 py-4 text-sm text-gray-600 dark:text-dark-300">{{ nodeLatencyLabel(node) }}</td>
+                <td class="px-4 py-4 font-mono text-xs text-gray-600 dark:text-dark-300">{{ nodeEgressLabel(node) }}</td>
                 <td class="px-4 py-4 text-right">
                   <div class="flex justify-end gap-2">
-                    <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="checkNodeNow(node.id)">检测</button>
+                    <button type="button" class="btn btn-secondary btn-sm" :disabled="loading || isNodeChecking(node.id) || !canCheckProxyNodes" @click="checkNodeNow(node.id)">
+                      {{ isNodeChecking(node.id) ? '检测中...' : '检测' }}
+                    </button>
                     <button v-if="node.health_status === 'disabled'" type="button" class="btn btn-secondary btn-sm" @click="enableNodeNow(node.id)">启用</button>
                     <button v-else type="button" class="btn btn-secondary btn-sm" @click="disableNodeNow(node.id)">停用</button>
                   </div>
@@ -399,6 +590,7 @@
                 <div class="flex items-center gap-2">
                   <span class="badge" :class="slotClass(slot.status)">{{ slotLabel(slot.status) }}</span>
                   <button type="button" class="btn btn-secondary btn-sm" @click="restartSlotNow(slot.id)">重启</button>
+                  <button type="button" class="btn btn-secondary btn-sm" :disabled="slot.status === 'assigned' || slot.status === 'draining'" @click="rotateSlotSecretNow(slot)">轮换 Secret</button>
                 </div>
               </div>
             </div>
@@ -431,6 +623,7 @@
                     </option>
                   </select>
                   <button v-if="assignment.status === 'active'" type="button" class="btn btn-primary btn-sm" @click="switchAssignmentNow(assignment)">切换出口</button>
+                  <button v-if="assignment.status === 'active'" type="button" class="btn btn-secondary btn-sm" @click="autoSwitchAssignmentNow(assignment)">自动换出口</button>
                   <button v-if="assignment.status === 'active'" type="button" class="btn btn-secondary btn-sm" @click="releaseAssignmentNow(assignment.id)">释放</button>
                 </div>
               </div>
@@ -440,7 +633,7 @@
       </section>
 
       <section v-else class="card overflow-hidden">
-        <div class="grid gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 md:grid-cols-2 xl:grid-cols-[160px_180px_160px_160px_140px_minmax(0,1fr)_auto] xl:items-end">
+        <div class="grid gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 md:grid-cols-2 xl:grid-cols-[160px_180px_160px_160px_140px_minmax(0,1fr)_auto_auto] xl:items-end">
           <label class="block">
             <span class="input-label">级别</span>
             <select v-model="auditFilters.level" class="input" @change="loadAudits">
@@ -473,6 +666,9 @@
           <button type="button" class="btn btn-primary" @click="loadAudits">
             <Icon name="search" size="sm" />
             查询
+          </button>
+          <button type="button" class="btn btn-secondary" @click="exportAuditsNow">
+            导出 CSV
           </button>
         </div>
         <div class="overflow-x-auto">
@@ -523,6 +719,7 @@ import {
   deleteProxySubscription,
   deleteProxyTarget,
   disableProxyNode,
+  downloadProxyAuditEvents,
   enableProxyNode,
   getProxyCenterStatus,
   listProxyAssignments,
@@ -532,9 +729,11 @@ import {
   listProxyRuntimeSlots,
   listProxySubscriptions,
   listProxyTargets,
+  reportProxyAssignmentFailure,
   refreshProxySubscription,
   releaseProxyAssignment,
   restartProxyRuntimeSlot,
+  rotateProxyRuntimeSlotSecret,
   switchProxyAssignment,
   updateProxyPolicy,
   updateProxySubscription,
@@ -556,21 +755,35 @@ import {
   type ProxyTaskPurpose
 } from '@/api/admin/adminPlus'
 
-type TabValue = 'subscriptions' | 'nodes' | 'policies' | 'runtime' | 'audits'
+type TabValue = 'egress' | 'subscriptions' | 'nodes' | 'policies' | 'runtime' | 'audits'
 type PolicySelectionMode = 'auto' | 'fixed'
+
+const NODE_CHECK_CONCURRENCY = 4
 
 const appStore = useAppStore()
 const loading = ref(false)
+const checkingNodes = ref(false)
+const checkingNodeIDs = reactive<Record<number, boolean>>({})
+const nodeCheckErrors = reactive<Record<number, string>>({})
+const nodeCheckMessages = reactive<Record<number, string>>({})
+const nodeCheckProgress = reactive({
+  total: 0,
+  completed: 0,
+  succeeded: 0,
+  failed: 0
+})
 const savingSubscription = ref(false)
 const savingPolicy = ref(false)
+const savingEgressPolicy = ref(false)
 const savingTarget = ref(false)
 const editingSubscriptionID = ref(0)
 const editingPolicyID = ref(0)
 const editingTargetID = ref(0)
-const activeTab = ref<TabValue>('subscriptions')
+const activeTab = ref<TabValue>('egress')
 const assignmentSwitchNodeIDs = reactive<Record<number, number>>({})
 
 const tabs: Array<{ value: TabValue; label: string }> = [
+  { value: 'egress', label: '出口选择' },
   { value: 'subscriptions', label: '订阅' },
   { value: 'nodes', label: '节点池' },
   { value: 'policies', label: '策略' },
@@ -588,7 +801,16 @@ const status = reactive<ProxyCenterStatus>({
   slots_total: 0,
   slots_assigned: 0,
   assignments_active: 0,
-  recent_errors: 0
+  recent_errors: 0,
+  node_switches_24h: 0,
+  node_failures_24h: 0,
+  policy_denials_24h: 0,
+  egress_verify_failures_24h: 0,
+  completed_assignments_24h: 0,
+  avg_assignment_seconds_24h: 0,
+  proxy_enabled: true,
+  mihomo_configured: false,
+  max_slots: 0
 })
 
 const subscriptions = ref<ProxySubscription[]>([])
@@ -624,6 +846,12 @@ const policyForm = reactive({
   fixed_node_id: 0
 })
 
+const egressForm = reactive({
+  policy_id: 0,
+  selection_mode: 'auto' as PolicySelectionMode,
+  fixed_node_id: 0
+})
+
 const targetForm = reactive({
   policy_id: 0,
   target_host: '',
@@ -644,6 +872,9 @@ const auditFilters = reactive({
 })
 
 const selectedPolicyID = computed(() => targetForm.policy_id || policies.value[0]?.id || 0)
+const selectedEgressPolicy = computed(() => policies.value.find((policy) => policy.id === egressForm.policy_id))
+const activeAssignments = computed(() => assignments.value.filter((assignment) => assignment.status === 'active'))
+const canCheckProxyNodes = computed(() => status.proxy_enabled !== false && status.mihomo_configured === true)
 const fixedNodeOptions = computed(() => {
   const subscriptionID = Number(policyForm.subscription_id || 0)
   return nodes.value.filter((node) => {
@@ -651,12 +882,51 @@ const fixedNodeOptions = computed(() => {
     return node.health_status !== 'disabled' && node.health_status !== 'unhealthy' && node.health_status !== 'suspect'
   })
 })
+const egressNodeOptions = computed(() => {
+  const policy = selectedEgressPolicy.value
+  return nodes.value.filter((node) => {
+    if (policy && policy.subscription_ids.length > 0 && !policy.subscription_ids.includes(node.subscription_id)) return false
+    return node.health_status !== 'disabled' && node.health_status !== 'unhealthy' && node.health_status !== 'suspect'
+  })
+})
+const selectedEgressNode = computed(() => nodes.value.find((node) => node.id === egressForm.fixed_node_id))
+const selectedEgressPolicyMode = computed<PolicySelectionMode>(() => {
+  const policy = selectedEgressPolicy.value
+  return policy ? policySelectionMode(policy) : 'auto'
+})
+const egressEffectiveNode = computed(() => {
+  const policy = selectedEgressPolicy.value
+  if (!policy || policySelectionMode(policy) !== 'fixed') return undefined
+  const nodeID = fixedNodeID(policy)
+  return nodes.value.find((node) => node.id === nodeID)
+})
+const egressEffectiveLabel = computed(() => {
+  const policy = selectedEgressPolicy.value
+  if (!policy) return '未选择策略'
+  if (policySelectionMode(policy) === 'fixed') {
+    const nodeID = fixedNodeID(policy)
+    return egressEffectiveNode.value?.display_name || (nodeID ? `节点 ${nodeID}` : '固定出口未选择')
+  }
+  return '自动选择健康节点'
+})
+const egressEffectiveDetail = computed(() => {
+  const policy = selectedEgressPolicy.value
+  if (!policy) return '请选择策略后再设置出口。'
+  if (policySelectionMode(policy) === 'fixed') {
+    const node = egressEffectiveNode.value
+    if (!node) return '固定节点不存在或还没有加载节点列表。'
+    return `出口 IP：${node.last_egress_ip || '未检测'} · 地区：${node.region || '-'} · 状态：${healthLabel(node.health_status)}`
+  }
+  return `系统会从 ${egressNodeOptions.value.length} 个可用节点中选择健康出口，运行中任务仍可手动快速切换。`
+})
 
 onMounted(() => {
+  if (window.location.hash === '#egress') activeTab.value = 'egress'
   void loadAll()
 })
 
 watch(activeTab, (tab) => {
+  if (tab === 'egress') void loadRuntime()
   if (tab === 'nodes') void loadNodes()
   if (tab === 'policies') void loadPoliciesAndTargets()
   if (tab === 'runtime') void loadRuntime()
@@ -671,6 +941,24 @@ watch(() => policyForm.subscription_id, () => {
   if (policyForm.fixed_node_id && !fixedNodeOptions.value.some((node) => node.id === policyForm.fixed_node_id)) {
     policyForm.fixed_node_id = 0
   }
+})
+
+watch(policies, () => {
+  if (!egressForm.policy_id && policies.value[0]) {
+    applyPolicyToEgressForm(policies.value[0])
+    return
+  }
+  const policy = selectedEgressPolicy.value
+  if (policy) applyPolicyToEgressForm(policy)
+}, { deep: true })
+
+watch(() => egressForm.policy_id, (id) => {
+  const policy = policies.value.find((item) => item.id === id)
+  if (policy) applyPolicyToEgressForm(policy)
+})
+
+watch(() => egressForm.selection_mode, (mode) => {
+  if (mode !== 'fixed') egressForm.fixed_node_id = 0
 })
 
 async function loadAll() {
@@ -714,6 +1002,9 @@ async function loadNodes() {
 async function loadPoliciesAndTargets() {
   const result = await listProxyPolicies({ page: 1, page_size: 200 })
   policies.value = result.items || []
+  if (!egressForm.policy_id && policies.value[0]) {
+    applyPolicyToEgressForm(policies.value[0])
+  }
   if (!targetForm.policy_id && policies.value[0]) {
     targetForm.policy_id = policies.value[0].id
   }
@@ -857,14 +1148,120 @@ async function refreshSubscriptionNow(id: number) {
 }
 
 async function checkNodeNow(id: number) {
+  if (!ensureProxyNodeCheckReady()) return
+  if (isNodeChecking(id)) return
+  const succeeded = await checkNodeByID(id)
+  if (!succeeded) {
+    appStore.showError(nodeCheckErrors[id] || '节点检测失败')
+    return
+  }
   try {
-    await checkProxyNode(id)
     appStore.showSuccess('节点检测完成')
-    await loadNodes()
     await loadStatus()
   } catch (error) {
     appStore.showError(errorMessage(error))
   }
+}
+
+async function checkAllNodesNow() {
+  await checkNodesNow(egressNodeOptions.value)
+}
+
+async function checkFilteredNodesNow() {
+  if (!ensureProxyNodeCheckReady()) return
+  await loadNodes()
+  await checkNodesNow(nodes.value)
+}
+
+async function checkNodesNow(targetNodes: ProxyNode[]) {
+  if (!ensureProxyNodeCheckReady()) return
+  const nodeIDs = Array.from(new Set(targetNodes.map((node) => node.id))).filter((id) => id > 0)
+  if (nodeIDs.length === 0) {
+    appStore.showError('当前列表没有可检测节点')
+    return
+  }
+  checkingNodes.value = true
+  resetNodeCheckProgress(nodeIDs.length)
+  try {
+    let cursor = 0
+    const workerCount = Math.min(NODE_CHECK_CONCURRENCY, nodeIDs.length)
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (cursor < nodeIDs.length) {
+        const id = nodeIDs[cursor]
+        cursor += 1
+        const succeeded = await checkNodeByID(id)
+        nodeCheckProgress.completed += 1
+        if (succeeded) nodeCheckProgress.succeeded += 1
+        else nodeCheckProgress.failed += 1
+      }
+    }))
+    appStore.showSuccess(`检测完成：成功 ${nodeCheckProgress.succeeded} / 失败 ${nodeCheckProgress.failed}`)
+    await Promise.all([loadStatus(), loadAudits()])
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  } finally {
+    checkingNodes.value = false
+  }
+}
+
+async function checkNodeByID(id: number): Promise<boolean> {
+  setNodeChecking(id, true)
+  clearNodeCheckResult(id)
+  try {
+    const checked = await checkProxyNode(id)
+    replaceNodeInList(checked)
+    if (checked.last_error_message || checked.health_status === 'unhealthy') {
+      nodeCheckErrors[id] = formatNodeCheckFailure(checked.last_error_message || '节点检测未通过', true)
+      return false
+    }
+    nodeCheckMessages[id] = '刚刚检测完成'
+    return true
+  } catch (error) {
+    const existingMessage = nodes.value.find((node) => node.id === id)?.last_error_message
+    nodeCheckErrors[id] = formatNodeCheckFailure(existingMessage || errorMessage(error), true)
+    if (!checkingNodes.value) {
+      await loadNodes()
+    }
+    return false
+  } finally {
+    setNodeChecking(id, false)
+  }
+}
+
+function replaceNodeInList(node: ProxyNode) {
+  const index = nodes.value.findIndex((item) => item.id === node.id)
+  if (index < 0) return
+  nodes.value.splice(index, 1, node)
+}
+
+function setNodeChecking(id: number, checking: boolean) {
+  if (checking) {
+    checkingNodeIDs[id] = true
+    return
+  }
+  delete checkingNodeIDs[id]
+}
+
+function clearNodeCheckResult(id: number) {
+  delete nodeCheckErrors[id]
+  delete nodeCheckMessages[id]
+}
+
+function resetNodeCheckProgress(total: number) {
+  nodeCheckProgress.total = total
+  nodeCheckProgress.completed = 0
+  nodeCheckProgress.succeeded = 0
+  nodeCheckProgress.failed = 0
+}
+
+function ensureProxyNodeCheckReady(): boolean {
+  if (canCheckProxyNodes.value) return true
+  if (status.proxy_enabled === false) {
+    appStore.showError('代理出口已停用，请先启用后再检测')
+    return false
+  }
+  appStore.showError('未配置 Mihomo core，请设置 ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH 或将 mihomo 放入 PATH 后重启服务')
+  return false
 }
 
 async function disableNodeNow(id: number) {
@@ -954,6 +1351,51 @@ async function savePolicyNow() {
   }
 }
 
+async function saveEgressPolicyNow() {
+  const policy = selectedEgressPolicy.value
+  if (!policy) {
+    appStore.showError('请选择代理策略')
+    return
+  }
+  if (egressForm.selection_mode === 'fixed' && !egressForm.fixed_node_id) {
+    appStore.showError('固定出口模式需要选择一个节点')
+    return
+  }
+  savingEgressPolicy.value = true
+  try {
+    const config: Record<string, unknown> = { ...(policy.config || {}) }
+    config.selection_mode = egressForm.selection_mode
+    if (egressForm.selection_mode === 'fixed') {
+      config.fixed_node_id = egressForm.fixed_node_id
+    } else {
+      delete config.fixed_node_id
+    }
+    await updateProxyPolicy(policy.id, { config })
+    appStore.showSuccess('出口设置已保存')
+    await Promise.all([loadPoliciesAndTargets(), loadStatus()])
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  } finally {
+    savingEgressPolicy.value = false
+  }
+}
+
+async function saveAutoEgressPolicyNow() {
+  egressForm.selection_mode = 'auto'
+  egressForm.fixed_node_id = 0
+  await saveEgressPolicyNow()
+}
+
+async function fixEgressNodeNow(node: ProxyNode) {
+  egressForm.selection_mode = 'fixed'
+  egressForm.fixed_node_id = node.id
+  await saveEgressPolicyNow()
+}
+
+function isCurrentEgressNode(node: ProxyNode): boolean {
+  return egressForm.selection_mode === 'fixed' && egressForm.fixed_node_id === node.id
+}
+
 function editPolicy(policy: ProxyPolicy) {
   editingPolicyID.value = policy.id
   policyForm.name = policy.name
@@ -964,6 +1406,12 @@ function editPolicy(policy: ProxyPolicy) {
   policyForm.enabled = policy.enabled
   policyForm.selection_mode = policySelectionMode(policy)
   policyForm.fixed_node_id = fixedNodeID(policy)
+}
+
+function applyPolicyToEgressForm(policy: ProxyPolicy) {
+  egressForm.policy_id = policy.id
+  egressForm.selection_mode = policySelectionMode(policy)
+  egressForm.fixed_node_id = fixedNodeID(policy)
 }
 
 function resetPolicyForm() {
@@ -1093,6 +1541,20 @@ async function restartSlotNow(id: number) {
   }
 }
 
+async function rotateSlotSecretNow(slot: ProxyRuntimeSlot) {
+  if (slot.status === 'assigned' || slot.status === 'draining') {
+    appStore.showError('运行中的槽位不能轮换 Secret，请先释放或停止槽位')
+    return
+  }
+  try {
+    await rotateProxyRuntimeSlotSecret(slot.id)
+    appStore.showSuccess('Controller Secret 已轮换')
+    await Promise.all([loadRuntime(), loadAudits()])
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  }
+}
+
 async function releaseAssignmentNow(id: number) {
   try {
     await releaseProxyAssignment(id)
@@ -1117,6 +1579,42 @@ async function switchAssignmentNow(assignment: ProxyAssignment) {
     })
     appStore.showSuccess('出口节点已切换')
     await loadRuntime()
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  }
+}
+
+async function autoSwitchAssignmentNow(assignment: ProxyAssignment) {
+  try {
+    await reportProxyAssignmentFailure(assignment.id, {
+      error_code: 'MANUAL_AUTO_SWITCH',
+      error_message: 'manual automatic switch from proxy manager'
+    })
+    appStore.showSuccess('已自动切换到可用出口')
+    await Promise.all([loadRuntime(), loadNodes(), loadAudits()])
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  }
+}
+
+async function exportAuditsNow() {
+  try {
+    const blob = await downloadProxyAuditEvents({
+      event_type: auditFilters.event_type || undefined,
+      task_type: auditFilters.task_type || undefined,
+      task_id: auditFilters.task_id || undefined,
+      node_id: auditFilters.node_id > 0 ? auditFilters.node_id : undefined,
+      level: auditFilters.level || undefined,
+      target_host: auditFilters.target_host || undefined
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `proxy-audit-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
   } catch (error) {
     appStore.showError(errorMessage(error))
   }
@@ -1190,6 +1688,88 @@ function refreshClass(value: ProxyRefreshStatus): string {
   return 'badge-gray'
 }
 
+function isNodeChecking(id: number): boolean {
+  return checkingNodeIDs[id] === true
+}
+
+function batchCheckLabel(): string {
+  if (!checkingNodes.value) return '检测全部'
+  if (nodeCheckProgress.total > 0) {
+    return `检测中 ${nodeCheckProgress.completed}/${nodeCheckProgress.total}`
+  }
+  return '检测中...'
+}
+
+function nodeStatusLabel(node: ProxyNode): string {
+  if (isNodeChecking(node.id)) return '检测中'
+  return healthLabel(node.health_status)
+}
+
+function nodeStatusClass(node: ProxyNode): string {
+  if (isNodeChecking(node.id)) return 'badge-warning'
+  return healthClass(node.health_status)
+}
+
+function nodeLatencyLabel(node: ProxyNode): string {
+  if (isNodeChecking(node.id)) return '检测中...'
+  if (typeof node.last_latency_ms === 'number') return `${node.last_latency_ms} ms`
+  return '-'
+}
+
+function nodeEgressLabel(node: ProxyNode): string {
+  if (isNodeChecking(node.id)) return '检测中...'
+  return node.last_egress_ip || '-'
+}
+
+function nodeCheckMessage(node: ProxyNode): string {
+  if (nodeCheckErrors[node.id]) return nodeCheckErrors[node.id]
+  if (node.last_error_message) return formatNodeCheckFailure(node.last_error_message)
+  return nodeCheckMessages[node.id] || ''
+}
+
+function nodeCheckMessageTitle(node: ProxyNode): string {
+  return node.last_error_message || nodeCheckErrors[node.id] || nodeCheckMessages[node.id] || ''
+}
+
+function nodeCheckMessageClass(node: ProxyNode): string {
+  if (nodeCheckErrors[node.id] || node.last_error_message) return 'text-rose-500'
+  return 'text-emerald-600 dark:text-emerald-400'
+}
+
+function formatNodeCheckFailure(value: string, currentCheck = false): string {
+  const message = value || '节点检测未通过'
+  const prefix = currentCheck ? '刚刚检测失败' : '检测失败'
+  const refusedTarget = message.match(/dial tcp ([^:]+:\d+): connect: connection refused/)
+  if (refusedTarget?.[1]) {
+    return `${prefix}：Mihomo 本地代理端口未监听（${refusedTarget[1]}）`
+  }
+  const timeoutTarget = message.match(/dial tcp ([^:]+:\d+): i\/o timeout/)
+  if (timeoutTarget?.[1]) {
+    if (isReservedProxyTarget(timeoutTarget[1])) {
+      return `${prefix}：节点服务器解析到不可用地址（${timeoutTarget[1]}）`
+    }
+    return `${prefix}：节点服务器连接超时（${timeoutTarget[1]}）`
+  }
+  if (message.includes('PROXY_EGRESS_VERIFY_FAILED')) {
+    return `${prefix}：出口 IP 验证失败`
+  }
+  if (message.includes('PROXY_MIHOMO_BINARY_NOT_CONFIGURED')) {
+    return `${prefix}：未配置 Mihomo core`
+  }
+  return `${prefix}：${compactNodeCheckMessage(message)}`
+}
+
+function isReservedProxyTarget(target: string): boolean {
+  return /^(127\.|198\.18\.|198\.19\.)/.test(target)
+}
+
+function compactNodeCheckMessage(value: string): string {
+  const quotedMessage = value.match(/message="([^"]+)"/)?.[1]
+  const reason = value.match(/reason="([^"]+)"/)?.[1]
+  const message = quotedMessage || reason || value
+  return message.length > 96 ? `${message.slice(0, 96)}...` : message
+}
+
 function healthLabel(value: ProxyNodeHealthStatus): string {
   const labels: Record<ProxyNodeHealthStatus, string> = {
     unknown: '未知',
@@ -1261,6 +1841,17 @@ function auditClass(value: ProxyAuditLevel): string {
 function formatDateTime(value?: string | null): string {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+function formatDurationSeconds(value: number): string {
+  const seconds = Math.max(0, Math.round(Number(value) || 0))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remain = seconds % 60
+  if (minutes < 60) return remain ? `${minutes}m ${remain}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const minuteRemain = minutes % 60
+  return minuteRemain ? `${hours}h ${minuteRemain}m` : `${hours}h`
 }
 
 function errorMessage(error: unknown): string {

@@ -55,8 +55,12 @@ Not implemented yet:
 Local dev stack:
 
 ```bash
+./scripts/start-dev.sh
+# or
 make dev
 ```
+
+The local script uses native PostgreSQL/Redis binaries only; it does not install or start Docker. It also ensures a pinned Mihomo core exists at `.local/bin/mihomo`: if the binary is already executable it is reused, otherwise it is downloaded once. During local debug startup the default admin account is reset/created so stale local data cannot break login.
 
 Defaults:
 
@@ -70,7 +74,7 @@ You can override ports and local infrastructure through environment variables:
 
 ```bash
 SERVER_PORT=8081 FRONTEND_PORT=3001 make dev
-DATABASE_DBNAME=sub2api_admin_plus REDIS_DB=0 make dev-backend
+DATABASE_PORT=15432 REDIS_PORT=16379 DATABASE_DBNAME=sub2api_admin_plus REDIS_DB=0 make dev-backend
 ```
 
 Single-process startup:

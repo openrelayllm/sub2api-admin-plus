@@ -296,7 +296,7 @@ func TestExtensionHandlerReportSupplierCandidateRequiresRegisteredCredential(t *
 	require.Contains(t, reported.Body.String(), "SUPPLIER_SITE_REGISTRATION_REQUIRED")
 }
 
-func TestExtensionHandlerReportSupplierCandidateIgnoresExistingSupplierWithoutUpdating(t *testing.T) {
+func TestExtensionHandlerReportSupplierCandidateUpdatesExistingSupplierCredential(t *testing.T) {
 	router := newOperationsHandlerTestRouter()
 
 	reported := performJSON(t, router, http.MethodPost, "/extension/suppliers/report-candidate", `{
@@ -316,8 +316,7 @@ func TestExtensionHandlerReportSupplierCandidateIgnoresExistingSupplierWithoutUp
 	require.Equal(t, http.StatusOK, reported.Code, reported.Body.String())
 	require.Contains(t, reported.Body.String(), `"supplier_id":1`)
 	require.Contains(t, reported.Body.String(), `"already_exists":true`)
-	require.Contains(t, reported.Body.String(), `"ignored":true`)
-	require.Contains(t, reported.Body.String(), `"credential_saved":false`)
+	require.Contains(t, reported.Body.String(), `"credential_saved":true`)
 
 	created := performJSON(t, router, http.MethodPost, "/extension/session/capture-task", `{
 		"supplier_id": 1,
@@ -339,10 +338,10 @@ func TestExtensionHandlerReportSupplierCandidateIgnoresExistingSupplierWithoutUp
 	}`)
 	require.Equal(t, http.StatusOK, credential.Code, credential.Body.String())
 	require.Contains(t, credential.Body.String(), `"supplier_name":"Relay"`)
-	require.Contains(t, credential.Body.String(), `"username":"ops@example.com"`)
-	require.Contains(t, credential.Body.String(), `"password":"secret"`)
-	require.NotContains(t, credential.Body.String(), "changed-secret")
-	require.NotContains(t, credential.Body.String(), "changed-token")
+	require.Contains(t, credential.Body.String(), `"username":"changed@example.com"`)
+	require.Contains(t, credential.Body.String(), `"password":"changed-secret"`)
+	require.Contains(t, credential.Body.String(), `"token":"changed-token"`)
+	require.NotContains(t, credential.Body.String(), `"supplier_name":"Changed Relay"`)
 }
 
 func TestSupplierHandlerMatchSite(t *testing.T) {

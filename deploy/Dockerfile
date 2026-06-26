@@ -11,6 +11,7 @@ ARG GOLANG_IMAGE=golang:1.26.4-alpine
 ARG ALPINE_IMAGE=alpine:3.20
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
+ARG MIHOMO_VERSION=v1.19.27
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -73,7 +74,26 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/server
 
 # -----------------------------------------------------------------------------
-# Stage 3: Final Runtime Image
+# Stage 3: Mihomo Core
+# -----------------------------------------------------------------------------
+FROM ${ALPINE_IMAGE} AS mihomo-core
+
+ARG TARGETARCH
+ARG MIHOMO_VERSION
+
+RUN apk add --no-cache ca-certificates curl gzip && \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) MIHOMO_ASSET="mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz" ;; \
+      arm64) MIHOMO_ASSET="mihomo-linux-arm64-${MIHOMO_VERSION}.gz" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${MIHOMO_ASSET}" -o /tmp/mihomo.gz && \
+    gzip -dc /tmp/mihomo.gz > /mihomo && \
+    chmod +x /mihomo && \
+    test -s /mihomo
+
+# -----------------------------------------------------------------------------
+# Stage 4: Final Runtime Image
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
@@ -97,8 +117,11 @@ RUN addgroup -g 1000 sub2api && \
 # Set working directory
 WORKDIR /app
 
+RUN mkdir -p /app/bin
+
 # Copy binary from builder
 COPY --from=backend-builder /app/sub2api-admin-plus /app/sub2api-admin-plus
+COPY --from=mihomo-core /mihomo /app/bin/mihomo
 COPY extension /app/extension
 
 # Create data directory

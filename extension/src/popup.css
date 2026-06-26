@@ -3,15 +3,17 @@
 }
 
 html {
-  width: 360px;
-  min-width: 360px;
+  width: 520px;
+  min-width: 520px;
 }
 
 body {
   margin: 0;
-  width: 360px;
-  min-width: 360px;
+  width: 520px;
+  min-width: 520px;
+  max-height: 600px;
   overflow-x: hidden;
+  overflow-y: auto;
   background: #f5f7fa;
   color: #182230;
   font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -19,7 +21,7 @@ body {
 
 button {
   width: 100%;
-  height: 38px;
+  height: 36px;
   border: 1px solid #cfd7df;
   border-radius: 7px;
   background: #ffffff;
@@ -48,7 +50,7 @@ button.secondary {
 }
 
 .shell {
-  padding: 16px;
+  padding: 12px;
 }
 
 .topbar {
@@ -69,13 +71,13 @@ p {
 }
 
 h1 {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 720;
 }
 
 h2 {
   margin-top: 2px;
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 720;
 }
 
@@ -89,12 +91,12 @@ h2 {
 .step {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
-  gap: 12px;
-  margin-top: 18px;
+  gap: 10px;
+  margin-top: 10px;
   border: 1px solid #dde3ea;
   border-radius: 8px;
   background: #ffffff;
-  padding: 14px;
+  padding: 10px 12px;
 }
 
 .step-index {
@@ -114,15 +116,15 @@ h2 {
 }
 
 .hint {
-  margin-top: 7px;
+  margin-top: 5px;
 }
 
 .context {
-  margin-top: 10px;
+  margin-top: 8px;
   border: 1px solid #dde3ea;
   border-radius: 8px;
   background: #ffffff;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .context-row {
@@ -130,7 +132,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 24px;
+  min-height: 22px;
   color: #667085;
   font-size: 12px;
 }
@@ -153,15 +155,39 @@ h2 {
 }
 
 .config {
-  margin-top: 10px;
+  margin-top: 8px;
   border: 1px solid #dde3ea;
   border-radius: 8px;
   background: #ffffff;
-  padding: 10px 12px;
+  padding: 10px;
 }
 
 .config.compact {
   padding: 9px 11px;
+}
+
+#candidatePanel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+#candidatePanel:not(.hidden) {
+  display: grid;
+}
+
+#candidatePanel > .field,
+#candidatePanel .field + .field {
+  margin-top: 0;
+}
+
+#candidatePanel > .field-grid {
+  display: contents;
+}
+
+#candidatePanel > .field:nth-of-type(6),
+#candidatePanel > .hint,
+#candidatePanel > button {
+  grid-column: 1 / -1;
 }
 
 .config label {
@@ -173,8 +199,8 @@ h2 {
 
 .config input {
   width: 100%;
-  height: 36px;
-  margin-top: 7px;
+  height: 34px;
+  margin-top: 5px;
   border: 1px solid #cfd7df;
   border-radius: 7px;
   padding: 0 10px;
@@ -193,7 +219,7 @@ h2 {
 }
 
 .config button {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .inline-actions {
@@ -208,7 +234,7 @@ h2 {
 }
 
 .field + .field {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .field-grid {
@@ -228,7 +254,7 @@ h2 {
 .field select,
 .field textarea {
   width: 100%;
-  margin-top: 7px;
+  margin-top: 5px;
   border: 1px solid #cfd7df;
   border-radius: 7px;
   padding: 0 10px;
@@ -238,7 +264,7 @@ h2 {
 
 .field input,
 .field select {
-  height: 36px;
+  height: 34px;
 }
 
 .password-control {
@@ -248,13 +274,13 @@ h2 {
 }
 
 .password-control .inline-toggle {
-  height: 36px;
-  margin-top: 7px;
+  height: 34px;
+  margin-top: 5px;
   padding: 0;
 }
 
 .field textarea {
-  min-height: 72px;
+  min-height: 54px;
   padding-top: 8px;
   padding-bottom: 8px;
   resize: vertical;
@@ -339,9 +365,9 @@ h2 {
 
 .actions {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .notice {

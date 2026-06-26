@@ -8,6 +8,7 @@ import (
 	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,6 +67,196 @@ func TestServiceSwitchAssignmentEnforcesSwitchBudget(t *testing.T) {
 	require.True(t, repo.hasAudit("node_switch_denied"))
 }
 
+func TestServiceDisabledRejectsRuntimeOperations(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{Enabled: false, MaxSlots: 2})
+	ctx := context.Background()
+
+	status, err := svc.CenterStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, status.ProxyEnabled)
+
+	_, err = svc.RequestAssignment(ctx, RequestAssignmentInput{
+		TaskType:   "site_discovery",
+		TaskID:     "run-1",
+		PolicyID:   repo.policy.ID,
+		TargetHost: "example.com",
+		Purpose:    adminplusdomain.ProxyPurposeSiteDiscovery,
+		Method:     "GET",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disabled")
+
+	_, err = svc.CheckNode(ctx, repo.firstNode.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disabled")
+
+	assignment := repo.seedActiveAssignment()
+	_, err = svc.SwitchAssignment(ctx, assignment.ID, SwitchAssignmentInput{NodeID: repo.secondNode.ID})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disabled")
+	require.True(t, repo.hasAudit("proxy_disabled"))
+}
+
+func TestServiceReportFailureAutoSwitchesReplacementNode(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{})
+	ctx := context.Background()
+
+	assignment, err := svc.RequestAssignment(ctx, RequestAssignmentInput{
+		TaskType:   "site_discovery",
+		TaskID:     "run-1",
+		PolicyID:   repo.policy.ID,
+		TargetHost: "example.com",
+		Purpose:    adminplusdomain.ProxyPurposeSiteDiscovery,
+		Method:     "GET",
+	})
+	require.NoError(t, err)
+	require.Equal(t, repo.firstNode.ID, assignment.NodeID)
+
+	updated, err := svc.ReportFailure(ctx, assignment.ID, ReportFailureInput{
+		ErrorCode:    "SITE_DISCOVERY_PROXY_NETWORK_FAILED",
+		ErrorMessage: "dial tcp timeout",
+	})
+	require.NoError(t, err)
+	require.Equal(t, repo.secondNode.ID, updated.NodeID)
+	require.Equal(t, 1, updated.SwitchCount)
+	require.Equal(t, adminplusdomain.ProxyNodeHealthSuspect, repo.firstNode.HealthStatus)
+	require.True(t, repo.hasAudit("node_failure_reported"))
+	require.True(t, repo.hasAudit("node_auto_switched"))
+}
+
+func TestServiceReportFailureDoesNotAutoSwitchFixedPolicy(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	repo.policy.Config = map[string]any{
+		"selection_mode": "fixed",
+		"fixed_node_id":  repo.firstNode.ID,
+	}
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{})
+	ctx := context.Background()
+
+	assignment, err := svc.RequestAssignment(ctx, RequestAssignmentInput{
+		TaskType:   "site_discovery",
+		TaskID:     "run-1",
+		PolicyID:   repo.policy.ID,
+		TargetHost: "example.com",
+		Purpose:    adminplusdomain.ProxyPurposeSiteDiscovery,
+		Method:     "GET",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.ReportFailure(ctx, assignment.ID, ReportFailureInput{
+		ErrorCode:    "SITE_DISCOVERY_PROXY_NETWORK_FAILED",
+		ErrorMessage: "dial tcp timeout",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "automatic switching")
+	require.Equal(t, adminplusdomain.ProxyNodeHealthSuspect, repo.firstNode.HealthStatus)
+	require.False(t, repo.hasAudit("node_auto_switched"))
+	require.True(t, repo.hasAudit("node_switch_denied"))
+}
+
+func TestServiceRotateRuntimeSlotSecret(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{})
+	ctx := context.Background()
+	oldSecret := repo.slotSecret
+
+	slot, err := svc.RotateRuntimeSlotSecret(ctx, repo.slot.ID)
+	require.NoError(t, err)
+	require.Equal(t, repo.slot.ID, slot.ID)
+	require.NotEmpty(t, repo.slotSecret)
+	require.NotEqual(t, oldSecret, repo.slotSecret)
+	require.True(t, repo.hasAudit("slot_secret_rotated"))
+}
+
+func TestServiceRotateRuntimeSlotSecretRejectsAssignedSlot(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	repo.slot.Status = adminplusdomain.ProxyRuntimeSlotAssigned
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{})
+
+	_, err := svc.RotateRuntimeSlotSecret(context.Background(), repo.slot.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "assigned")
+	require.Equal(t, "secret", repo.slotSecret)
+}
+
+func TestServiceCheckNodeCachesAndListsCachedResult(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	cache := newMemoryNodeCheckCache()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{Enabled: true, BinaryPath: "/usr/local/bin/mihomo"}).WithNodeCheckCache(cache)
+	ctx := context.Background()
+
+	checked, err := svc.CheckNode(ctx, repo.firstNode.ID)
+	require.NoError(t, err)
+	require.Equal(t, "203.0.113.10", checked.LastEgressIP)
+	require.NotNil(t, checked.LastLatencyMS)
+	require.NotNil(t, checked.LastCheckedAt)
+
+	repo.firstNode.LastLatencyMS = nil
+	repo.firstNode.LastEgressIP = ""
+	repo.firstNode.LastCheckedAt = nil
+
+	nodes, err := svc.ListNodes(ctx, NodeFilter{})
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	require.Equal(t, "203.0.113.10", nodes[0].LastEgressIP)
+	require.NotNil(t, nodes[0].LastLatencyMS)
+	require.NotNil(t, nodes[0].LastCheckedAt)
+}
+
+func TestServiceCheckNodeFailsFastWhenServerIsLiteralReservedIP(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	repo.firstNode.RawMetadata = map[string]any{
+		"server": "127.127.127.5",
+		"port":   19273,
+	}
+	cache := newMemoryNodeCheckCache()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{Enabled: true, BinaryPath: "/usr/local/bin/mihomo"}).WithNodeCheckCache(cache)
+
+	checked, err := svc.CheckNode(context.Background(), repo.firstNode.ID)
+
+	require.Error(t, err)
+	require.Equal(t, "PROXY_NODE_SERVER_RESOLVES_RESERVED_IP", infraerrors.Reason(err))
+	require.Equal(t, adminplusdomain.ProxyNodeHealthUnhealthy, checked.HealthStatus)
+	require.Equal(t, "PROXY_NODE_SERVER_RESOLVES_RESERVED_IP", checked.LastErrorCode)
+	require.Contains(t, checked.LastErrorMessage, "127.127.127.5:19273")
+	require.NotNil(t, checked.LastCheckedAt)
+	require.Contains(t, cache.items[repo.firstNode.ID].LastErrorMessage, "127.127.127.5:19273")
+}
+
+func TestServiceCheckNodeDoesNotResolveHostnameDuringPreflight(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	repo.firstNode.RawMetadata = map[string]any{
+		"server": "node.example.test",
+		"port":   19273,
+	}
+	cache := newMemoryNodeCheckCache()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{Enabled: true, BinaryPath: "/usr/local/bin/mihomo"}).WithNodeCheckCache(cache)
+
+	checked, err := svc.CheckNode(context.Background(), repo.firstNode.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, adminplusdomain.ProxyNodeHealthHealthy, checked.HealthStatus)
+	require.Equal(t, "203.0.113.10", checked.LastEgressIP)
+	require.Empty(t, checked.LastErrorCode)
+}
+
+func TestServiceCheckNodesChecksAllNodes(t *testing.T) {
+	repo := newProxyServiceTestRepository()
+	cache := newMemoryNodeCheckCache()
+	svc := NewService(repo, testSecretCipher{}, nil, testRuntime{}, RuntimeConfig{Enabled: true, BinaryPath: "/usr/local/bin/mihomo"}).WithNodeCheckCache(cache)
+
+	result, err := svc.CheckNodes(context.Background(), NodeFilter{})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Total)
+	require.Equal(t, 2, result.Succeeded)
+	require.Equal(t, 0, result.Failed)
+	require.Len(t, result.Results, 2)
+	require.Len(t, cache.items, 2)
+}
+
 type testSecretCipher struct{}
 
 func (testSecretCipher) Encrypt(plaintext string) (string, error)  { return plaintext, nil }
@@ -90,6 +281,30 @@ func (testRuntime) RestartSlot(ctx context.Context, slot *adminplusdomain.ProxyR
 	return nil
 }
 
+type memoryNodeCheckCache struct {
+	items map[int64]*NodeCheckSnapshot
+}
+
+func newMemoryNodeCheckCache() *memoryNodeCheckCache {
+	return &memoryNodeCheckCache{items: make(map[int64]*NodeCheckSnapshot)}
+}
+
+func (c *memoryNodeCheckCache) SetNodeCheck(ctx context.Context, node *adminplusdomain.ProxyNode, ttl time.Duration) error {
+	c.items[node.ID] = NodeCheckSnapshotFromNode(node)
+	return nil
+}
+
+func (c *memoryNodeCheckCache) GetNodeChecks(ctx context.Context, nodeIDs []int64) (map[int64]*NodeCheckSnapshot, error) {
+	out := make(map[int64]*NodeCheckSnapshot)
+	for _, id := range nodeIDs {
+		if item := c.items[id]; item != nil {
+			clone := *item
+			out[id] = &clone
+		}
+	}
+	return out, nil
+}
+
 type proxyServiceTestRepository struct {
 	mu          sync.Mutex
 	nextID      int64
@@ -98,6 +313,7 @@ type proxyServiceTestRepository struct {
 	firstNode   *adminplusdomain.ProxyNode
 	secondNode  *adminplusdomain.ProxyNode
 	slot        *adminplusdomain.ProxyRuntimeSlot
+	slotSecret  string
 	assignments map[int64]*adminplusdomain.ProxyAssignment
 	audits      []*adminplusdomain.ProxyAuditEvent
 }
@@ -152,6 +368,7 @@ func newProxyServiceTestRepository() *proxyServiceTestRepository {
 			MixedPort:      17890,
 			ControllerPort: 19090,
 		},
+		slotSecret:  "secret",
 		assignments: make(map[int64]*adminplusdomain.ProxyAssignment),
 	}
 }
@@ -215,9 +432,15 @@ func (r *proxyServiceTestRepository) GetNode(ctx context.Context, id int64) (*ad
 }
 
 func (r *proxyServiceTestRepository) UpdateNodeHealth(ctx context.Context, id int64, status adminplusdomain.ProxyNodeHealthStatus, latencyMS *int, egressIP string, errorCode string, errorMessage string, checkedAt *time.Time) (*adminplusdomain.ProxyNode, error) {
-	node, err := r.GetNode(ctx, id)
-	if err != nil {
-		return nil, err
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var node *adminplusdomain.ProxyNode
+	if id == r.firstNode.ID {
+		node = cloneProxyNode(r.firstNode)
+	} else if id == r.secondNode.ID {
+		node = cloneProxyNode(r.secondNode)
+	} else {
+		return nil, notFound("PROXY_NODE_NOT_FOUND", "proxy node not found")
 	}
 	node.HealthStatus = status
 	node.LastLatencyMS = latencyMS
@@ -225,6 +448,11 @@ func (r *proxyServiceTestRepository) UpdateNodeHealth(ctx context.Context, id in
 	node.LastErrorCode = errorCode
 	node.LastErrorMessage = errorMessage
 	node.LastCheckedAt = checkedAt
+	if id == r.firstNode.ID {
+		r.firstNode = node
+	} else {
+		r.secondNode = node
+	}
 	return node, nil
 }
 
@@ -297,7 +525,7 @@ func (r *proxyServiceTestRepository) GetRuntimeSlotSecret(ctx context.Context, i
 	if id != r.slot.ID {
 		return nil, "", notFound("PROXY_RUNTIME_SLOT_NOT_FOUND", "proxy runtime slot not found")
 	}
-	return cloneProxySlot(r.slot), "secret", nil
+	return cloneProxySlot(r.slot), r.slotSecret, nil
 }
 
 func (r *proxyServiceTestRepository) UpdateRuntimeSlot(ctx context.Context, id int64, input UpdateRuntimeSlotInput) (*adminplusdomain.ProxyRuntimeSlot, error) {
@@ -309,6 +537,9 @@ func (r *proxyServiceTestRepository) UpdateRuntimeSlot(ctx context.Context, id i
 	slot := cloneProxySlot(r.slot)
 	if input.Status != nil {
 		slot.Status = *input.Status
+	}
+	if input.ControllerSecretCiphertext != nil {
+		r.slotSecret = *input.ControllerSecretCiphertext
 	}
 	if input.ProcessID != nil {
 		slot.ProcessID = *input.ProcessID
@@ -428,6 +659,27 @@ func (r *proxyServiceTestRepository) hasAudit(eventType string) bool {
 		}
 	}
 	return false
+}
+
+func (r *proxyServiceTestRepository) seedActiveAssignment() *adminplusdomain.ProxyAssignment {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.nextID++
+	assignment := &adminplusdomain.ProxyAssignment{
+		ID:         r.nextID,
+		TaskType:   "site_discovery",
+		TaskID:     "run-seeded",
+		PolicyID:   r.policy.ID,
+		SlotID:     r.slot.ID,
+		NodeID:     r.firstNode.ID,
+		TargetHost: r.target.TargetHost,
+		EgressIP:   "203.0.113.10",
+		Status:     adminplusdomain.ProxyAssignmentActive,
+		StartedAt:  time.Now(),
+		CreatedAt:  time.Now(),
+	}
+	r.assignments[assignment.ID] = assignment
+	return cloneProxyAssignment(assignment)
 }
 
 func cloneProxyPolicy(in *adminplusdomain.ProxyPolicy) *adminplusdomain.ProxyPolicy {

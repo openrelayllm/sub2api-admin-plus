@@ -6,8 +6,10 @@ import (
 	"github.com/google/wire"
 )
 
-func ProvideService(repo Repository, notifier Notifier, session SessionReader, reader ports.SessionProbeAdapter, cache BalanceCache, recorder *bizlogs.Recorder) *Service {
-	return NewServiceWithCurrentCache(repo, notifier, session, reader, cache).WithDiagnostics(recorder)
+func ProvideService(repo Repository, notifier Notifier, session SessionReader, reader ports.SessionProbeAdapter, recentUsage RecentSupplierUsageReader, cache BalanceCache, recorder *bizlogs.Recorder) *Service {
+	return NewServiceWithCurrentCache(repo, notifier, session, reader, cache).
+		WithRecentUsageReader(recentUsage).
+		WithDiagnostics(recorder)
 }
 
 var ProviderSet = wire.NewSet(

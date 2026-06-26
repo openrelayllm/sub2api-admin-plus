@@ -168,6 +168,7 @@ type AdminPlusConfig struct {
 	Sub2APIAdminBaseURL         string `mapstructure:"sub2api_admin_base_url"`
 	Sub2APIAdminAPIKey          string `mapstructure:"sub2api_admin_api_key"`
 	AllowEmbeddedSub2APIGateway bool   `mapstructure:"allow_embedded_sub2api_gateway"`
+	ProxyDisabled               bool   `mapstructure:"proxy_disabled"`
 	ProxyMihomoBinaryPath       string `mapstructure:"proxy_mihomo_binary_path"`
 	ProxyRuntimeDir             string `mapstructure:"proxy_runtime_dir"`
 	ProxyBaseMixedPort          int    `mapstructure:"proxy_base_mixed_port"`
@@ -1564,6 +1565,13 @@ func bindSub2APIIntegrationEnv() {
 		"admin_plus.sub2api_admin_base_url",
 		"admin_plus.sub2api_admin_api_key",
 		"admin_plus.allow_embedded_sub2api_gateway",
+		"admin_plus.proxy_disabled",
+		"admin_plus.proxy_mihomo_binary_path",
+		"admin_plus.proxy_runtime_dir",
+		"admin_plus.proxy_base_mixed_port",
+		"admin_plus.proxy_base_controller_port",
+		"admin_plus.proxy_max_slots",
+		"admin_plus.proxy_egress_check_url",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -1758,6 +1766,13 @@ func setDefaults() {
 	viper.SetDefault("admin_plus.sub2api_admin_base_url", "")
 	viper.SetDefault("admin_plus.sub2api_admin_api_key", "")
 	viper.SetDefault("admin_plus.allow_embedded_sub2api_gateway", false)
+	viper.SetDefault("admin_plus.proxy_disabled", false)
+	viper.SetDefault("admin_plus.proxy_mihomo_binary_path", "")
+	viper.SetDefault("admin_plus.proxy_runtime_dir", "runtime/proxy")
+	viper.SetDefault("admin_plus.proxy_base_mixed_port", 17890)
+	viper.SetDefault("admin_plus.proxy_base_controller_port", 19090)
+	viper.SetDefault("admin_plus.proxy_max_slots", 4)
+	viper.SetDefault("admin_plus.proxy_egress_check_url", "https://api.ipify.org?format=json")
 
 	// Ops (vNext)
 	viper.SetDefault("ops.enabled", true)

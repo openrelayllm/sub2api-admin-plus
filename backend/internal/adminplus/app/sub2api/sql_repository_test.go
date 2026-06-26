@@ -184,6 +184,36 @@ func TestSQLRepositoryListLocalAccountUsageSummariesGroupsByAccount(t *testing.T
 	require.Equal(t, int64(420), items[0].AccountCostCents)
 }
 
+func TestSQLRepositoryHasSupplierUsageSinceReadsBoundAccounts(t *testing.T) {
+	db, mock := newSub2APISQLMock(t)
+	repo := NewSQLRepository(ReadDB{DB: db})
+	since := time.Date(2026, 6, 20, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`FROM usage_logs ul\s+INNER JOIN admin_plus_supplier_accounts asa\s+ON asa\.local_sub2api_account_id = ul\.account_id\s+WHERE asa\.supplier_id = \$1\s+AND ul\.created_at >= \$2`).
+		WithArgs(int64(7), since).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	hasUsage, err := repo.HasSupplierUsageSince(context.Background(), 7, since)
+
+	require.NoError(t, err)
+	require.True(t, hasUsage)
+}
+
+func TestSQLRepositoryHasSupplierUsageSinceReturnsFalseWhenUnused(t *testing.T) {
+	db, mock := newSub2APISQLMock(t)
+	repo := NewSQLRepository(ReadDB{DB: db})
+	since := time.Date(2026, 6, 20, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`FROM usage_logs ul\s+INNER JOIN admin_plus_supplier_accounts asa\s+ON asa\.local_sub2api_account_id = ul\.account_id\s+WHERE asa\.supplier_id = \$1\s+AND ul\.created_at >= \$2`).
+		WithArgs(int64(7), since).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	hasUsage, err := repo.HasSupplierUsageSince(context.Background(), 7, since)
+
+	require.NoError(t, err)
+	require.False(t, hasUsage)
+}
+
 func TestRuntimeRepositoryListAccountRuntimeReadsSQLAndRedis(t *testing.T) {
 	db, mock := newSub2APISQLMock(t)
 	mr := miniredis.RunT(t)

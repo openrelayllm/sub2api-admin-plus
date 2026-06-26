@@ -26,9 +26,14 @@ const (
 	defaultProxyMaxSlots           = 4
 	defaultProxyControllerGroup    = "GLOBAL"
 	defaultProxyEgressCheckURL     = "https://api.ipify.org?format=json"
+	defaultBundledMihomoPath       = "/app/bin/mihomo"
+	defaultSystemdMihomoPath       = "/opt/sub2api-admin-plus/bin/mihomo"
 )
 
+var mihomoBinaryCandidates = []string{defaultBundledMihomoPath, defaultSystemdMihomoPath, "mihomo", "clash-meta", "clash"}
+
 type RuntimeConfig struct {
+	Enabled            bool
 	BinaryPath         string
 	RuntimeDir         string
 	BaseMixedPort      int
@@ -46,6 +51,7 @@ type Runtime interface {
 
 type RuntimeSlotResult struct {
 	ConfigPath string
+	LogPath    string
 	ProcessID  *int
 	StartedAt  *time.Time
 }
@@ -57,6 +63,7 @@ type LocalMihomoRuntime struct {
 
 func RuntimeConfigFromConfig(cfg *config.Config) RuntimeConfig {
 	out := RuntimeConfig{
+		Enabled:            true,
 		RuntimeDir:         defaultProxyRuntimeDir,
 		BaseMixedPort:      defaultProxyBaseMixedPort,
 		BaseControllerPort: defaultProxyBaseControllerPort,
@@ -64,6 +71,7 @@ func RuntimeConfigFromConfig(cfg *config.Config) RuntimeConfig {
 		EgressCheckURL:     defaultProxyEgressCheckURL,
 	}
 	if cfg != nil {
+		out.Enabled = !cfg.AdminPlus.ProxyDisabled
 		if strings.TrimSpace(cfg.AdminPlus.ProxyMihomoBinaryPath) != "" {
 			out.BinaryPath = strings.TrimSpace(cfg.AdminPlus.ProxyMihomoBinaryPath)
 		}
@@ -87,6 +95,7 @@ func RuntimeConfigFromConfig(cfg *config.Config) RuntimeConfig {
 }
 
 func NewLocalMihomoRuntime(cfg RuntimeConfig) *LocalMihomoRuntime {
+	cfg.BinaryPath = normalizeMihomoBinaryPath(cfg.BinaryPath)
 	if cfg.RuntimeDir == "" {
 		cfg.RuntimeDir = defaultProxyRuntimeDir
 	}
@@ -106,6 +115,25 @@ func NewLocalMihomoRuntime(cfg RuntimeConfig) *LocalMihomoRuntime {
 		cfg:    cfg,
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
+}
+
+func normalizeMihomoBinaryPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path != "" {
+		return path
+	}
+	candidates := append([]string(nil), mihomoBinaryCandidates...)
+	if executable, err := os.Executable(); err == nil {
+		dir := filepath.Dir(executable)
+		candidates = append(candidates, filepath.Join(dir, "bin", "mihomo"), filepath.Join(dir, "mihomo"))
+	}
+	for _, candidate := range candidates {
+		resolved, err := exec.LookPath(candidate)
+		if err == nil && strings.TrimSpace(resolved) != "" {
+			return resolved
+		}
+	}
+	return ""
 }
 
 func (r *LocalMihomoRuntime) ConfigureSlot(ctx context.Context, slot *adminplusdomain.ProxyRuntimeSlot, node *adminplusdomain.ProxyNode, mihomoYAML []byte, controllerSecret string) (*RuntimeSlotResult, error) {
@@ -129,7 +157,10 @@ func (r *LocalMihomoRuntime) ConfigureSlot(ctx context.Context, slot *adminplusd
 	if err != nil {
 		return nil, err
 	}
-	slotDir := filepath.Join(r.cfg.RuntimeDir, "slots", slot.SlotKey)
+	slotDir, err := filepath.Abs(filepath.Join(r.cfg.RuntimeDir, "slots", slot.SlotKey))
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(slotDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -137,13 +168,21 @@ func (r *LocalMihomoRuntime) ConfigureSlot(ctx context.Context, slot *adminplusd
 	if err := os.WriteFile(configPath, configBytes, 0o600); err != nil {
 		return nil, err
 	}
-	result := &RuntimeSlotResult{ConfigPath: configPath}
+	logPath := filepath.Join(slotDir, "mihomo.log")
+	result := &RuntimeSlotResult{ConfigPath: configPath, LogPath: logPath}
 	if strings.TrimSpace(r.cfg.BinaryPath) == "" {
 		return result, nil
 	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, r.cfg.BinaryPath, "-f", configPath)
 	cmd.Dir = slotDir
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
 		return nil, unavailable("PROXY_MIHOMO_START_FAILED", "failed to start mihomo runtime").WithCause(err)
 	}
 	pid := cmd.Process.Pid
@@ -151,6 +190,7 @@ func (r *LocalMihomoRuntime) ConfigureSlot(ctx context.Context, slot *adminplusd
 	result.ProcessID = &pid
 	result.StartedAt = &startedAt
 	go func() {
+		defer func() { _ = logFile.Close() }()
 		_ = cmd.Wait()
 	}()
 	_ = node
@@ -251,10 +291,36 @@ func patchMihomoRuntimeConfig(raw []byte, mixedPort int, controllerPort int, sec
 	}
 	doc["mixed-port"] = mixedPort
 	doc["allow-lan"] = false
+	doc["mode"] = "rule"
 	doc["external-controller"] = "127.0.0.1:" + strconv.Itoa(controllerPort)
 	doc["secret"] = secret
+	doc["dns"] = mihomoRuntimeDNSConfig()
+	doc["rules"] = []string{"MATCH," + defaultProxyControllerGroup}
 	reorderMihomoProxyGroup(doc, defaultProxyControllerGroup, selectedNodeName)
 	return yaml.Marshal(doc)
+}
+
+func mihomoRuntimeDNSConfig() map[string]any {
+	return map[string]any{
+		"enable": true,
+		"ipv6":   false,
+		"default-nameserver": []string{
+			"223.5.5.5",
+			"119.29.29.29",
+			"1.1.1.1",
+			"8.8.8.8",
+		},
+		"nameserver": []string{
+			"https://dns.alidns.com/dns-query",
+			"https://doh.pub/dns-query",
+			"https://cloudflare-dns.com/dns-query",
+		},
+		"proxy-server-nameserver": []string{
+			"https://dns.alidns.com/dns-query",
+			"https://doh.pub/dns-query",
+			"https://cloudflare-dns.com/dns-query",
+		},
+	}
 }
 
 func reorderMihomoProxyGroup(doc map[string]any, groupName string, selectedNodeName string) {

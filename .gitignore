@@ -106,6 +106,8 @@ backend/internal/web/dist/*
 
 # 后端运行时缓存数据
 backend/data/
+backend/runtime/
+.local/
 
 # ===================
 # 本地配置文件（包含敏感信息）
@@ -150,6 +152,8 @@ docs/aipromt/
 frontend/coverage/
 aicodex
 output/
+proxy-node-check-result.png
+proxy-page-console*.txt
 
 # Repository-level lockfile must be tracked even if a global gitignore ignores it.
 !frontend/pnpm-lock.yaml

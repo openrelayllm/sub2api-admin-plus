@@ -36,7 +36,13 @@ func (r *SQLRepository) CenterStatus(ctx context.Context) (*adminplusdomain.Prox
 			(SELECT COUNT(*) FROM admin_plus_proxy_runtime_slots),
 			(SELECT COUNT(*) FROM admin_plus_proxy_runtime_slots WHERE status = 'assigned'),
 			(SELECT COUNT(*) FROM admin_plus_proxy_assignments WHERE status = 'active'),
-			(SELECT COUNT(*) FROM admin_plus_proxy_audit_events WHERE level = 'error' AND created_at >= NOW() - INTERVAL '24 hours')
+			(SELECT COUNT(*) FROM admin_plus_proxy_audit_events WHERE level = 'error' AND created_at >= NOW() - INTERVAL '24 hours'),
+			(SELECT COUNT(*) FROM admin_plus_proxy_audit_events WHERE event_type IN ('node_switched', 'node_auto_switched') AND created_at >= NOW() - INTERVAL '24 hours'),
+			(SELECT COUNT(*) FROM admin_plus_proxy_audit_events WHERE event_type = 'node_failure_reported' AND created_at >= NOW() - INTERVAL '24 hours'),
+			(SELECT COUNT(*) FROM admin_plus_proxy_audit_events WHERE event_type IN ('policy_denied', 'node_switch_denied', 'proxy_disabled') AND created_at >= NOW() - INTERVAL '24 hours'),
+			(SELECT COUNT(*) FROM admin_plus_proxy_health_checks WHERE error_code = 'PROXY_EGRESS_VERIFY_FAILED' AND checked_at >= NOW() - INTERVAL '24 hours'),
+			(SELECT COUNT(*) FROM admin_plus_proxy_assignments WHERE status IN ('released', 'failed') AND released_at IS NOT NULL AND released_at >= NOW() - INTERVAL '24 hours'),
+			(SELECT COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (released_at - started_at))))::int, 0) FROM admin_plus_proxy_assignments WHERE status IN ('released', 'failed') AND released_at IS NOT NULL AND released_at >= NOW() - INTERVAL '24 hours')
 	`)
 	err := row.Scan(
 		&out.SubscriptionsTotal,
@@ -49,6 +55,12 @@ func (r *SQLRepository) CenterStatus(ctx context.Context) (*adminplusdomain.Prox
 		&out.SlotsAssigned,
 		&out.AssignmentsActive,
 		&out.RecentErrors,
+		&out.NodeSwitches24h,
+		&out.NodeFailures24h,
+		&out.PolicyDenials24h,
+		&out.EgressVerifyFailures24h,
+		&out.CompletedAssignments24h,
+		&out.AvgAssignmentSeconds24h,
 	)
 	return &out, err
 }

@@ -4,6 +4,7 @@ const siteHostEl = document.querySelector('#siteHost')
 const supplierTextEl = document.querySelector('#supplierText')
 const statusEl = document.querySelector('#status')
 const primaryAction = document.querySelector('#primaryAction')
+const captureAction = document.querySelector('#captureAction')
 const secondaryAction = document.querySelector('#secondaryAction')
 const registrationAction = document.querySelector('#registrationAction')
 const stepIndex = document.querySelector('#stepIndex')
@@ -44,6 +45,7 @@ let primaryHandler = connectFromActiveTab
 let secondaryHandler = openAdminPlus
 
 primaryAction.addEventListener('click', () => guard(primaryHandler))
+captureAction.addEventListener('click', () => guard(captureCurrentSession))
 secondaryAction.addEventListener('click', () => guard(secondaryHandler))
 registrationAction.addEventListener('click', () => guard(runRegistrationTask))
 saveEndpointAction.addEventListener('click', () => guard(saveBaseURLOnly))
@@ -147,6 +149,40 @@ async function capture(options = {}) {
   }
 }
 
+async function captureCurrentSession() {
+  const currentCandidate = await collectCurrentCandidate(true)
+  if (!identification?.supplier && !currentCandidate.supplier_id) {
+    if (!currentCandidate.provider_type) {
+      throw Object.assign(new Error('无法判断系统类型，请选择'), { reason: 'SUPPLIER_TYPE_REQUIRED' })
+    }
+    if (!hasCompleteBrowserCredential(currentCandidate)) {
+      throw Object.assign(new Error('请先填写账号和密码后再上报 Session'), { reason: 'SUPPLIER_CREDENTIAL_REQUIRED' })
+    }
+    setBusy(true)
+    try {
+      writeStatus('正在保存账号密码', 'neutral')
+      const report = await reportCandidate(currentCandidate, true)
+      if (!report?.supplier_id) {
+        throw Object.assign(new Error('供应商未保存，无法上报 Session'), { reason: 'SUPPLIER_SITE_NOT_MATCHED' })
+      }
+      const savedCandidate = withReportedSupplier(currentCandidate, report)
+      setBusy(false)
+      await capture({
+        supplierID: report.supplier_id,
+        candidate: savedCandidate,
+        credentials: savedCandidate.credential
+      })
+    } finally {
+      setBusy(false)
+    }
+    return
+  }
+  await capture({
+    candidate: currentCandidate,
+    credentials: currentCandidate.credential
+  })
+}
+
 async function runRegistrationTask() {
   setBusy(true)
   try {
@@ -187,6 +223,7 @@ function render() {
 
   if (!connected) {
     hideSitePanels()
+    renderCaptureAction(false)
     renderStep({
       index: 1,
       label: '连接',
@@ -219,6 +256,7 @@ function render() {
     })
     renderSitePanel(site, 'ambiguous')
     candidatePanel.classList.add('hidden')
+    renderCaptureAction(false)
     return
   }
 
@@ -227,19 +265,20 @@ function render() {
     label: resolvedStatus === 'identified' ? '已识别' : candidateStatus === 'needs_type_selection' ? '需选择' : '待识别',
     title: resolvedStatus === 'identified' ? '供应商已识别' : candidateStatus === 'needs_type_selection' ? '无法判断系统类型，请选择' : '当前页面未匹配供应商',
     text: resolvedStatus === 'identified'
-      ? '已识别到供应商，确认后可继续上报当前会话。'
+      ? '已识别到供应商，可提交账号密码或上报当前 Session。'
       : candidateStatus === 'needs_type_selection'
-        ? '页面特征不足，先选择系统类型，再把候选提交到后台注册任务。'
-        : '未注册站点不会直接进入供应商列表，请先提交候选并在后台发起注册。',
+        ? '页面特征不足，先选择系统类型，再提交账号密码或候选。'
+        : '未注册站点可先提交账号密码，保存后再上报 Session。',
     context: { host: site.host || '-', supplier: identification?.supplier?.name || candidate?.defaults?.name || '-' },
-    primaryText: resolvedStatus === 'identified' ? '仅上报当前会话' : '提交候选',
-    primary: resolvedStatus === 'identified' ? capture : submitSiteCandidate,
+    primaryText: '提交账号密码',
+    primary: submitSiteCandidate,
     secondaryText: '刷新状态',
     secondary: refresh
   })
 
   renderSitePanel(site, resolvedStatus)
   renderCandidatePanel()
+  renderCaptureAction(true)
 }
 
 function renderSitePanel(site, resolvedStatus) {
@@ -251,7 +290,7 @@ function renderSitePanel(site, resolvedStatus) {
   if (resolvedStatus === 'ambiguous') {
     writeStatus('供应商已存在多个候选，请人工处理', 'failed')
   } else if (candidate?.status === 'identified' || resolvedStatus === 'identified') {
-    writeStatus(identification?.message || '供应商已识别，已忽略创建/更新', 'success')
+    writeStatus(identification?.message || '供应商已识别，可提交账号密码或上报 Session', 'success')
   } else if (candidate?.status === 'needs_type_selection') {
     writeStatus('无法判断系统类型，请选择', 'neutral')
   } else {
@@ -260,7 +299,7 @@ function renderSitePanel(site, resolvedStatus) {
 }
 
 function renderCandidatePanel() {
-  const visible = Boolean(identification && state?.connection?.status === 'connected' && !identification?.supplier)
+  const visible = Boolean(identification && state?.connection?.status === 'connected' && identification?.status !== 'ambiguous')
   candidatePanel.classList.toggle('hidden', !visible)
   if (!visible) return
 
@@ -272,9 +311,9 @@ function renderCandidatePanel() {
 
   const defaults = candidate?.defaults || {}
   const credential = candidate?.credential || {}
-  const currentType = supplierTypeEl.value || candidate?.provider_type || ''
+  const currentType = supplierTypeEl.value || candidate?.provider_type || identification?.supplier?.type || ''
   supplierTypeEl.value = currentType || ''
-  supplierNameEl.value = supplierNameEl.value || defaults.name || identification?.activeTab?.title || identification?.activeTab?.host || ''
+  supplierNameEl.value = supplierNameEl.value || identification?.supplier?.name || defaults.name || identification?.activeTab?.title || identification?.activeTab?.host || ''
   supplierContactEl.value = supplierContactEl.value || defaults.contact || credential.username || ''
   supplierUsernameEl.value = supplierUsernameEl.value || credential.username || ''
   supplierTokenEl.value = supplierTokenEl.value || credential.token || ''
@@ -288,9 +327,9 @@ function renderCandidatePanel() {
     passwordHintEl.textContent = '页面存在密码输入框，点击读取页面凭据或创建时会尝试读取。'
   }
 
-  const needsType = !candidate?.provider_type || supplierTypeEl.value === ''
-  primaryAction.textContent = identification?.supplier ? '仅上报当前会话' : '提交候选'
-  primaryHandler = identification?.supplier ? capture : submitSiteCandidate
+  const needsType = !identification?.supplier && !candidate?.provider_type && supplierTypeEl.value === ''
+  primaryAction.textContent = '提交账号密码'
+  primaryHandler = submitSiteCandidate
   secondaryHandler = refresh
   secondaryAction.textContent = '刷新状态'
   primaryAction.disabled = busy || (!identification?.supplier && needsType)
@@ -342,24 +381,30 @@ async function submitSiteCandidate() {
   if (!currentCandidate.provider_type) {
     throw Object.assign(new Error('无法判断系统类型，请选择'), { reason: 'SUPPLIER_TYPE_REQUIRED' })
   }
+  const hasCredential = hasAnyBrowserCredential(currentCandidate)
+  const canCreateSupplier = hasCompleteBrowserCredential(currentCandidate)
+  if (!hasCredential) {
+    throw Object.assign(new Error('请先填写账号和密码'), { reason: 'SUPPLIER_CREDENTIAL_REQUIRED' })
+  }
+  if (!identification?.supplier && !currentCandidate.supplier_id && !canCreateSupplier) {
+    throw Object.assign(new Error('未入库站点需要账号和密码'), { reason: 'SUPPLIER_CREDENTIAL_REQUIRED' })
+  }
   setBusy(true)
   try {
-    writeStatus('正在提交候选信息', 'neutral')
-    const report = await reportCandidate(currentCandidate, false).catch((error) => {
-      if (error?.reason === 'SUPPLIER_SITE_NOT_MATCHED' || error?.reason === 'SUPPLIER_SITE_REGISTRATION_REQUIRED') {
-        return {
-          ignored: true,
-          message: '候选已保留在后台采集/注册流程，注册成功后才会进入供应商列表'
-        }
-      }
-      throw error
-    })
-    if (report?.already_exists) {
-      writeStatus('供应商已存在，登录后可仅上报当前会话', 'success')
+    writeStatus('正在提交账号密码', 'neutral')
+    const report = await reportCandidate(currentCandidate, canCreateSupplier)
+    let message = report?.message || '账号密码已提交'
+    if (report?.credential_saved) {
+      message = report.message || '账号密码已保存'
+    } else if (report?.already_exists) {
+      message = '供应商已存在，可继续上报 Session'
+    } else if (report?.created) {
+      message = report.message || '供应商已创建并保存账号密码'
     } else {
-      writeStatus(report?.message || '候选已提交，请在后台注册任务中发起注册', 'success')
+      message = report?.message || '候选已提交，请在后台注册任务中发起注册'
     }
     await refresh()
+    writeStatus(message, 'success')
   } finally {
     setBusy(false)
   }
@@ -370,6 +415,32 @@ async function reportCandidate(currentCandidate, autoCreate) {
     type: 'supplier:report-candidate',
     payload: buildReportPayload(currentCandidate, { autoCreate })
   })
+}
+
+function hasCompleteBrowserCredential(currentCandidate) {
+  const credential = currentCandidate?.credential || {}
+  return Boolean(String(credential.username || '').trim() && String(credential.password || '').trim())
+}
+
+function hasAnyBrowserCredential(currentCandidate) {
+  const credential = currentCandidate?.credential || {}
+  return Boolean(
+    String(credential.username || '').trim() ||
+    String(credential.password || '').trim() ||
+    String(credential.token || '').trim()
+  )
+}
+
+function withReportedSupplier(currentCandidate, report) {
+  const page = currentCandidate?.page || {}
+  const defaults = currentCandidate?.defaults || {}
+  return {
+    ...currentCandidate,
+    supplier_id: Number(report?.supplier_id || currentCandidate?.supplier_id || 0),
+    supplier_name: report?.supplier_name || currentCandidate?.supplier_name || currentCandidate?.name || '',
+    dashboard_url: currentCandidate?.dashboard_url || defaults.dashboard_url || page.url || page.origin || '',
+    api_base_url: currentCandidate?.api_base_url || defaults.api_base_url || page.origin || ''
+  }
 }
 
 async function collectCurrentCandidate(includeSensitive = false) {
@@ -392,8 +463,8 @@ function collectCandidateForm(sourceCandidate = candidate || {}, includeSensitiv
   const formPassword = String(supplierPasswordEl.value || '').trim()
   const livePassword = includeSensitive ? String(sourceCredential.password || '').trim() : ''
   return {
-    provider_type: normalizeProviderType(supplierTypeEl.value || sourceCandidate?.provider_type || ''),
-    name: String(supplierNameEl.value || defaults.name || page.title || page.host || '').trim(),
+    provider_type: normalizeProviderType(supplierTypeEl.value || sourceCandidate?.provider_type || identification?.supplier?.type || ''),
+    name: String(supplierNameEl.value || identification?.supplier?.name || defaults.name || page.title || page.host || '').trim(),
     contact: String(supplierContactEl.value || defaults.contact || supplierUsernameEl.value || '').trim(),
     credential: {
       username: String(supplierUsernameEl.value || sourceCredential.username || '').trim(),
@@ -405,7 +476,7 @@ function collectCandidateForm(sourceCandidate = candidate || {}, includeSensitiv
     defaults,
     evidence: Array.isArray(sourceCandidate?.evidence) ? sourceCandidate.evidence : [],
     confidence: Number(sourceCandidate?.confidence || 0),
-    supplier_id: Number(sourceCandidate?.supplier_id || 0)
+    supplier_id: Number(identification?.supplier?.id || sourceCandidate?.supplier_id || 0)
   }
 }
 
@@ -475,6 +546,7 @@ function clearCandidateForm() {
 function hideSitePanels() {
   sitePanel.classList.add('hidden')
   candidatePanel.classList.add('hidden')
+  renderCaptureAction(false)
 }
 
 function buildNotes() {
@@ -503,6 +575,11 @@ function renderRegistrationAction(connected) {
   registrationAction.disabled = busy || !connected
 }
 
+function renderCaptureAction(visible) {
+  captureAction.classList.toggle('hidden', !visible)
+  captureAction.disabled = busy || !visible || state?.connection?.status !== 'connected' || !identification
+}
+
 function renderStep(config) {
   stepIndex.textContent = String(config.index)
   stepLabel.textContent = config.label
@@ -518,6 +595,7 @@ function renderStep(config) {
   primaryHandler = config.primary
   secondaryHandler = config.secondary
   primaryAction.disabled = busy
+  captureAction.disabled = busy || captureAction.classList.contains('hidden')
   secondaryAction.disabled = busy
   registrationAction.disabled = busy || state?.connection?.status !== 'connected'
 }
@@ -580,6 +658,7 @@ function showError(error) {
   if (error?.reason === 'SUPPLIER_TYPE_REQUIRED') return writeStatus('无法判断系统类型，请选择', 'failed')
   if (error?.reason === 'SUPPLIER_USERNAME_REQUIRED') return writeStatus('请填写账号', 'failed')
   if (error?.reason === 'SUPPLIER_PASSWORD_REQUIRED') return writeStatus('无法自动读取密码，请手动输入', 'failed')
+  if (error?.reason === 'SUPPLIER_CREDENTIAL_REQUIRED') return writeStatus('请先填写账号和密码', 'failed')
   if (error?.reason === 'SUPPLIER_CREDENTIAL_SAVE_FAILED') return writeStatus('供应商凭据未保存，已停止上报', 'failed')
   if (error?.reason === 'SUPPLIER_SITE_AMBIGUOUS') return writeStatus('供应商已存在多个候选，请人工处理', 'failed')
   if (error?.reason === 'SUPPLIER_SITE_REGISTRATION_REQUIRED') return writeStatus('未注册站点请先在后台注册任务中发起注册', 'failed')
@@ -604,6 +683,7 @@ function shortDeviceID(deviceID) {
 function setBusy(nextBusy) {
   busy = nextBusy
   primaryAction.disabled = nextBusy
+  captureAction.disabled = nextBusy || captureAction.classList.contains('hidden')
   secondaryAction.disabled = nextBusy
   registrationAction.disabled = nextBusy || state?.connection?.status !== 'connected'
   saveEndpointAction.disabled = nextBusy

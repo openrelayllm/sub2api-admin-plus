@@ -7,8 +7,25 @@
 
 ARG ALPINE_IMAGE=alpine:3.21
 ARG POSTGRES_IMAGE=postgres:18-alpine
+ARG MIHOMO_VERSION=v1.19.27
 
 FROM ${POSTGRES_IMAGE} AS pg-client
+
+FROM ${ALPINE_IMAGE} AS mihomo-core
+
+ARG TARGETARCH
+ARG MIHOMO_VERSION
+
+RUN apk add --no-cache ca-certificates curl gzip && \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) MIHOMO_ASSET="mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz" ;; \
+      arm64) MIHOMO_ASSET="mihomo-linux-arm64-${MIHOMO_VERSION}.gz" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${MIHOMO_ASSET}" -o /tmp/mihomo.gz && \
+    gzip -dc /tmp/mihomo.gz > /mihomo && \
+    chmod +x /mihomo && \
+    test -s /mihomo
 
 FROM ${ALPINE_IMAGE}
 
@@ -42,8 +59,11 @@ RUN addgroup -g 1000 sub2api && \
 
 WORKDIR /app
 
+RUN mkdir -p /app/bin
+
 # Copy pre-built binary from GoReleaser
 COPY sub2api /app/sub2api
+COPY --from=mihomo-core /mihomo /app/bin/mihomo
 COPY extension /app/extension
 
 # Create data directory

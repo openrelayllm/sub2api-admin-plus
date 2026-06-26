@@ -63,6 +63,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(sitediscoveryapp.ProxyManager), new(*proxyapp.Service)),
 	wire.Bind(new(extensionapp.BrowserCredentialProvider), new(*suppliersapp.Service)),
 	wire.Bind(new(balancesapp.SessionReader), new(*sessionsapp.Service)),
+	wire.Bind(new(balancesapp.RecentSupplierUsageReader), new(*sub2apiapp.SQLRepository)),
 	wire.Bind(new(sessionsapp.SupplierLookup), new(*suppliersapp.Service)),
 	wire.Bind(new(costsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(costsapp.UsageCostSyncer), new(*usagecostsapp.Service)),

@@ -761,15 +761,17 @@ function buildSupplierCandidatePayload(deviceID, identification, candidate, cred
 function supplierFromCandidateHint(candidate) {
   const providerType = normalizeProviderType(candidate?.provider_type || candidate?.system_type || candidate?.type || candidate?.supplier_type || '')
   const supplierID = Number(candidate?.supplier_id || candidate?.id || 0)
+  const defaults = candidate?.defaults || {}
+  const page = candidate?.page || {}
   return {
     id: supplierID,
     supplier_id: supplierID,
     name: candidate?.supplier_name || candidate?.name || '当前供应商',
     type: providerType,
-    dashboard_url: candidate?.dashboard_url || '',
-    api_base_url: candidate?.api_base_url || '',
-    third_party_recharge_url: candidate?.third_party_recharge_url || '',
-    local_recharge_url: candidate?.local_recharge_url || '',
+    dashboard_url: candidate?.dashboard_url || defaults.dashboard_url || page.url || page.origin || '',
+    api_base_url: candidate?.api_base_url || defaults.api_base_url || page.origin || '',
+    third_party_recharge_url: candidate?.third_party_recharge_url || defaults.third_party_recharge_url || '',
+    local_recharge_url: candidate?.local_recharge_url || defaults.local_recharge_url || '',
     credential: {
       browser_login_enabled: Boolean(candidate?.browser_login_enabled),
       browser_login_username_configured: Boolean(candidate?.browser_login_username),

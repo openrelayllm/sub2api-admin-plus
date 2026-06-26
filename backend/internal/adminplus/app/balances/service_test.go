@@ -78,6 +78,74 @@ func TestServiceRecordSnapshotIgnoresNotifierError(t *testing.T) {
 	require.Len(t, notifier.events, 1)
 }
 
+func TestServiceRecordSnapshotSkipsProviderSessionNotificationWithoutRecentUsage(t *testing.T) {
+	repo := newFakeBalanceRepository()
+	notifier := &fakeBalanceNotifier{}
+	recentUsage := &fakeRecentSupplierUsageReader{has: false}
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc := NewServiceWithNotifier(repo, notifier).WithRecentUsageReader(recentUsage)
+	svc.now = func() time.Time { return now }
+	repo.snapshots = append(repo.snapshots, &adminplusdomain.BalanceSnapshot{
+		ID:            1,
+		SupplierID:    7,
+		RuntimeStatus: adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:  3000,
+		Currency:      "USD",
+		CapturedAt:    now.Add(-time.Minute),
+	})
+
+	event, snapshot, err := svc.RecordSnapshot(context.Background(), RecordSnapshotInput{
+		SupplierID:               7,
+		Source:                   "provider_session",
+		RuntimeStatus:            adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:             500,
+		Currency:                 "USD",
+		LowBalanceThresholdCents: 1000,
+		CapturedAt:               &now,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	require.NotNil(t, snapshot)
+	require.Len(t, notifier.events, 0)
+	require.Equal(t, 1, recentUsage.calls)
+	require.Equal(t, int64(7), recentUsage.supplierID)
+	require.Equal(t, now.Add(-recentSupplierUsageWindow), recentUsage.since)
+}
+
+func TestServiceRecordSnapshotNotifiesProviderSessionBalanceWithRecentUsage(t *testing.T) {
+	repo := newFakeBalanceRepository()
+	notifier := &fakeBalanceNotifier{}
+	recentUsage := &fakeRecentSupplierUsageReader{has: true}
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	svc := NewServiceWithNotifier(repo, notifier).WithRecentUsageReader(recentUsage)
+	svc.now = func() time.Time { return now }
+	repo.snapshots = append(repo.snapshots, &adminplusdomain.BalanceSnapshot{
+		ID:            1,
+		SupplierID:    7,
+		RuntimeStatus: adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:  3000,
+		Currency:      "USD",
+		CapturedAt:    now.Add(-time.Minute),
+	})
+
+	event, snapshot, err := svc.RecordSnapshot(context.Background(), RecordSnapshotInput{
+		SupplierID:               7,
+		Source:                   "provider_session",
+		RuntimeStatus:            adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:             500,
+		Currency:                 "USD",
+		LowBalanceThresholdCents: 1000,
+		CapturedAt:               &now,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	require.NotNil(t, snapshot)
+	require.Len(t, notifier.events, 1)
+	require.Equal(t, event.ID, notifier.events[0].ID)
+}
+
 func TestServiceRecordSnapshotCreatesDepletedAndRecoveredEvents(t *testing.T) {
 	repo := newFakeBalanceRepository()
 	svc := NewService(repo)
@@ -428,6 +496,24 @@ type fakeBalanceRepository struct {
 type fakeBalanceNotifier struct {
 	err    error
 	events []*adminplusdomain.BalanceEvent
+}
+
+type fakeRecentSupplierUsageReader struct {
+	has        bool
+	err        error
+	calls      int
+	supplierID int64
+	since      time.Time
+}
+
+func (r *fakeRecentSupplierUsageReader) HasSupplierUsageSince(_ context.Context, supplierID int64, since time.Time) (bool, error) {
+	r.calls++
+	r.supplierID = supplierID
+	r.since = since
+	if r.err != nil {
+		return false, r.err
+	}
+	return r.has, nil
 }
 
 type fakeBalanceSessionReader struct {

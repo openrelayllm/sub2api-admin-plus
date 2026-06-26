@@ -623,12 +623,16 @@ func getEnvIntPointer(key string) *int {
 	return nil
 }
 
-// AutoSetupFromEnv performs automatic setup using environment variables
-// This is designed for Docker deployment where all config is passed via env vars
-func AutoSetupFromEnv() error {
-	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
-	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
+func getEnvBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
 
+func setupConfigFromEnv() *SetupConfig {
 	// Get timezone from TZ or TIMEZONE env var (TZ is standard for Docker)
 	tz := getEnvOrDefault("TZ", "")
 	if tz == "" {
@@ -636,7 +640,7 @@ func AutoSetupFromEnv() error {
 	}
 
 	// Build config from environment variables
-	cfg := &SetupConfig{
+	return &SetupConfig{
 		Database: DatabaseConfig{
 			Host:     getEnvOrDefault("DATABASE_HOST", "localhost"),
 			Port:     getEnvIntOrDefault("DATABASE_PORT", 5432),
@@ -675,6 +679,15 @@ func AutoSetupFromEnv() error {
 		},
 		Timezone: tz,
 	}
+}
+
+// AutoSetupFromEnv performs automatic setup using environment variables
+// This is designed for Docker deployment where all config is passed via env vars
+func AutoSetupFromEnv() error {
+	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
+	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
+
+	cfg := setupConfigFromEnv()
 
 	// Generate JWT secret if not provided
 	if cfg.JWT.Secret == "" {
@@ -740,5 +753,154 @@ func AutoSetupFromEnv() error {
 	logger.LegacyPrintf("setup", "%s", "Installation lock created")
 
 	logger.LegacyPrintf("setup", "%s", "Auto setup completed successfully!")
+	return nil
+}
+
+// EnsureDevAdminFromEnv resets or creates the configured admin account for local dev.
+func EnsureDevAdminFromEnv() error {
+	if !getEnvBool("ADMIN_PLUS_DEV_RESET_ADMIN_PASSWORD") {
+		return nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(getEnvOrDefault("SERVER_MODE", "release")))
+	if mode != "debug" {
+		return fmt.Errorf("ADMIN_PLUS_DEV_RESET_ADMIN_PASSWORD is only allowed when SERVER_MODE=debug")
+	}
+
+	cfg := setupConfigFromEnv()
+	if strings.TrimSpace(cfg.Admin.Email) == "" {
+		return fmt.Errorf("ADMIN_EMAIL is required when ADMIN_PLUS_DEV_RESET_ADMIN_PASSWORD is enabled")
+	}
+	if strings.TrimSpace(cfg.Admin.Password) == "" {
+		return fmt.Errorf("ADMIN_PASSWORD is required when ADMIN_PLUS_DEV_RESET_ADMIN_PASSWORD is enabled")
+	}
+
+	if err := initializeDatabase(cfg); err != nil {
+		return fmt.Errorf("database initialization failed before dev admin reset: %w", err)
+	}
+	if err := ensureDevAdmin(cfg); err != nil {
+		return err
+	}
+
+	logger.LegacyPrintf("setup", "Dev admin is ready: %s", cfg.Admin.Email)
+	return nil
+}
+
+func ensureDevAdmin(cfg *SetupConfig) error {
+	db, err := sql.Open("postgres", buildPostgresDSN(&cfg.Database, cfg.Database.DBName))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.LegacyPrintf("setup", "failed to close postgres connection: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	admin := &service.User{}
+	if err := admin.SetPassword(cfg.Admin.Password); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	concurrency := setupDefaultAdminConcurrency()
+	var userID int64
+	err = db.QueryRowContext(
+		ctx,
+		`UPDATE users
+		    SET password_hash = $1,
+		        role = $2,
+		        status = $3,
+		        concurrency = GREATEST(concurrency, $4),
+		        deleted_at = NULL,
+		        updated_at = $5
+		  WHERE LOWER(BTRIM(email)) = LOWER(BTRIM($6))
+		  RETURNING id`,
+		admin.PasswordHash,
+		service.RoleAdmin,
+		service.StatusActive,
+		concurrency,
+		now,
+		cfg.Admin.Email,
+	).Scan(&userID)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("reset dev admin password: %w", err)
+	}
+	if err == sql.ErrNoRows {
+		if err := db.QueryRowContext(
+			ctx,
+			`INSERT INTO users (email, password_hash, role, balance, concurrency, status, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 RETURNING id`,
+			cfg.Admin.Email,
+			admin.PasswordHash,
+			service.RoleAdmin,
+			0,
+			concurrency,
+			service.StatusActive,
+			now,
+			now,
+		).Scan(&userID); err != nil {
+			return fmt.Errorf("create dev admin: %w", err)
+		}
+	}
+
+	if err := ensureDevAdminEmailIdentity(ctx, db, userID, cfg.Admin.Email); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureDevAdminEmailIdentity(ctx context.Context, db *sql.DB, userID int64, email string) error {
+	var exists bool
+	if err := db.QueryRowContext(ctx, "SELECT to_regclass('public.auth_identities') IS NOT NULL").Scan(&exists); err != nil {
+		return fmt.Errorf("check auth identity table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	subject := strings.ToLower(strings.TrimSpace(email))
+	if subject == "" {
+		return nil
+	}
+
+	_, err := db.ExecContext(
+		ctx,
+		`INSERT INTO auth_identities (
+		     user_id, provider_type, provider_key, provider_subject, verified_at, metadata
+		 )
+		 VALUES ($1, 'email', 'email', $2, $3, '{"source":"dev_admin_reset"}'::jsonb)
+		 ON CONFLICT (provider_type, provider_key, provider_subject) DO NOTHING`,
+		userID,
+		subject,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("ensure dev admin email identity: %w", err)
+	}
+
+	var ownerID int64
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT user_id
+		   FROM auth_identities
+		  WHERE provider_type = 'email'
+		    AND provider_key = 'email'
+		    AND provider_subject = $1`,
+		subject,
+	).Scan(&ownerID)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load dev admin email identity: %w", err)
+	}
+	if ownerID != userID {
+		return fmt.Errorf("email auth identity %q belongs to user %d, not dev admin %d", subject, ownerID, userID)
+	}
 	return nil
 }

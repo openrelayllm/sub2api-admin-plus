@@ -3,6 +3,9 @@ package sitediscovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/bizlogs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	mailverificationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/mailverification"
+	proxyapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/proxy"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
@@ -558,6 +562,60 @@ func TestRerunRegistrationQueuesNewTaskAfterFailure(t *testing.T) {
 	}
 }
 
+func TestRerunRegistrationPassesProxyPolicyToDirectRegistration(t *testing.T) {
+	ctx := context.Background()
+	repo := newRegistrationMemoryRepository()
+	item := repo.addSupportedItem()
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	service := NewService(repo, supplierService, extensionService, nil, plaintextCredentialCipher{}, nil).WithDirectRegistration(browserFallbackRegistrationAdapter())
+	_, task, err := service.RegisterItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("register item: %v", err)
+	}
+	processor := NewRegistrationProcessor(repo, supplierService, plaintextCredentialCipher{})
+	if _, err := processor.ProcessRegistrationTaskFailure(ctx, task, "REGISTRATION_VERIFICATION_CODE_NOT_FOUND", "未读取到验证码"); err != nil {
+		t.Fatalf("process registration failure: %v", err)
+	}
+	credential, _, err := repo.GetRegistrationCredentialByTaskID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get registration credential: %v", err)
+	}
+	direct := &fakeDirectRegistrationAdapter{}
+	proxyManager := &fakeProxyManager{
+		assignment: &adminplusdomain.ProxyAssignment{
+			ID:        42,
+			PolicyID:  7,
+			MixedPort: 18080,
+			Status:    adminplusdomain.ProxyAssignmentActive,
+		},
+	}
+	service = NewService(repo, supplierService, extensionService, nil, plaintextCredentialCipher{}, nil).WithDirectRegistration(direct).WithProxyManager(proxyManager)
+
+	updated, nextTask, err := service.RerunRegistrationWithOptions(ctx, RerunRegistrationInput{
+		RegistrationID: credential.ID,
+		ProxyPolicyID:  7,
+	})
+	if err != nil {
+		t.Fatalf("rerun registration workflow: %v", err)
+	}
+	if nextTask != nil {
+		t.Fatalf("expected direct registration without browser fallback task, got %#v", nextTask)
+	}
+	if updated.Status != adminplusdomain.SupplierRegistrationStatusSucceeded {
+		t.Fatalf("expected succeeded rerun credential, got %s", updated.Status)
+	}
+	if proxyManager.requestCount != 1 {
+		t.Fatalf("expected one proxy assignment request, got %d", proxyManager.requestCount)
+	}
+	if proxyManager.lastRequest.PolicyID != 7 || proxyManager.lastRequest.Purpose != adminplusdomain.ProxyPurposeRegistration {
+		t.Fatalf("expected registration proxy policy 7, got %#v", proxyManager.lastRequest)
+	}
+	if len(direct.inputs) != 1 || direct.inputs[0].ProxyURL != "http://127.0.0.1:18080" {
+		t.Fatalf("expected direct registration proxy URL, got %#v", direct.inputs)
+	}
+}
+
 func TestRerunDirectFailureClearsStaleBrowserTask(t *testing.T) {
 	ctx := context.Background()
 	repo := newRegistrationMemoryRepository()
@@ -606,6 +664,94 @@ func TestRerunDirectFailureClearsStaleBrowserTask(t *testing.T) {
 	}
 	if records[0].TaskID != 0 {
 		t.Fatalf("expected stale task omitted from view, got %d", records[0].TaskID)
+	}
+}
+
+func TestListRegistrationTasksPrefersRegisteredDiscoveryOverStaleFailure(t *testing.T) {
+	ctx := context.Background()
+	repo := newRegistrationMemoryRepository()
+	item := repo.addSupportedItem()
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	service := NewService(repo, supplierService, extensionService, nil, plaintextCredentialCipher{}, nil).WithDirectRegistration(browserFallbackRegistrationAdapter())
+	_, task, err := service.RegisterItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("register item: %v", err)
+	}
+	processor := NewRegistrationProcessor(repo, supplierService, plaintextCredentialCipher{})
+	if _, err := processor.ProcessRegistrationTaskFailure(ctx, task, "MAIL_VERIFICATION_CODE_NOT_FOUND", "未读取到验证码"); err != nil {
+		t.Fatalf("process registration failure: %v", err)
+	}
+	if _, err := repo.LinkSupplier(ctx, item.ID, 36); err != nil {
+		t.Fatalf("link supplier: %v", err)
+	}
+
+	records, err := service.ListRegistrationTasks(ctx, ListFilter{RegistrationStatus: adminplusdomain.SupplierRegistrationStatusSucceeded, Limit: 20})
+	if err != nil {
+		t.Fatalf("list succeeded registration tasks: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one succeeded registration record, got %d", len(records))
+	}
+	record := records[0]
+	if record.Status != adminplusdomain.SupplierRegistrationStatusSucceeded {
+		t.Fatalf("expected succeeded status, got %s", record.Status)
+	}
+	if record.TaskID != 0 || record.ErrorCode != "" || record.ErrorMessage != "" || record.CanRetry {
+		t.Fatalf("expected stale task and error hidden from current view, got task=%d error=%q retry=%v", record.TaskID, record.ErrorCode, record.CanRetry)
+	}
+	if record.Discovery == nil || record.Discovery.SupplierID != 36 || record.Discovery.RegistrationStatus != adminplusdomain.SupplierRegistrationStatusSucceeded {
+		t.Fatalf("expected registered discovery projection, got %#v", record.Discovery)
+	}
+
+	failedRecords, err := service.ListRegistrationTasks(ctx, ListFilter{RegistrationStatus: adminplusdomain.SupplierRegistrationStatusFailed, Limit: 20})
+	if err != nil {
+		t.Fatalf("list failed registration tasks: %v", err)
+	}
+	if len(failedRecords) != 0 {
+		t.Fatalf("expected no failed current registration records, got %d", len(failedRecords))
+	}
+}
+
+func TestRerunRegisteredDiscoveryDoesNotStartRegistrationWorkflow(t *testing.T) {
+	ctx := context.Background()
+	repo := newRegistrationMemoryRepository()
+	item := repo.addSupportedItem()
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	service := NewService(repo, supplierService, extensionService, nil, plaintextCredentialCipher{}, nil).WithDirectRegistration(browserFallbackRegistrationAdapter())
+	_, task, err := service.RegisterItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("register item: %v", err)
+	}
+	processor := NewRegistrationProcessor(repo, supplierService, plaintextCredentialCipher{})
+	if _, err := processor.ProcessRegistrationTaskFailure(ctx, task, "REGISTRATION_FORM_NOT_FOUND", "未找到可填写的注册表单"); err != nil {
+		t.Fatalf("process registration failure: %v", err)
+	}
+	if _, err := repo.LinkSupplier(ctx, item.ID, 36); err != nil {
+		t.Fatalf("link supplier: %v", err)
+	}
+	credential, _, err := repo.GetRegistrationCredentialByTaskID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get registration credential: %v", err)
+	}
+	direct := &fakeDirectRegistrationAdapter{
+		alwaysErr: infraerrors.New(http.StatusConflict, "SHOULD_NOT_REGISTER", "direct registration should not be called"),
+	}
+	service = NewService(repo, supplierService, extensionService, nil, plaintextCredentialCipher{}, nil).WithDirectRegistration(direct)
+
+	updated, nextTask, err := service.RerunRegistration(ctx, credential.ID)
+	if err != nil {
+		t.Fatalf("rerun registered discovery: %v", err)
+	}
+	if nextTask != nil {
+		t.Fatalf("expected no registration task for already registered discovery, got %#v", nextTask)
+	}
+	if len(direct.inputs) != 0 {
+		t.Fatalf("expected direct registration not called, got %d calls", len(direct.inputs))
+	}
+	if updated.Status != adminplusdomain.SupplierRegistrationStatusSucceeded || updated.ExtensionTaskID != 0 || updated.ErrorCode != "" {
+		t.Fatalf("expected normalized succeeded credential, got %#v", updated)
 	}
 }
 
@@ -719,6 +865,66 @@ func TestRegisterItemRecordsRegistrationWorkflowLogWithoutSecrets(t *testing.T) 
 	}
 }
 
+func TestRegisterItemFailureLogIncludesRequestDiagnostics(t *testing.T) {
+	repo := newRegistrationMemoryRepository()
+	item := repo.addSupportedItem()
+	writer := &registrationLogWriter{}
+	service := NewService(
+		repo,
+		suppliersapp.NewService(suppliersapp.NewMemoryRepository()),
+		extensionapp.NewService(extensionapp.NewMemoryRepository()),
+		nil,
+		plaintextCredentialCipher{},
+		nil,
+	).WithDirectRegistration(&fakeDirectRegistrationAdapter{
+		alwaysErr: infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_REGISTRATION_FAILED", "new api registration endpoint is unreachable").WithMetadata(map[string]string{
+			"endpoint":     "https://example.test/api/user/register",
+			"error_kind":   "dns",
+			"error_detail": "lookup example.test: no such host",
+		}),
+	}).WithDiagnostics(bizlogs.NewRecorder(writer))
+
+	credential, task, err := service.RegisterItem(context.Background(), item.ID)
+	if err == nil {
+		t.Fatal("expected direct registration failure")
+	}
+	if task != nil {
+		t.Fatalf("expected no browser fallback task, got %#v", task)
+	}
+	if credential == nil {
+		t.Fatal("expected failed credential")
+	}
+	var failure map[string]any
+	for _, input := range writer.inputs {
+		var extra map[string]any
+		if err := json.Unmarshal([]byte(input.ExtraJSON), &extra); err != nil {
+			t.Fatalf("parse log extra: %v", err)
+		}
+		if extra["action"] == "direct_registration_failed" {
+			failure = extra
+			if strings.Contains(input.ExtraJSON, credential.Email) {
+				t.Fatalf("registration log must not contain raw email: %s", input.ExtraJSON)
+			}
+			break
+		}
+	}
+	if failure == nil {
+		t.Fatalf("expected direct registration failure log, got %#v", writer.inputs)
+	}
+	if stringFromAny(failure["endpoint"]) != "https://example.test/api/user/register" {
+		t.Fatalf("expected endpoint diagnostic, got %#v", failure["endpoint"])
+	}
+	if stringFromAny(failure["error_kind"]) != "dns" {
+		t.Fatalf("expected dns error kind, got %#v", failure["error_kind"])
+	}
+	if stringFromAny(failure["error_detail"]) != "lookup example.test: no such host" {
+		t.Fatalf("expected error detail, got %#v", failure["error_detail"])
+	}
+	if stringFromAny(failure["reason"]) != "SUPPLIER_DIRECT_REGISTRATION_FAILED" {
+		t.Fatalf("expected failure reason, got %#v", failure["reason"])
+	}
+}
+
 func TestListRegistrationLogsUsesWorkflowID(t *testing.T) {
 	ctx := context.Background()
 	repo := newRegistrationMemoryRepository()
@@ -801,6 +1007,57 @@ func TestListRegistrationLogsReturnsCurrentStatusWithoutLogReader(t *testing.T) 
 	}
 	if stringFromAny(log.Extra["task_id"]) != stringFromInt64(task.ID) {
 		t.Fatalf("expected task id %d in snapshot, got %#v", task.ID, log.Extra["task_id"])
+	}
+	if stringFromAny(log.Extra["outcome"]) != "" {
+		t.Fatalf("expected active snapshot without outcome, got %#v", log.Extra["outcome"])
+	}
+}
+
+func TestListRegistrationLogsSnapshotUsesCurrentRegistrationOutcome(t *testing.T) {
+	ctx := context.Background()
+	repo := newRegistrationMemoryRepository()
+	item := repo.addSupportedItem()
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	service := NewService(repo, supplierService, extensionService, nil, plaintextCredentialCipher{}, nil).WithDirectRegistration(browserFallbackRegistrationAdapter())
+	_, task, err := service.RegisterItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("register item: %v", err)
+	}
+	processor := NewRegistrationProcessor(repo, supplierService, plaintextCredentialCipher{})
+	if _, err := processor.ProcessRegistrationTaskFailure(ctx, task, "REGISTRATION_DISABLED", "new api registration is disabled"); err != nil {
+		t.Fatalf("process registration failure: %v", err)
+	}
+	credential, _, err := repo.GetRegistrationCredentialByTaskID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get credential: %v", err)
+	}
+
+	result, err := service.ListRegistrationLogs(ctx, credential.ID, 20)
+	if err != nil {
+		t.Fatalf("list registration logs: %v", err)
+	}
+	var snapshot *opsservice.OpsSystemLog
+	for _, item := range result.Items {
+		if item.Message == "注册流程当前状态" {
+			snapshot = item
+			break
+		}
+	}
+	if snapshot == nil {
+		t.Fatalf("expected current status snapshot, got %#v", result.Items)
+	}
+	if snapshot.Level != bizlogs.LevelWarn {
+		t.Fatalf("expected warn snapshot level, got %s", snapshot.Level)
+	}
+	if stringFromAny(snapshot.Extra["outcome"]) != bizlogs.OutcomeFailed {
+		t.Fatalf("expected failed snapshot outcome, got %#v", snapshot.Extra["outcome"])
+	}
+	if stringFromAny(snapshot.Extra["registration_status"]) != string(adminplusdomain.SupplierRegistrationStatusFailed) {
+		t.Fatalf("expected failed registration status, got %#v", snapshot.Extra["registration_status"])
+	}
+	if stringFromAny(snapshot.Extra["reason"]) != "REGISTRATION_DISABLED" {
+		t.Fatalf("expected failure reason, got %#v", snapshot.Extra["reason"])
 	}
 }
 
@@ -1032,8 +1289,84 @@ func TestRegistrationContextPayloadDoesNotExposeProxyURL(t *testing.T) {
 	}
 }
 
+func TestProxyAwareTransportReportsFailureAndRetries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	dialer := &net.Dialer{}
+	dialCalls := 0
+	base := &http.Transport{
+		DialContext: func(ctx context.Context, network string, address string) (net.Conn, error) {
+			dialCalls++
+			if dialCalls == 1 {
+				return nil, errors.New("temporary dial failure")
+			}
+			return dialer.DialContext(ctx, network, address)
+		},
+	}
+	manager := &fakeProxyManager{
+		assignment: &adminplusdomain.ProxyAssignment{
+			ID:     77,
+			Status: adminplusdomain.ProxyAssignmentActive,
+		},
+	}
+	client := &http.Client{
+		Transport: &proxyAwareTransport{
+			base:         base,
+			manager:      manager,
+			assignmentID: 77,
+			errorCode:    "SITE_DISCOVERY_PROXY_NETWORK_FAILED",
+		},
+	}
+
+	resp, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("request should retry after proxy switch: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "ok" {
+		t.Fatalf("expected retry response body ok, got %q", string(body))
+	}
+	if manager.reportCount != 1 {
+		t.Fatalf("expected one proxy failure report, got %d", manager.reportCount)
+	}
+	if manager.lastReport.ErrorCode != "SITE_DISCOVERY_PROXY_NETWORK_FAILED" || !strings.Contains(manager.lastReport.ErrorMessage, "temporary dial failure") {
+		t.Fatalf("unexpected report input: %#v", manager.lastReport)
+	}
+	if dialCalls != 2 {
+		t.Fatalf("expected initial dial and retry dial, got %d", dialCalls)
+	}
+}
+
 type fakeRegistrationMailReader struct {
 	lastInput mailverificationapp.ReadVerificationCodeForEmailInput
+}
+
+type fakeProxyManager struct {
+	assignment   *adminplusdomain.ProxyAssignment
+	requestCount int
+	lastRequest  proxyapp.RequestAssignmentInput
+	reportCount  int
+	lastReport   proxyapp.ReportFailureInput
+}
+
+func (m *fakeProxyManager) RequestAssignment(_ context.Context, input proxyapp.RequestAssignmentInput) (*adminplusdomain.ProxyAssignment, error) {
+	m.requestCount++
+	m.lastRequest = input
+	return m.assignment, nil
+}
+
+func (m *fakeProxyManager) ReleaseAssignment(_ context.Context, _ int64, _ bool, _ string, _ string) (*adminplusdomain.ProxyAssignment, error) {
+	return m.assignment, nil
+}
+
+func (m *fakeProxyManager) ReportFailure(_ context.Context, _ int64, input proxyapp.ReportFailureInput) (*adminplusdomain.ProxyAssignment, error) {
+	m.reportCount++
+	m.lastReport = input
+	return m.assignment, nil
 }
 
 func (r *fakeRegistrationMailReader) ReadVerificationCodeForEmail(_ context.Context, in mailverificationapp.ReadVerificationCodeForEmailInput) (*mailverificationapp.ReadVerificationCodeResult, error) {
@@ -1265,7 +1598,8 @@ func (r *registrationMemoryRepository) ListRegistrationRecords(_ context.Context
 		if filter.ProviderType != "" && item.ProviderType != filter.ProviderType {
 			continue
 		}
-		if filter.RegistrationStatus != "" && credential.Status != filter.RegistrationStatus {
+		item = r.applyRegistrationLocked(item)
+		if filter.RegistrationStatus != "" && item.RegistrationStatus != filter.RegistrationStatus {
 			continue
 		}
 		records = append(records, &RegistrationRecord{
@@ -1405,6 +1739,23 @@ func (r *registrationMemoryRepository) CompleteRegistration(_ context.Context, c
 	return cloneRegistrationCredential(cp), nil
 }
 
+func (r *registrationMemoryRepository) MarkRegistrationSucceeded(_ context.Context, credentialID int64, supplierID int64, attemptedAt time.Time) (*adminplusdomain.SupplierRegistrationCredential, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := cloneRegistrationCredential(r.credentials[credentialID])
+	if supplierID > 0 {
+		cp.SupplierID = supplierID
+	}
+	cp.ExtensionTaskID = 0
+	cp.Status = adminplusdomain.SupplierRegistrationStatusSucceeded
+	cp.VerificationStatus = ""
+	cp.ErrorCode = ""
+	cp.ErrorMessage = ""
+	cp.LastAttemptAt = &attemptedAt
+	r.credentials[credentialID] = cp
+	return cloneRegistrationCredential(cp), nil
+}
+
 func (r *registrationMemoryRepository) ListRecommendations(context.Context, float64, int) ([]*adminplusdomain.SiteDiscoveryRecommendation, error) {
 	return nil, nil
 }
@@ -1417,12 +1768,18 @@ func (r *registrationMemoryRepository) applyRegistrationLocked(item *adminplusdo
 		if credential.DiscoveryID != item.ID {
 			continue
 		}
-		item.SupplierID = credential.SupplierID
+		item.SupplierID = firstPositiveInt64(credential.SupplierID, item.SupplierID)
 		item.RegistrationStatus = credential.Status
 		item.RegistrationTaskID = credential.ExtensionTaskID
 		item.RegistrationEmail = credential.Email
 		item.RegistrationErrorCode = credential.ErrorCode
 		item.RegistrationErrorMessage = credential.ErrorMessage
+	}
+	if isRegisteredDiscovery(item, nil) {
+		item.RegistrationStatus = adminplusdomain.SupplierRegistrationStatusSucceeded
+		item.RegistrationTaskID = 0
+		item.RegistrationErrorCode = ""
+		item.RegistrationErrorMessage = ""
 	}
 	return item
 }

@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_PORT="${SERVER_PORT:-8080}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 STOP_EXISTING_DEV="${STOP_EXISTING_DEV:-true}"
+START_LOCAL_INFRA="${START_LOCAL_INFRA:-true}"
 
 PIDS=()
 
@@ -127,13 +128,26 @@ cleanup() {
   for pid in "${PIDS[@]}"; do
     force_kill_if_alive "${pid}"
   done
+  if [ "${START_LOCAL_INFRA}" = "true" ] && declare -F dev_infra_stop >/dev/null 2>&1; then
+    dev_infra_stop
+  fi
 }
 
 trap cleanup EXIT INT TERM
 
 check_command lsof
+check_command curl
 stop_existing_dev_on_port "${SERVER_PORT}" "SERVER"
 stop_existing_dev_on_port "${FRONTEND_PORT}" "FRONTEND"
+
+if [ "${START_LOCAL_INFRA}" = "true" ]; then
+  # Native local infra only. This script never installs or starts Docker.
+  # It uses local postgres/redis binaries when the configured ports are free.
+  # Set START_LOCAL_INFRA=false to use externally managed services.
+  # shellcheck source=scripts/dev-infra.sh
+  source "${ROOT_DIR}/scripts/dev-infra.sh"
+  dev_infra_start
+fi
 
 bash "${ROOT_DIR}/scripts/start-backend.sh" &
 PIDS+=("$!")

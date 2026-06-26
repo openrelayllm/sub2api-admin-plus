@@ -34,8 +34,30 @@ func TestServiceRecordAnnouncementRecommendsRechargeForEmptySupplier(t *testing.
 	require.False(t, event.SwitchEligible)
 	require.Equal(t, "USD", event.Currency)
 	require.Equal(t, adminplusdomain.AnnouncementStatusOpen, event.Status)
-	require.Len(t, notifier.events, 1)
-	require.Equal(t, event.ID, notifier.events[0].ID)
+	require.Empty(t, notifier.events)
+}
+
+func TestServiceRecordAnnouncementSkipsProviderSessionNotification(t *testing.T) {
+	repo := newFakeAnnouncementRepository()
+	notifier := &fakeAnnouncementNotifier{}
+	svc := NewServiceWithNotifier(repo, notifier)
+	bonus := 20.0
+
+	event, err := svc.RecordAnnouncement(context.Background(), RecordAnnouncementInput{
+		SupplierID:       7,
+		Source:           "provider_session",
+		Type:             adminplusdomain.AnnouncementTypeRechargeBonus,
+		Title:            "June recharge bonus",
+		MinRechargeCents: 10000,
+		BonusPercent:     &bonus,
+		RuntimeStatus:    adminplusdomain.SupplierRuntimeStatusCandidate,
+		BalanceCents:     5000,
+		Currency:         "USD",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	require.Empty(t, notifier.events)
 }
 
 func TestServiceRecordAnnouncementMarksSwitchCandidateWhenBalanceIsUsable(t *testing.T) {

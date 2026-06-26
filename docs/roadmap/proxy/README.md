@@ -690,16 +690,39 @@ flowchart TD
 |------|------|------|
 | `GET` | `/admin/proxy/runtime-slots` | slot 列表 |
 | `POST` | `/admin/proxy/runtime-slots/:id/restart` | 重启 slot |
+| `POST` | `/admin/proxy/runtime-slots/:id/rotate-secret` | 轮换空闲 slot controller secret |
 | `POST` | `/admin/proxy/assignments` | 内部 API：创建任务绑定 |
 | `POST` | `/admin/proxy/assignments/:id/release` | 内部 API：释放任务绑定 |
 | `POST` | `/admin/proxy/assignments/:id/switch` | 内部 API：切换节点 |
+| `POST` | `/admin/proxy/assignments/:id/failure` | 内部 API：上报网络失败并按策略自动切换 |
 
 ### 17.5 审计
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/admin/proxy/audit-events` | 查询代理审计 |
+| `GET` | `/admin/proxy/audit-events/export` | 导出代理审计 CSV |
 | `GET` | `/admin/proxy/assignments` | 查询任务绑定历史 |
+
+### 17.6 状态与指标
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/admin/proxy/center/status` | 代理中心状态和最近 24 小时聚合指标 |
+
+状态接口返回字段包括：
+
+| 字段 | 说明 |
+|------|------|
+| `proxy_enabled` | 全局代理开关是否启用 |
+| `mihomo_configured` | 是否已配置 Mihomo core |
+| `max_slots` | 运行槽位上限 |
+| `node_switches_24h` | 最近 24 小时节点切换次数 |
+| `node_failures_24h` | 最近 24 小时节点网络失败上报次数 |
+| `policy_denials_24h` | 最近 24 小时策略拒绝、切换预算拒绝或全局停用拒绝次数 |
+| `egress_verify_failures_24h` | 最近 24 小时出口 IP 验证失败次数 |
+| `completed_assignments_24h` | 最近 24 小时已释放或失败的任务绑定数量 |
+| `avg_assignment_seconds_24h` | 最近 24 小时已完成任务绑定的平均持续秒数 |
 
 ## 18. 安全、合规与审计
 
@@ -751,6 +774,8 @@ flowchart TD
 | `proxy_policy_denied_total` | 策略拒绝次数 |
 | `proxy_egress_verify_failed_total` | 出口验证失败次数 |
 | `proxy_target_request_error_total` | 目标请求错误数 |
+
+MVP 阶段先通过 `/admin/proxy/center/status` 暴露最近 24 小时聚合字段，用于代理页和调度中心展示；后续可把同一事实源接入 Prometheus/OpenTelemetry。
 
 ## 21. 测试用例
 

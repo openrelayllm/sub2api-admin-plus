@@ -1,8 +1,11 @@
 package adminplus
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	proxyapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/proxy"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
@@ -100,6 +103,12 @@ type switchProxyAssignmentRequest struct {
 	NodeID       int64  `json:"node_id"`
 	ErrorCode    string `json:"error_code"`
 	ErrorMessage string `json:"error_message"`
+}
+
+type reportProxyAssignmentFailureRequest struct {
+	ErrorCode        string `json:"error_code"`
+	ErrorMessage     string `json:"error_message"`
+	BusinessRejected bool   `json:"business_rejected"`
 }
 
 func (h *ProxyHandler) CenterStatus(c *gin.Context) {
@@ -216,10 +225,27 @@ func (h *ProxyHandler) CheckNode(c *gin.Context) {
 		return
 	}
 	item, err := h.service.CheckNode(c.Request.Context(), id)
+	if err != nil && item != nil {
+		response.Accepted(c, item)
+		return
+	}
 	if response.ErrorFrom(c, err) {
 		return
 	}
 	response.Accepted(c, item)
+}
+
+func (h *ProxyHandler) CheckNodes(c *gin.Context) {
+	result, err := h.service.CheckNodes(c.Request.Context(), proxyapp.NodeFilter{
+		SubscriptionID: parseInt64Query(c, "subscription_id"),
+		HealthStatus:   adminplusdomain.ProxyNodeHealthStatus(strings.TrimSpace(c.Query("health_status"))),
+		Query:          c.Query("q"),
+		Limit:          proxyNodeBatchCheckLimit(c),
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Accepted(c, result)
 }
 
 func (h *ProxyHandler) DisableNode(c *gin.Context) {
@@ -439,6 +465,18 @@ func (h *ProxyHandler) RestartRuntimeSlot(c *gin.Context) {
 	response.Accepted(c, item)
 }
 
+func (h *ProxyHandler) RotateRuntimeSlotSecret(c *gin.Context) {
+	id, ok := parseProxyIDParam(c, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.RotateRuntimeSlotSecret(c.Request.Context(), id)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Accepted(c, item)
+}
+
 func (h *ProxyHandler) CreateAssignment(c *gin.Context) {
 	var req createProxyAssignmentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -509,9 +547,82 @@ func (h *ProxyHandler) SwitchAssignment(c *gin.Context) {
 	response.Accepted(c, item)
 }
 
+func (h *ProxyHandler) ReportAssignmentFailure(c *gin.Context) {
+	id, ok := parseProxyIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req reportProxyAssignmentFailureRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	item, err := h.service.ReportFailure(c.Request.Context(), id, proxyapp.ReportFailureInput{
+		ErrorCode:        req.ErrorCode,
+		ErrorMessage:     req.ErrorMessage,
+		BusinessRejected: req.BusinessRejected,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Accepted(c, item)
+}
+
 func (h *ProxyHandler) ListAuditEvents(c *gin.Context) {
 	page := parsePagination(c)
-	items, err := h.service.ListAuditEvents(c.Request.Context(), proxyapp.AuditFilter{
+	items, err := h.service.ListAuditEvents(c.Request.Context(), h.auditFilter(c, fetchLimitForPagination(page)))
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	paged, total := paginateSlice(items, page)
+	response.Success(c, paginatedData(paged, total, page))
+}
+
+func (h *ProxyHandler) ExportAuditEvents(c *gin.Context) {
+	items, err := h.service.ListAuditEvents(c.Request.Context(), h.auditFilter(c, 10000))
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	filename := "proxy-audit-" + time.Now().UTC().Format("20060102T150405Z") + ".csv"
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	writer := csv.NewWriter(c.Writer)
+	_ = writer.Write([]string{
+		"created_at",
+		"level",
+		"event_type",
+		"task_type",
+		"task_id",
+		"policy_id",
+		"slot_id",
+		"node_id",
+		"subscription_id",
+		"target_host",
+		"message",
+		"payload",
+	})
+	for _, item := range items {
+		payload, _ := json.Marshal(item.Payload)
+		_ = writer.Write([]string{
+			item.CreatedAt.UTC().Format(time.RFC3339),
+			string(item.Level),
+			item.EventType,
+			item.TaskType,
+			item.TaskID,
+			strconv.FormatInt(item.PolicyID, 10),
+			strconv.FormatInt(item.SlotID, 10),
+			strconv.FormatInt(item.NodeID, 10),
+			strconv.FormatInt(item.SubscriptionID, 10),
+			item.TargetHost,
+			item.Message,
+			string(payload),
+		})
+	}
+	writer.Flush()
+}
+
+func (h *ProxyHandler) auditFilter(c *gin.Context, limit int) proxyapp.AuditFilter {
+	return proxyapp.AuditFilter{
 		EventType:      c.Query("event_type"),
 		TaskType:       c.Query("task_type"),
 		TaskID:         c.Query("task_id"),
@@ -521,13 +632,8 @@ func (h *ProxyHandler) ListAuditEvents(c *gin.Context) {
 		SubscriptionID: parseInt64Query(c, "subscription_id"),
 		Level:          adminplusdomain.ProxyAuditLevel(strings.TrimSpace(c.Query("level"))),
 		TargetHost:     c.Query("target_host"),
-		Limit:          fetchLimitForPagination(page),
-	})
-	if response.ErrorFrom(c, err) {
-		return
+		Limit:          limit,
 	}
-	paged, total := paginateSlice(items, page)
-	response.Success(c, paginatedData(paged, total, page))
 }
 
 func parseProxyIDParam(c *gin.Context, name string) (int64, bool) {
@@ -546,6 +652,21 @@ func parseOptionalBoolQuery(c *gin.Context, name string) *bool {
 	}
 	parsed := value == "true" || value == "1"
 	return &parsed
+}
+
+func proxyNodeBatchCheckLimit(c *gin.Context) int {
+	value := strings.TrimSpace(c.Query("limit"))
+	if value == "" {
+		return 500
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 500
+	}
+	if parsed > 500 {
+		return 500
+	}
+	return parsed
 }
 
 func boolPtrDefault(value *bool, fallback bool) bool {

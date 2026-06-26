@@ -93,7 +93,7 @@ func (c *Client) RegisterAccount(ctx context.Context, in ports.DirectRegistratio
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_REGISTRATION_FAILED", "failed to request new api registration endpoint").WithCause(err)
+		return nil, withRequestDiagnostics(err, registerEndpoint, "SUPPLIER_DIRECT_REGISTRATION_FAILED", "new api registration endpoint is unreachable")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -192,7 +192,7 @@ func (c *Client) fetchRegistrationStatusOnce(ctx context.Context, client *http.C
 	applyBrowserCompatHeaders(req)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_REGISTRATION_STATUS_FAILED", "failed to request new api status endpoint").WithCause(err)
+		return nil, withRequestDiagnostics(err, endpoint, "SUPPLIER_DIRECT_REGISTRATION_STATUS_FAILED", "new api status endpoint is unreachable")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -309,7 +309,7 @@ func (c *Client) requestEmailVerificationCode(ctx context.Context, client *http.
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return infraerrors.New(http.StatusBadGateway, "SUPPLIER_VERIFICATION_CODE_REQUEST_FAILED", "failed to request new api email verification endpoint").WithCause(err)
+		return withRequestDiagnostics(err, endpoint, "SUPPLIER_VERIFICATION_CODE_REQUEST_FAILED", "new api email verification endpoint is unreachable")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

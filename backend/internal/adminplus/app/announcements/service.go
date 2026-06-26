@@ -3,7 +3,6 @@ package announcements
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -110,13 +109,8 @@ func (s *Service) RecordAnnouncement(ctx context.Context, in RecordAnnouncementI
 	return created, nil
 }
 
-func (s *Service) notifyAnnouncement(ctx context.Context, event *adminplusdomain.AnnouncementEvent) {
-	if s == nil || s.notifier == nil || event == nil {
-		return
-	}
-	if err := s.notifier.NotifyAnnouncement(ctx, event); err != nil {
-		slog.Warn("admin plus announcement notification failed", "supplier_id", event.SupplierID, "event_id", event.ID, "type", event.Type, "err", err)
-	}
+func (s *Service) notifyAnnouncement(_ context.Context, _ *adminplusdomain.AnnouncementEvent) {
+	// Announcement events stay in Admin Plus history; Feishu push is intentionally balance-only.
 }
 
 func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {

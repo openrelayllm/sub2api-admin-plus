@@ -142,6 +142,53 @@
           </div>
 
           <div class="card p-5">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">代理出口</h2>
+              <RouterLink to="/admin/proxy#egress" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">管理</RouterLink>
+            </div>
+            <dl class="mt-4 space-y-3 text-sm">
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">运行状态</dt>
+                <dd class="font-medium" :class="proxyStatus?.proxy_enabled === false ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'">
+                  {{ proxyStatus?.proxy_enabled === false ? '停用' : '启用' }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">Mihomo</dt>
+                <dd class="font-medium" :class="proxyStatus?.mihomo_configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'">
+                  {{ proxyStatus?.mihomo_configured ? '已配置' : '未配置' }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">健康节点</dt>
+                <dd class="font-medium text-gray-900 dark:text-white">{{ proxyStatus?.healthy_nodes || 0 }} / {{ proxyStatus?.nodes_total || 0 }}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">运行槽位</dt>
+                <dd class="font-medium text-gray-900 dark:text-white">{{ proxyStatus?.slots_assigned || 0 }} / {{ proxyStatus?.max_slots || proxyStatus?.slots_total || 0 }}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">活跃绑定</dt>
+                <dd class="font-medium text-gray-900 dark:text-white">{{ proxyStatus?.assignments_active || 0 }}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">24h 切换</dt>
+                <dd class="font-medium text-gray-900 dark:text-white">{{ proxyStatus?.node_switches_24h || 0 }}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">24h 失败</dt>
+                <dd class="font-medium" :class="(proxyStatus?.node_failures_24h || 0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'">
+                  {{ proxyStatus?.node_failures_24h || 0 }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="text-gray-500 dark:text-dark-400">平均绑定</dt>
+                <dd class="font-medium text-gray-900 dark:text-white">{{ formatProxyDurationSeconds(proxyStatus?.avg_assignment_seconds_24h || 0) }}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="card p-5">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">供应商自动化</h2>
             <div class="mt-4 space-y-3">
               <div v-for="item in supplierStatuses.slice(0, 5)" :key="item.supplier_id">
@@ -355,6 +402,7 @@ import {
   cancelSchedulerRun,
   cancelSchedulerStep,
   createSchedulerRun,
+  getProxyCenterStatus,
   getSchedulerCenterStatus,
   getSchedulerSettings,
   getSchedulerRunDetail,
@@ -371,6 +419,7 @@ import {
   updateSchedulerPlanStatus,
   updateSchedulerSettings,
   type ExtensionTaskType,
+  type ProxyCenterStatus,
   type SchedulerAction,
   type SchedulerCenterStatus,
   type SchedulerPlan,
@@ -428,6 +477,7 @@ const plans = ref<SchedulerPlan[]>([])
 const runs = ref<SchedulerRunSummary[]>([])
 const supplierStatuses = ref<SchedulerSupplierStatus[]>([])
 const actions = ref<SchedulerAction[]>([])
+const proxyStatus = ref<ProxyCenterStatus | null>(null)
 const runDetail = ref<SchedulerRunDetail | null>(null)
 const supplierChecklist = ref<SchedulerSupplierChecklist | null>(null)
 const settingsForm = reactive<SchedulerSettings>({
@@ -473,13 +523,14 @@ const nextRunLabel = computed(() => {
 async function loadPage() {
   loading.value = true
   try {
-    const [nextStatus, nextPlans, nextRuns, nextSuppliers, nextActions, nextSettings] = await Promise.all([
+    const [nextStatus, nextPlans, nextRuns, nextSuppliers, nextActions, nextSettings, nextProxyStatus] = await Promise.all([
       getSchedulerCenterStatus(),
       listSchedulerPlans(),
       listSchedulerRuns({ limit: 30 }),
       listSchedulerSupplierStatuses(),
       listSchedulerActions(),
-      getSchedulerSettings()
+      getSchedulerSettings(),
+      getProxyCenterStatus()
     ])
     status.value = nextStatus
     plans.value = nextPlans
@@ -487,6 +538,7 @@ async function loadPage() {
     supplierStatuses.value = nextSuppliers
     actions.value = nextActions
     settings.value = nextSettings
+    proxyStatus.value = nextProxyStatus
     syncSettingsForm(nextSettings)
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '加载调度中心失败')
@@ -772,6 +824,16 @@ function normalizedSettingsPayload(): SchedulerSettings {
 
 function runPrimaryTime(run: SchedulerRunSummary): string {
   return formatDateTime(run.requested_at) || formatDateTime(run.started_at) || formatDateTime(run.finished_at) || '-'
+}
+
+function formatProxyDurationSeconds(value: number): string {
+  const seconds = Math.max(0, Math.round(Number(value) || 0))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remain = minutes % 60
+  return remain ? `${hours}h ${remain}m` : `${hours}h`
 }
 
 onMounted(loadPage)

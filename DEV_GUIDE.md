@@ -56,6 +56,7 @@ pnpm run build
 整体：
 
 ```bash
+./scripts/start-dev.sh
 make dev
 make dev-backend
 make dev-frontend
@@ -78,7 +79,10 @@ Backend  http://127.0.0.1:8080
 Frontend http://127.0.0.1:3000
 PostgreSQL root:root@127.0.0.1:5432/sub2api_admin_plus
 Redis 127.0.0.1:6379/0
+Mihomo .local/bin/mihomo
 ```
+
+`./scripts/start-dev.sh` 只使用本机 PostgreSQL/Redis 命令行工具，不安装、不启动 Docker。Mihomo core 缺失时会自动下载，已存在且可执行时会直接复用；本地 debug 启动会确保默认管理员账号可登录。
 
 如需换端口：
 

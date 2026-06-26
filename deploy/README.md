@@ -46,6 +46,8 @@ Build, release, and deployment are intentionally separated:
 
 Systemd script deployment consumes GitHub Release assets through `install.sh`; it is independent from DockerHub and Railway.
 
+The systemd installer also installs a pinned Mihomo core to `/opt/sub2api-admin-plus/bin/mihomo` and writes `ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH` into the service file. Proxy node checks therefore do not require a separate system-wide Clash/Mihomo installation.
+
 ## Recommended Docker Deployment
 
 ```bash
@@ -193,6 +195,7 @@ Important variables:
 | `ADMIN_PLUS_SUB2API_ADMIN_BASE_URL` | Optional Sub2API Admin API base URL for provisioning |
 | `ADMIN_PLUS_SUB2API_ADMIN_API_KEY` | Optional Sub2API Admin API key for provisioning |
 | `ADMIN_PLUS_ALLOW_EMBEDDED_SUB2API_GATEWAY` | Local development fallback switch; keep false in production |
+| `ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH` | Mihomo core path for real proxy node checks; systemd installs `/opt/sub2api-admin-plus/bin/mihomo` |
 
 ## Current Limitations
 

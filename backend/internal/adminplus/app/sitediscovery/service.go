@@ -162,6 +162,11 @@ type RegisterItemInput struct {
 	ProxyPolicyID int64
 }
 
+type RerunRegistrationInput struct {
+	RegistrationID int64
+	ProxyPolicyID  int64
+}
+
 type registrationProxyContext struct {
 	Assignment *adminplusdomain.ProxyAssignment
 	ProxyURL   string
@@ -184,6 +189,7 @@ type Repository interface {
 	GetRegistrationCredential(ctx context.Context, credentialID int64) (*adminplusdomain.SupplierRegistrationCredential, *adminplusdomain.SiteDiscoveryItem, error)
 	GetRegistrationCredentialByDiscoveryID(ctx context.Context, discoveryID int64) (*adminplusdomain.SupplierRegistrationCredential, *adminplusdomain.SiteDiscoveryItem, error)
 	GetRegistrationCredentialByTaskID(ctx context.Context, taskID int64) (*adminplusdomain.SupplierRegistrationCredential, *adminplusdomain.SiteDiscoveryItem, error)
+	MarkRegistrationSucceeded(ctx context.Context, credentialID int64, supplierID int64, attemptedAt time.Time) (*adminplusdomain.SupplierRegistrationCredential, error)
 	CompleteRegistration(ctx context.Context, credentialID int64, supplierID int64, status adminplusdomain.SupplierRegistrationStatus, errorCode string, errorMessage string, attemptedAt time.Time) (*adminplusdomain.SupplierRegistrationCredential, error)
 	ListRecommendations(ctx context.Context, threshold float64, limit int) ([]*adminplusdomain.SiteDiscoveryRecommendation, error)
 }
@@ -206,6 +212,7 @@ type Service struct {
 type ProxyManager interface {
 	RequestAssignment(ctx context.Context, input proxyapp.RequestAssignmentInput) (*adminplusdomain.ProxyAssignment, error)
 	ReleaseAssignment(ctx context.Context, id int64, failed bool, errorCode string, errorMessage string) (*adminplusdomain.ProxyAssignment, error)
+	ReportFailure(ctx context.Context, id int64, input proxyapp.ReportFailureInput) (*adminplusdomain.ProxyAssignment, error)
 }
 
 type keyedMutex struct {
@@ -532,11 +539,95 @@ func (s *Service) acquireProxyForRun(ctx context.Context, policyID int64, run *a
 	}
 	client := &http.Client{
 		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+		Transport: &proxyAwareTransport{
+			base: &http.Transport{
+				Proxy: http.ProxyURL(proxyURL),
+			},
+			manager:      s.proxyManager,
+			assignmentID: assignment.ID,
+			errorCode:    "SITE_DISCOVERY_PROXY_NETWORK_FAILED",
 		},
 	}
 	return assignment, client, nil
+}
+
+type proxyAwareTransport struct {
+	base         *http.Transport
+	manager      ProxyManager
+	assignmentID int64
+	errorCode    string
+	mu           sync.Mutex
+}
+
+func (t *proxyAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t == nil || t.base == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "SITE_DISCOVERY_PROXY_TRANSPORT_NOT_CONFIGURED", "proxy transport is not configured")
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err == nil || !t.shouldRetryAfterSwitch(req, err) {
+		return resp, err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, switchErr := t.manager.ReportFailure(req.Context(), t.assignmentID, proxyapp.ReportFailureInput{
+		ErrorCode:    t.errorCode,
+		ErrorMessage: err.Error(),
+	})
+	if switchErr != nil {
+		return nil, err
+	}
+	t.base.CloseIdleConnections()
+	retryReq, cloneErr := cloneHTTPClientRequest(req)
+	if cloneErr != nil {
+		return nil, err
+	}
+	return t.base.RoundTrip(retryReq)
+}
+
+func (t *proxyAwareTransport) shouldRetryAfterSwitch(req *http.Request, err error) bool {
+	if t == nil || t.manager == nil || t.assignmentID <= 0 || req == nil || err == nil {
+		return false
+	}
+	if req.Context().Err() != nil {
+		return false
+	}
+	if !requestCanBeRetried(req) {
+		return false
+	}
+	return true
+}
+
+func cloneHTTPClientRequest(req *http.Request) (*http.Request, error) {
+	if req == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "SITE_DISCOVERY_REQUEST_EMPTY", "request is empty")
+	}
+	clone := req.Clone(req.Context())
+	if req.Body != nil && req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		clone.Body = body
+	}
+	return clone, nil
+}
+
+func requestCanBeRetried(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	switch req.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return req.Body == nil || req.GetBody != nil
+	default:
+		return false
+	}
+}
+
+func (t *proxyAwareTransport) CloseIdleConnections() {
+	if t != nil && t.base != nil {
+		t.base.CloseIdleConnections()
+	}
 }
 
 func (s *Service) ListItems(ctx context.Context, filter ListFilter) ([]*adminplusdomain.SiteDiscoveryItem, error) {
@@ -700,13 +791,17 @@ func (s *Service) ListRegistrationTasks(ctx context.Context, filter ListFilter) 
 }
 
 func (s *Service) RerunRegistration(ctx context.Context, registrationID int64) (*adminplusdomain.SupplierRegistrationCredential, *adminplusdomain.ExtensionTask, error) {
+	return s.RerunRegistrationWithOptions(ctx, RerunRegistrationInput{RegistrationID: registrationID})
+}
+
+func (s *Service) RerunRegistrationWithOptions(ctx context.Context, in RerunRegistrationInput) (*adminplusdomain.SupplierRegistrationCredential, *adminplusdomain.ExtensionTask, error) {
 	if s == nil || s.repo == nil {
 		return nil, nil, internalError("site discovery registration dependencies are not configured")
 	}
-	if registrationID <= 0 {
+	if in.RegistrationID <= 0 {
 		return nil, nil, badRequest("SITE_DISCOVERY_REGISTRATION_ID_INVALID", "invalid registration id")
 	}
-	credential, item, err := s.repo.GetRegistrationCredential(ctx, registrationID)
+	credential, item, err := s.repo.GetRegistrationCredential(ctx, in.RegistrationID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -715,6 +810,14 @@ func (s *Service) RerunRegistration(ctx context.Context, registrationID int64) (
 	}
 	unlock := s.registrationLocks.lock(item.ID)
 	defer unlock()
+	if isRegisteredDiscovery(item, credential) {
+		now := s.now().UTC()
+		updated, err := s.repo.MarkRegistrationSucceeded(ctx, credential.ID, firstPositiveInt64(credential.SupplierID, item.SupplierID), now)
+		if err != nil {
+			return nil, nil, err
+		}
+		return updated, nil, nil
+	}
 	var task *adminplusdomain.ExtensionTask
 	if s.extension != nil && credential.ExtensionTaskID > 0 {
 		task, err = s.extension.GetTask(ctx, credential.ExtensionTaskID)
@@ -747,7 +850,7 @@ func (s *Service) RerunRegistration(ctx context.Context, registrationID int64) (
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.runRegistrationWorkflow(ctx, item, credential, password, "rerun_registration", 0)
+	return s.runRegistrationWorkflow(ctx, item, credential, password, "rerun_registration", in.ProxyPolicyID)
 }
 
 func (s *Service) ListRegistrationLogs(ctx context.Context, registrationID int64, limit int) (*RegistrationTaskLogsResult, error) {
@@ -811,6 +914,10 @@ func registrationWorkflowSnapshotLog(credential *adminplusdomain.SupplierRegistr
 	if credential == nil {
 		return nil
 	}
+	view := registrationTaskViewFromRecord(credential, item, task)
+	if view == nil {
+		return nil
+	}
 	createdAt := credential.UpdatedAt
 	if credential.LastAttemptAt != nil && credential.LastAttemptAt.After(createdAt) {
 		createdAt = *credential.LastAttemptAt
@@ -821,16 +928,14 @@ func registrationWorkflowSnapshotLog(credential *adminplusdomain.SupplierRegistr
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	status := credential.Status
-	if task != nil {
-		status = registrationStatusFromTask(task, status)
-	}
 	extra := map[string]any{
 		"category":            bizlogs.CategoryRegistration,
 		"action":              "current_status",
-		"outcome":             bizlogs.OutcomeSucceeded,
 		"registration_id":     credential.ID,
-		"registration_status": string(status),
+		"registration_status": string(view.Status),
+	}
+	if outcome := registrationSnapshotOutcome(view.Status); outcome != "" {
+		extra["outcome"] = outcome
 	}
 	if item != nil {
 		extra["discovery_id"] = item.ID
@@ -845,18 +950,38 @@ func registrationWorkflowSnapshotLog(credential *adminplusdomain.SupplierRegistr
 		extra["max_attempts"] = task.MaxAttempts
 		extra["device_id"] = task.DeviceID
 	}
-	if credential.ErrorCode != "" {
-		extra["reason"] = credential.ErrorCode
+	if view.ErrorCode != "" {
+		extra["reason"] = view.ErrorCode
 	}
-	if credential.ErrorMessage != "" {
-		extra["error_message"] = credential.ErrorMessage
+	if view.ErrorMessage != "" {
+		extra["error_message"] = view.ErrorMessage
 	}
 	return &opsservice.OpsSystemLog{
 		CreatedAt: createdAt.UTC(),
-		Level:     bizlogs.LevelInfo,
+		Level:     registrationSnapshotLevel(view.Status),
 		Component: "admin_plus.registration",
 		Message:   "注册流程当前状态",
 		Extra:     extra,
+	}
+}
+
+func registrationSnapshotOutcome(status adminplusdomain.SupplierRegistrationStatus) string {
+	switch status {
+	case adminplusdomain.SupplierRegistrationStatusSucceeded:
+		return bizlogs.OutcomeSucceeded
+	case adminplusdomain.SupplierRegistrationStatusFailed:
+		return bizlogs.OutcomeFailed
+	default:
+		return ""
+	}
+}
+
+func registrationSnapshotLevel(status adminplusdomain.SupplierRegistrationStatus) string {
+	switch status {
+	case adminplusdomain.SupplierRegistrationStatusFailed, adminplusdomain.SupplierRegistrationStatusWaitingManualVerification:
+		return bizlogs.LevelWarn
+	default:
+		return bizlogs.LevelInfo
 	}
 }
 
@@ -1195,7 +1320,7 @@ func (s *Service) failDirectRegistration(ctx context.Context, item *adminplusdom
 	if updateErr != nil {
 		return nil, nil, updateErr
 	}
-	s.recordRegistrationEvent(ctx, "direct_registration_failed", bizlogs.OutcomeFailed, "site discovery direct registration failed", item, updated, nil, reason)
+	s.recordRegistrationErrorEvent(ctx, "direct_registration_failed", "site discovery direct registration failed", item, updated, nil, reason, err)
 	return updated, nil, err
 }
 
@@ -1347,6 +1472,39 @@ func (s *Service) recordRegistrationEvent(ctx context.Context, action string, ou
 	if s == nil || s.bizlog == nil {
 		return
 	}
+	metadata := registrationEventMetadata(action, item, credential, task)
+	s.bizlog.Record(ctx, bizlogs.Event{
+		Level:        registrationLogLevel(outcome),
+		Category:     bizlogs.CategoryRegistration,
+		Action:       action,
+		Outcome:      outcome,
+		Message:      message,
+		SupplierID:   registrationSupplierID(credential),
+		ProviderType: registrationProviderType(item),
+		Reason:       reason,
+		Metadata:     metadata,
+	})
+}
+
+func (s *Service) recordRegistrationErrorEvent(ctx context.Context, action string, message string, item *adminplusdomain.SiteDiscoveryItem, credential *adminplusdomain.SupplierRegistrationCredential, task *adminplusdomain.ExtensionTask, reason string, err error) {
+	if s == nil || s.bizlog == nil {
+		return
+	}
+	event := bizlogs.Event{
+		Level:        bizlogs.LevelWarn,
+		Category:     bizlogs.CategoryRegistration,
+		Action:       action,
+		Outcome:      bizlogs.OutcomeFailed,
+		Message:      message,
+		SupplierID:   registrationSupplierID(credential),
+		ProviderType: registrationProviderType(item),
+		Reason:       firstNonEmpty(reason, infraerrors.Reason(err)),
+		Metadata:     registrationEventMetadata(action, item, credential, task),
+	}
+	s.bizlog.Record(ctx, bizlogs.EventFromError(event, err))
+}
+
+func registrationEventMetadata(action string, item *adminplusdomain.SiteDiscoveryItem, credential *adminplusdomain.SupplierRegistrationCredential, task *adminplusdomain.ExtensionTask) map[string]any {
 	metadata := map[string]any{
 		"action": action,
 	}
@@ -1369,17 +1527,7 @@ func (s *Service) recordRegistrationEvent(ctx context.Context, action string, ou
 		metadata["attempts"] = task.Attempts
 		metadata["max_attempts"] = task.MaxAttempts
 	}
-	s.bizlog.Record(ctx, bizlogs.Event{
-		Level:        registrationLogLevel(outcome),
-		Category:     bizlogs.CategoryRegistration,
-		Action:       action,
-		Outcome:      outcome,
-		Message:      message,
-		SupplierID:   registrationSupplierID(credential),
-		ProviderType: registrationProviderType(item),
-		Reason:       reason,
-		Metadata:     metadata,
-	})
+	return metadata
 }
 
 func registrationLogLevel(outcome string) string {
@@ -1450,6 +1598,9 @@ func registrationTaskViewFromRecord(credential *adminplusdomain.SupplierRegistra
 	if status == "" {
 		status = adminplusdomain.SupplierRegistrationStatusPending
 	}
+	if isRegisteredDiscovery(item, credential) {
+		status = adminplusdomain.SupplierRegistrationStatusSucceeded
+	}
 	errorCode := firstNonEmpty(credential.ErrorCode, item.RegistrationErrorCode)
 	errorMessage := firstNonEmpty(credential.ErrorMessage, item.RegistrationErrorMessage)
 	createdAt := credential.CreatedAt
@@ -1466,7 +1617,11 @@ func registrationTaskViewFromRecord(credential *adminplusdomain.SupplierRegistra
 	attempts := 0
 	maxAttempts := 0
 	deviceID := ""
-	if task != nil && !isTerminalRegistrationStatus(status) {
+	if status == adminplusdomain.SupplierRegistrationStatusSucceeded && isRegisteredDiscovery(item, credential) {
+		taskID = 0
+		errorCode = ""
+		errorMessage = ""
+	} else if task != nil && !isTerminalRegistrationStatus(status) {
 		taskID = task.ID
 		taskStatus = task.Status
 		if derived := registrationStatusFromTask(task, status); derived != "" {
@@ -1521,6 +1676,20 @@ func cloneRegistrationDiscoveryForView(item *adminplusdomain.SiteDiscoveryItem, 
 	cp.RegistrationErrorCode = errorCode
 	cp.RegistrationErrorMessage = errorMessage
 	return &cp
+}
+
+func isRegisteredDiscovery(item *adminplusdomain.SiteDiscoveryItem, credential *adminplusdomain.SupplierRegistrationCredential) bool {
+	if credential != nil && credential.SupplierID > 0 {
+		return true
+	}
+	if item == nil {
+		return false
+	}
+	if item.SupplierID > 0 {
+		return true
+	}
+	return item.ProcessStatus == adminplusdomain.SiteDiscoveryProcessRegistered ||
+		item.RegistrationStatus == adminplusdomain.SupplierRegistrationStatusSucceeded
 }
 
 func registrationStatusFromTask(task *adminplusdomain.ExtensionTask, fallback adminplusdomain.SupplierRegistrationStatus) adminplusdomain.SupplierRegistrationStatus {
