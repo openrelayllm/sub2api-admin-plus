@@ -435,11 +435,12 @@ func (r *proxyServiceTestRepository) UpdateNodeHealth(ctx context.Context, id in
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var node *adminplusdomain.ProxyNode
-	if id == r.firstNode.ID {
+	switch id {
+	case r.firstNode.ID:
 		node = cloneProxyNode(r.firstNode)
-	} else if id == r.secondNode.ID {
+	case r.secondNode.ID:
 		node = cloneProxyNode(r.secondNode)
-	} else {
+	default:
 		return nil, notFound("PROXY_NODE_NOT_FOUND", "proxy node not found")
 	}
 	node.HealthStatus = status
