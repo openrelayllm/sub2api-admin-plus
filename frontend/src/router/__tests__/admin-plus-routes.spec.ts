@@ -28,6 +28,7 @@ describe('adminPlusRoutes', () => {
       '/admin/scheduler',
       '/admin/scheduler/notifications',
       '/admin/system-logs',
+      '/admin/server-renewal',
       '/admin/backup',
       '/admin/collection/scheduler',
       '/admin/collection/plugin-tasks',
@@ -108,6 +109,7 @@ describe('adminPlusRoutes', () => {
         '/admin/scheduler',
         '/admin/scheduler/notifications',
         '/admin/system-logs',
+        '/admin/server-renewal',
         '/admin/backup',
         '/admin/collection/sessions',
         '/admin/collection/site-discovery',
@@ -120,7 +122,7 @@ describe('adminPlusRoutes', () => {
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(15)
+    expect(adminRoutes).toHaveLength(16)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)

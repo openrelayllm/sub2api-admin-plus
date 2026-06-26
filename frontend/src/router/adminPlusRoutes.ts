@@ -86,6 +86,12 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     meta: adminMeta('系统日志')
   },
   {
+    path: '/admin/server-renewal',
+    name: 'AdminPlusServerRenewal',
+    component: () => import('@/views/admin/ServerRenewalView.vue'),
+    meta: adminMeta('续费提醒')
+  },
+  {
     path: '/admin/backup',
     name: 'AdminPlusBackup',
     component: () => import('@/views/admin/BackupView.vue'),

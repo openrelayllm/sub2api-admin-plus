@@ -5,7 +5,7 @@
         <div>
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">数据备份</h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
-            PostgreSQL 数据库备份、对象存储、续费提醒和运维历史清理。
+            PostgreSQL 数据库备份、对象存储和运维历史清理。
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -38,7 +38,7 @@
       </nav>
 
       <section v-if="activeTab === 'overview'" class="space-y-6">
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div class="card p-4">
             <p class="text-xs font-medium text-gray-500 dark:text-dark-400">对象存储</p>
             <p class="mt-2 text-2xl font-semibold" :class="storageConfigured ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'">
@@ -57,11 +57,6 @@
             <p class="text-xs font-medium text-gray-500 dark:text-dark-400">最近成功</p>
             <p class="mt-2 text-lg font-semibold text-gray-900 dark:text-white">{{ latestSuccessTime }}</p>
             <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ latestSuccessSize }}</p>
-          </div>
-          <div class="card p-4">
-            <p class="text-xs font-medium text-gray-500 dark:text-dark-400">服务器续费</p>
-            <p class="mt-2 text-2xl font-semibold" :class="renewalTextClass">{{ renewalDaysLabel }}</p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ renewalStateLabel(status?.renewal?.state) }}</p>
           </div>
           <div class="card p-4">
             <p class="text-xs font-medium text-gray-500 dark:text-dark-400">历史清理</p>
@@ -140,19 +135,15 @@
             </div>
 
             <div class="card p-5">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">续费与清理</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">清理策略</h2>
               <dl class="mt-4 space-y-3 text-sm">
-                <div class="flex items-center justify-between gap-3">
-                  <dt class="text-gray-500 dark:text-dark-400">服务器续费</dt>
-                  <dd><span class="badge" :class="renewalStateClass(status?.renewal?.state)">{{ renewalStateLabel(status?.renewal?.state) }}</span></dd>
-                </div>
-                <div class="flex items-center justify-between gap-3">
-                  <dt class="text-gray-500 dark:text-dark-400">到期剩余</dt>
-                  <dd class="font-medium text-gray-900 dark:text-white">{{ renewalDaysLabel }}</dd>
-                </div>
                 <div class="flex items-center justify-between gap-3">
                   <dt class="text-gray-500 dark:text-dark-400">历史清理</dt>
                   <dd class="font-medium text-gray-900 dark:text-white">{{ cleanupForm.enabled ? `${cleanupForm.retain_days} 天以前` : '停用' }}</dd>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <dt class="text-gray-500 dark:text-dark-400">执行时间</dt>
+                  <dd class="font-mono text-xs text-gray-900 dark:text-white">{{ cleanupForm.cron_expr || '-' }}</dd>
                 </div>
               </dl>
             </div>
@@ -227,63 +218,6 @@
             </div>
           </div>
         </div>
-      </section>
-
-      <section v-else-if="activeTab === 'renewal'" class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div class="card overflow-hidden">
-          <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">服务器续费</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">提前提醒月付服务器续费，避免因到期导致服务不可用。</p>
-          </div>
-          <div class="space-y-4 p-5">
-            <div class="flex items-center justify-between gap-4 rounded-md border border-gray-200 px-4 py-3 dark:border-dark-700">
-              <div>
-                <span class="block text-sm font-medium text-gray-900 dark:text-white">启用提醒</span>
-                <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">开启后按提前提醒天数检查到期状态。</span>
-              </div>
-              <div class="flex items-center gap-3">
-                <span class="text-sm font-medium" :class="renewalForm.enabled ? 'text-primary-700 dark:text-primary-300' : 'text-gray-500 dark:text-dark-400'">
-                  {{ renewalForm.enabled ? '已开启' : '已关闭' }}
-                </span>
-                <Toggle v-model="renewalForm.enabled" class="scale-110" />
-              </div>
-            </div>
-            <label class="block">
-              <span class="input-label">服务器名称</span>
-              <input v-model.trim="renewalForm.server_name" class="input" placeholder="sub2api-admin-plus" />
-            </label>
-            <label class="block">
-              <span class="input-label">服务商</span>
-              <input v-model.trim="renewalForm.provider" class="input" placeholder="Cloudflare / VPS Provider" />
-            </label>
-            <label class="block">
-              <span class="input-label">到期日</span>
-              <input v-model="renewalForm.expires_at" type="date" class="input" />
-            </label>
-            <label class="block">
-              <span class="input-label">提前提醒天数</span>
-              <input v-model.trim="renewalReminderDaysText" class="input" placeholder="7,3,1" />
-            </label>
-          </div>
-        </div>
-
-        <aside class="card p-5">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">提醒状态</h2>
-          <dl class="mt-4 space-y-3 text-sm">
-            <div class="flex items-center justify-between gap-3">
-              <dt class="text-gray-500 dark:text-dark-400">当前状态</dt>
-              <dd><span class="badge" :class="renewalStateClass(status?.renewal?.state)">{{ renewalStateLabel(status?.renewal?.state) }}</span></dd>
-            </div>
-            <div class="flex items-center justify-between gap-3">
-              <dt class="text-gray-500 dark:text-dark-400">到期剩余</dt>
-              <dd class="font-medium text-gray-900 dark:text-white">{{ renewalDaysLabel }}</dd>
-            </div>
-            <div class="flex items-center justify-between gap-3">
-              <dt class="text-gray-500 dark:text-dark-400">下次提醒</dt>
-              <dd class="font-medium text-gray-900 dark:text-white">{{ status?.renewal?.next_reminder || '-' }}</dd>
-            </div>
-          </dl>
-        </aside>
       </section>
 
       <section v-else-if="activeTab === 'schedule'" class="card overflow-hidden">
@@ -549,8 +483,7 @@ import {
   type BackupSettings,
   type BackupStatus,
   type BackupStorageProvider,
-  type HistoryCleanupSettings,
-  type ServerRenewalStatus
+  type HistoryCleanupSettings
 } from '@/api/admin/adminPlus'
 
 const appStore = useAppStore()
@@ -561,12 +494,11 @@ const providerOptions: Array<{ value: BackupStorageProvider; label: string }> = 
   { value: 'aliyun_oss', label: '阿里云 OSS' }
 ]
 
-type BackupTab = 'overview' | 'storage' | 'renewal' | 'schedule' | 'cleanup' | 'records'
+type BackupTab = 'overview' | 'storage' | 'schedule' | 'cleanup' | 'records'
 
 const tabs: Array<{ value: BackupTab; label: string }> = [
   { value: 'overview', label: '工作台' },
   { value: 'storage', label: '对象存储' },
-  { value: 'renewal', label: '续费提醒' },
   { value: 'schedule', label: '定时备份' },
   { value: 'cleanup', label: '历史清理' },
   { value: 'records', label: '备份记录' }
@@ -583,7 +515,6 @@ const restoring = ref(false)
 const guideOpen = ref(false)
 const restoreCandidate = ref<BackupRecord | null>(null)
 const restoreConfirmation = ref('')
-const renewalReminderDaysText = ref('7,3,1')
 let pollTimer: ReturnType<typeof window.setInterval> | null = null
 
 interface StorageGuide {
@@ -703,16 +634,6 @@ const scheduleForm = reactive<BackupScheduleConfig>({
   retain_count: 30
 })
 
-const renewalForm = reactive<ServerRenewalStatus>({
-  enabled: true,
-  server_name: 'sub2api-admin-plus',
-  provider: '',
-  expires_at: '',
-  reminder_days: [7, 3, 1],
-  days_remaining: 0,
-  state: 'unconfigured'
-})
-
 const cleanupForm = reactive<HistoryCleanupSettings>({
   enabled: true,
   retain_days: 5,
@@ -729,16 +650,6 @@ const storageConfigured = computed(() => {
 
 const latestSuccessTime = computed(() => formatDateTime(status.value?.latest_success?.finished_at) || '-')
 const latestSuccessSize = computed(() => formatBackupBytes(status.value?.latest_success?.size_bytes || 0))
-
-const renewalDaysLabel = computed(() => {
-  const renewal = status.value?.renewal
-  if (!renewal?.expires_at) return '未配置'
-  if (renewal.days_remaining < 0) return `逾期 ${Math.abs(renewal.days_remaining)} 天`
-  if (renewal.days_remaining === 0) return '今天'
-  return `${renewal.days_remaining} 天`
-})
-
-const renewalTextClass = computed(() => renewalStateTextClass(status.value?.renewal.state))
 
 const storageEndpointPlaceholder = computed(() => {
   if (s3Form.provider === 'cloudflare_r2') return 'https://<account_id>.r2.cloudflarestorage.com'
@@ -809,14 +720,6 @@ function applySettings(settings: BackupSettings) {
     retain_days: normalizeInt(settings.schedule.retain_days, 5),
     retain_count: normalizeInt(settings.schedule.retain_count, 30)
   })
-  Object.assign(renewalForm, {
-    enabled: settings.renewal.enabled,
-    server_name: settings.renewal.server_name || 'sub2api-admin-plus',
-    provider: settings.renewal.provider || '',
-    expires_at: settings.renewal.expires_at || '',
-    reminder_days: settings.renewal.reminder_days?.length ? settings.renewal.reminder_days : [7, 3, 1]
-  })
-  renewalReminderDaysText.value = (renewalForm.reminder_days || [7, 3, 1]).join(',')
   Object.assign(cleanupForm, {
     enabled: Boolean(settings.cleanup.enabled),
     retain_days: normalizeInt(settings.cleanup.retain_days, 5),
@@ -857,13 +760,6 @@ async function saveSettings() {
         cron_expr: scheduleForm.cron_expr.trim() || '30 3 * * *',
         retain_days: normalizeInt(scheduleForm.retain_days, 5),
         retain_count: normalizeInt(scheduleForm.retain_count, 30)
-      },
-      renewal: {
-        enabled: Boolean(renewalForm.enabled),
-        server_name: String(renewalForm.server_name || '').trim(),
-        provider: String(renewalForm.provider || '').trim(),
-        expires_at: String(renewalForm.expires_at || '').trim(),
-        reminder_days: parseReminderDays(renewalReminderDaysText.value)
       },
       cleanup: {
         enabled: cleanupForm.enabled,
@@ -980,15 +876,6 @@ function stopPolling() {
   pollTimer = null
 }
 
-function parseReminderDays(value: string): number[] {
-  const days = value
-    .split(/[,\s]+/)
-    .map((item) => Number.parseInt(item, 10))
-    .filter((item) => Number.isFinite(item) && item >= 0 && item <= 365)
-  const unique = Array.from(new Set(days)).sort((a, b) => b - a)
-  return unique.length ? unique : [7, 3, 1]
-}
-
 function normalizeProvider(value: string): BackupStorageProvider {
   if (value === 'aliyun' || value === 'aliyun_oss' || value === 'oss') return 'aliyun_oss'
   if (value === 's3' || value === 'aws_s3' || value === 'compatible_s3') return 's3'
@@ -1046,25 +933,4 @@ function triggerLabel(value: string): string {
   return value || '-'
 }
 
-function renewalStateLabel(value?: string): string {
-  if (value === 'active') return '正常'
-  if (value === 'reminder_due') return '待提醒'
-  if (value === 'due_today') return '今日到期'
-  if (value === 'expired') return '已到期'
-  return '未配置'
-}
-
-function renewalStateClass(value?: string): string {
-  if (value === 'active') return 'badge-success'
-  if (value === 'reminder_due' || value === 'due_today') return 'badge-warning'
-  if (value === 'expired') return 'badge-danger'
-  return 'badge-gray'
-}
-
-function renewalStateTextClass(value?: string): string {
-  if (value === 'active') return 'text-emerald-700 dark:text-emerald-400'
-  if (value === 'reminder_due' || value === 'due_today') return 'text-amber-600 dark:text-amber-400'
-  if (value === 'expired') return 'text-rose-600 dark:text-rose-400'
-  return 'text-gray-700 dark:text-dark-200'
-}
 </script>

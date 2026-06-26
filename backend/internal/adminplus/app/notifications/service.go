@@ -392,14 +392,6 @@ func defaultSettings() adminplusdomain.NotificationSettings {
 			{EventType: "rate.decrease", Label: "费率下降", Description: "供应商模型价格下降", Enabled: true, Severity: "info", QuietWindowMinutes: 30, DedupeScope: "supplier_model_price"},
 			{EventType: "supplier_group.price_increase", Label: "OpenAI 分组涨价", Description: "OpenAI 分组有效倍率高于涨价阈值", Enabled: true, Severity: "critical", QuietWindowMinutes: 30, DedupeScope: "supplier_group"},
 			{EventType: "supplier_group.super_low_rate", Label: "OpenAI 超低价分组", Description: "OpenAI 分组有效倍率低于超低价阈值", Enabled: true, Severity: "info", QuietWindowMinutes: 30, DedupeScope: "supplier_group"},
-			{EventType: "announcement.recharge_bonus", Label: "充值赠送", Description: "识别到充值赠送机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
-			{EventType: "announcement.rate_discount", Label: "费率折扣", Description: "识别到费率折扣机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
-			{EventType: "announcement.package_deal", Label: "套餐活动", Description: "识别到套餐成本机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
-			{EventType: "announcement.limited_offer", Label: "限时活动", Description: "识别到限时成本机会", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
-			{EventType: "announcement.maintenance", Label: "维护公告", Description: "供应商发布维护安排", Enabled: true, Severity: "warning", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
-			{EventType: "announcement.incident", Label: "故障公告", Description: "供应商发布故障或异常事件", Enabled: true, Severity: "critical", QuietWindowMinutes: 120, DedupeScope: "supplier_title"},
-			{EventType: "announcement.notice", Label: "普通公告", Description: "供应商发布普通通知", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
-			{EventType: "announcement.other", Label: "其他公告", Description: "无法归类的供应商公告", Enabled: true, Severity: "info", QuietWindowMinutes: 360, DedupeScope: "supplier_title"},
 			{EventType: "cost.reconcile_anomaly", Label: "对账异常", Description: "成本台账差异超过阈值", Enabled: true, Severity: "critical", QuietWindowMinutes: 60, DedupeScope: "supplier_period"},
 			{EventType: "system.server_renewal_due", Label: "服务器续费", Description: "服务器即将到期或已到期", Enabled: true, Severity: "critical", QuietWindowMinutes: 720, DedupeScope: "none"},
 			{EventType: "system.backup_succeeded", Label: "备份成功", Description: "数据库备份已成功上传", Enabled: true, Severity: "info", QuietWindowMinutes: 60, DedupeScope: "none"},
@@ -450,6 +442,9 @@ func normalizeSettings(settings, defaults adminplusdomain.NotificationSettings) 
 func mergeRules(defaults, custom []adminplusdomain.NotificationRule) []adminplusdomain.NotificationRule {
 	index := make(map[string]adminplusdomain.NotificationRule, len(custom))
 	for _, rule := range custom {
+		if deprecatedNotificationRule(rule.EventType) {
+			continue
+		}
 		index[normalizeEventType(rule.EventType)] = rule
 	}
 	out := make([]adminplusdomain.NotificationRule, 0, len(defaults)+len(custom))
@@ -471,11 +466,18 @@ func mergeRules(defaults, custom []adminplusdomain.NotificationRule) []adminplus
 	}
 	for _, rule := range custom {
 		key := normalizeEventType(rule.EventType)
+		if deprecatedNotificationRule(key) {
+			continue
+		}
 		if _, ok := seen[key]; !ok {
 			out = append(out, rule)
 		}
 	}
 	return out
+}
+
+func deprecatedNotificationRule(eventType string) bool {
+	return strings.HasPrefix(normalizeEventType(eventType), "announcement.")
 }
 
 func withRuntimeChannel(settings adminplusdomain.NotificationSettings, redact bool) adminplusdomain.NotificationSettings {

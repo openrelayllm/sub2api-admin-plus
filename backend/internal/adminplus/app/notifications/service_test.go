@@ -331,3 +331,23 @@ func TestDefaultSettingsCoverKnownBusinessEventTypes(t *testing.T) {
 		require.Truef(t, ok, "missing notification rule for %s", eventType)
 	}
 }
+
+func TestServiceSettingsDropsDeprecatedAnnouncementRules(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	settings := defaultSettings()
+	settings.Rules = append(settings.Rules, adminplusdomain.NotificationRule{
+		EventType:          "announcement.notice",
+		Label:              "旧公告",
+		Enabled:            true,
+		QuietWindowMinutes: 360,
+		DedupeScope:        "supplier_title",
+	})
+	require.NoError(t, repo.SaveSettings(context.Background(), settings))
+
+	normalized := svc.Settings(context.Background())
+
+	for _, rule := range normalized.Rules {
+		require.NotContains(t, rule.EventType, "announcement.")
+	}
+}
