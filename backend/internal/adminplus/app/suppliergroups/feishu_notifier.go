@@ -70,10 +70,11 @@ func crossesSuperLowRateThreshold(event *adminplusdomain.SupplierGroupChangeEven
 func buildFeishuGroupChangeText(eventType string, event *adminplusdomain.SupplierGroupChangeEvent, policy adminplusdomain.SupplierGroupNotificationSettings) string {
 	title := "OpenAI 分组变更"
 	thresholdLine := ""
-	if eventType == groupEventTypePriceIncrease {
+	switch eventType {
+	case groupEventTypePriceIncrease:
 		title = "OpenAI 分组涨价"
 		thresholdLine = fmt.Sprintf("涨价阈值：%s", formatGroupRate(policy.OpenAIPriceIncreaseRate))
-	} else if eventType == groupEventTypeSuperLowRate {
+	case groupEventTypeSuperLowRate:
 		title = "OpenAI 超低价分组"
 		thresholdLine = fmt.Sprintf("超低价阈值：%s", formatGroupRate(policy.OpenAISuperLowRateThreshold))
 	}
