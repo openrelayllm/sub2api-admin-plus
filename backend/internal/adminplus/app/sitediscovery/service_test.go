@@ -1006,6 +1006,32 @@ func TestReadTaskRegistrationVerificationCodeRejectsWrongLease(t *testing.T) {
 	}
 }
 
+func TestRegistrationContextPayloadDoesNotExposeProxyURL(t *testing.T) {
+	item := &adminplusdomain.SiteDiscoveryItem{
+		ID:           11,
+		ProviderType: adminplusdomain.SupplierTypeNewAPI,
+		SourceSiteID: "site-11",
+	}
+	credential := &adminplusdomain.SupplierRegistrationCredential{ID: 22}
+	payload := registrationContextPayload(item, credential, &registrationProxyContext{
+		Assignment: &adminplusdomain.ProxyAssignment{
+			ID:        33,
+			PolicyID:  44,
+			SlotID:    55,
+			NodeID:    66,
+			MixedPort: 17890,
+		},
+		ProxyURL: "http://127.0.0.1:17890",
+	})
+
+	if _, ok := payload["proxy_url"]; ok {
+		t.Fatalf("proxy_url must not be exposed to browser fallback payload: %#v", payload)
+	}
+	if payload["proxy_assignment_id"] != int64(33) || payload["proxy_required"] != true {
+		t.Fatalf("expected proxy metadata to be retained, got %#v", payload)
+	}
+}
+
 type fakeRegistrationMailReader struct {
 	lastInput mailverificationapp.ReadVerificationCodeForEmailInput
 }

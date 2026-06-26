@@ -34,20 +34,23 @@ func (c *Client) RegisterAccount(ctx context.Context, in ports.DirectRegistratio
 	if err != nil {
 		return nil, err
 	}
-	status, err := c.fetchRegistrationStatus(ctx, client, apiBaseURL)
-	if err != nil {
-		return nil, err
+	status, statusErr := c.fetchRegistrationStatus(ctx, client, apiBaseURL)
+	if statusErr != nil && !isOptionalRegistrationStatusError(statusErr) {
+		return nil, statusErr
 	}
-	if !boolFromAny(firstExisting(status, "register_enabled", "registerEnabled")) {
+	registerEnabled, registerEnabledKnown := boolStatusValue(status, "register_enabled", "registerEnabled")
+	if registerEnabledKnown && !registerEnabled {
 		return nil, infraerrors.New(http.StatusConflict, "REGISTRATION_DISABLED", "new api registration is disabled")
 	}
-	if !boolFromAny(firstExisting(status, "password_register_enabled", "passwordRegisterEnabled")) {
+	passwordRegisterEnabled, passwordRegisterEnabledKnown := boolStatusValue(status, "password_register_enabled", "passwordRegisterEnabled")
+	if passwordRegisterEnabledKnown && !passwordRegisterEnabled {
 		return nil, infraerrors.New(http.StatusConflict, "PASSWORD_REGISTER_DISABLED", "new api password registration is disabled")
 	}
-	emailVerification := boolFromAny(firstExisting(status, "email_verification", "emailVerification"))
-	turnstileCheck := boolFromAny(firstExisting(status, "turnstile_check", "turnstileCheck"))
+	emailVerification, _ := boolStatusValue(status, "email_verification", "emailVerification")
+	turnstileCheck, _ := boolStatusValue(status, "turnstile_check", "turnstileCheck")
 	systemName := stringFromAny(firstExisting(status, "system_name", "systemName"))
 	siteName := stringFromAny(firstExisting(status, "site_name", "siteName"))
+	statusDiagnostics := registrationStatusDiagnostics(apiBaseURL, statusErr)
 	if emailVerification && strings.TrimSpace(in.VerificationCode) == "" {
 		if err := c.requestEmailVerificationCode(ctx, client, apiBaseURL, email, origin); err != nil {
 			return nil, err
@@ -59,14 +62,7 @@ func (c *Client) RegisterAccount(ctx context.Context, in ports.DirectRegistratio
 			Stage:             ports.DirectRegistrationStageNeedEmailCode,
 			EmailCodeRequired: true,
 			CapturedAt:        c.now().UTC(),
-			Diagnostics: map[string]any{
-				"status_endpoint":       strings.TrimRight(apiBaseURL, "/") + "/api/status",
-				"verification_endpoint": strings.TrimRight(apiBaseURL, "/") + "/api/verification",
-				"email_verification":    true,
-				"turnstile_check":       turnstileCheck,
-				"system_name":           systemName,
-				"site_name":             siteName,
-			},
+			Diagnostics:       withRegistrationStatusDiagnostics(statusDiagnostics, true, turnstileCheck, systemName, siteName, strings.TrimRight(apiBaseURL, "/")+"/api/verification"),
 		}, nil
 	}
 
@@ -112,6 +108,20 @@ func (c *Client) RegisterAccount(ctx context.Context, in ports.DirectRegistratio
 		return nil, withHTTPDiagnostics(infraerrors.New(http.StatusBadGateway, "SUPPLIER_DIRECT_REGISTRATION_RESPONSE_INVALID", "new api registration response is invalid").WithCause(err), registerEndpoint, resp.StatusCode, resp.Header.Get("Content-Type"), data)
 	}
 	if !envelope.Success {
+		if strings.TrimSpace(in.VerificationCode) == "" && isRegistrationEmailVerificationRequired(envelope.Message) {
+			if err := c.requestEmailVerificationCode(ctx, client, apiBaseURL, email, origin); err != nil {
+				return nil, err
+			}
+			return &ports.DirectRegistrationResult{
+				ProviderType:      adminplusdomain.SupplierTypeNewAPI,
+				Origin:            origin,
+				APIBaseURL:        apiBaseURL,
+				Stage:             ports.DirectRegistrationStageNeedEmailCode,
+				EmailCodeRequired: true,
+				CapturedAt:        c.now().UTC(),
+				Diagnostics:       withRegistrationStatusDiagnostics(statusDiagnostics, true, turnstileCheck, systemName, siteName, strings.TrimRight(apiBaseURL, "/")+"/api/verification"),
+			}, nil
+		}
 		return nil, classifyRegistrationBusinessFailure(envelope.Message)
 	}
 	result := &ports.DirectRegistrationResult{
@@ -130,6 +140,9 @@ func (c *Client) RegisterAccount(ctx context.Context, in ports.DirectRegistratio
 			"site_name":           siteName,
 			"session_cookie_seen": false,
 		},
+	}
+	for key, value := range statusDiagnostics {
+		result.Diagnostics[key] = value
 	}
 	if session := c.registrationSessionFromResponse(ctx, in, origin, apiBaseURL, resp, envelope.Data); session != nil {
 		result.SessionBundle = session.bundle
@@ -194,6 +207,53 @@ func (c *Client) fetchRegistrationStatusOnce(ctx context.Context, client *http.C
 		return nil, classifyRegistrationBusinessFailure(envelope.Message)
 	}
 	return envelope.Data, nil
+}
+
+func boolStatusValue(status map[string]any, keys ...string) (bool, bool) {
+	if status == nil {
+		return false, false
+	}
+	return boolValue(firstExisting(status, keys...))
+}
+
+func isOptionalRegistrationStatusError(err error) bool {
+	if err == nil {
+		return false
+	}
+	reason := infraerrors.Reason(err)
+	return reason == "SUPPLIER_DIRECT_REGISTRATION_STATUS_FAILED" ||
+		reason == "SUPPLIER_DIRECT_REGISTRATION_STATUS_INVALID" ||
+		reason == "SUPPLIER_DIRECT_REGISTRATION_STATUS_BAD_STATUS"
+}
+
+func registrationStatusDiagnostics(apiBaseURL string, statusErr error) map[string]any {
+	out := map[string]any{
+		"status_endpoint": strings.TrimRight(apiBaseURL, "/") + "/api/status",
+	}
+	if statusErr != nil {
+		out["status_probe_failed"] = true
+		out["status_probe_reason"] = infraerrors.Reason(statusErr)
+		out["status_probe_message"] = infraerrors.Message(statusErr)
+	}
+	return out
+}
+
+func withRegistrationStatusDiagnostics(base map[string]any, emailVerification bool, turnstileCheck bool, systemName string, siteName string, verificationEndpoint string) map[string]any {
+	out := cloneMap(base)
+	out["verification_endpoint"] = verificationEndpoint
+	out["email_verification"] = emailVerification
+	out["turnstile_check"] = turnstileCheck
+	out["system_name"] = systemName
+	out["site_name"] = siteName
+	return out
+}
+
+func isRegistrationEmailVerificationRequired(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(lower, "email verification") ||
+		strings.Contains(lower, "verification code") ||
+		strings.Contains(lower, "邮箱验证") ||
+		strings.Contains(lower, "验证码")
 }
 
 func isRetryableRegistrationStatusError(err error) bool {
@@ -349,6 +409,15 @@ func classifyRegistrationBusinessFailure(message string) error {
 	switch {
 	case containsBrowserChallenge(lower):
 		return infraerrors.New(http.StatusConflict, "BROWSER_FALLBACK_REQUIRED", "new api registration requires browser verification")
+	case strings.Contains(lower, "register_disabled") ||
+		strings.Contains(lower, "registration has been disabled") ||
+		strings.Contains(lower, "new user registration has been disabled") ||
+		strings.Contains(lower, "关闭了新用户注册"):
+		return infraerrors.New(http.StatusConflict, "REGISTRATION_DISABLED", firstNonEmpty(message, "new api registration is disabled"))
+	case strings.Contains(lower, "password_register_disabled") ||
+		strings.Contains(lower, "password registration has been disabled") ||
+		strings.Contains(lower, "关闭了通过密码进行注册"):
+		return infraerrors.New(http.StatusConflict, "PASSWORD_REGISTER_DISABLED", firstNonEmpty(message, "new api password registration is disabled"))
 	case strings.Contains(lower, "验证码") || strings.Contains(lower, "verification"):
 		return infraerrors.New(http.StatusConflict, "REGISTRATION_VERIFICATION_CODE_INVALID", firstNonEmpty(message, "new api registration verification code is invalid"))
 	case strings.Contains(lower, "邮箱") && (strings.Contains(lower, "占用") || strings.Contains(lower, "存在")):

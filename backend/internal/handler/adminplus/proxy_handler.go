@@ -512,12 +512,16 @@ func (h *ProxyHandler) SwitchAssignment(c *gin.Context) {
 func (h *ProxyHandler) ListAuditEvents(c *gin.Context) {
 	page := parsePagination(c)
 	items, err := h.service.ListAuditEvents(c.Request.Context(), proxyapp.AuditFilter{
-		EventType:  c.Query("event_type"),
-		TaskType:   c.Query("task_type"),
-		TaskID:     c.Query("task_id"),
-		Level:      adminplusdomain.ProxyAuditLevel(strings.TrimSpace(c.Query("level"))),
-		TargetHost: c.Query("target_host"),
-		Limit:      fetchLimitForPagination(page),
+		EventType:      c.Query("event_type"),
+		TaskType:       c.Query("task_type"),
+		TaskID:         c.Query("task_id"),
+		PolicyID:       parseInt64Query(c, "policy_id"),
+		SlotID:         parseInt64Query(c, "slot_id"),
+		NodeID:         parseInt64Query(c, "node_id"),
+		SubscriptionID: parseInt64Query(c, "subscription_id"),
+		Level:          adminplusdomain.ProxyAuditLevel(strings.TrimSpace(c.Query("level"))),
+		TargetHost:     c.Query("target_host"),
+		Limit:          fetchLimitForPagination(page),
 	})
 	if response.ErrorFrom(c, err) {
 		return

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
@@ -109,12 +110,16 @@ type AssignmentFilter struct {
 }
 
 type AuditFilter struct {
-	EventType  string
-	TaskType   string
-	TaskID     string
-	Level      adminplusdomain.ProxyAuditLevel
-	TargetHost string
-	Limit      int
+	EventType      string
+	TaskType       string
+	TaskID         string
+	PolicyID       int64
+	SlotID         int64
+	NodeID         int64
+	SubscriptionID int64
+	Level          adminplusdomain.ProxyAuditLevel
+	TargetHost     string
+	Limit          int
 }
 
 type UpdateSubscriptionInput struct {
@@ -219,13 +224,14 @@ type SwitchAssignmentInput struct {
 }
 
 type Service struct {
-	repo       Repository
-	cipher     SecretCipher
-	normalizer *SubscriptionNormalizer
-	runtime    Runtime
-	runtimeCfg RuntimeConfig
-	client     *http.Client
-	now        func() time.Time
+	repo        Repository
+	cipher      SecretCipher
+	normalizer  *SubscriptionNormalizer
+	runtime     Runtime
+	runtimeCfg  RuntimeConfig
+	client      *http.Client
+	rateLimiter *targetRateLimiter
+	now         func() time.Time
 }
 
 func NewService(repo Repository, cipher SecretCipher, normalizer *SubscriptionNormalizer, runtime Runtime, runtimeCfg RuntimeConfig) *Service {
@@ -242,7 +248,10 @@ func NewService(repo Repository, cipher SecretCipher, normalizer *SubscriptionNo
 		runtime:    runtime,
 		runtimeCfg: runtimeCfg,
 		client:     &http.Client{Timeout: 20 * time.Second},
-		now:        time.Now,
+		rateLimiter: &targetRateLimiter{
+			windows: make(map[string]rateWindow),
+		},
+		now: time.Now,
 	}
 }
 
@@ -828,6 +837,9 @@ func (s *Service) RequestAssignment(ctx context.Context, input RequestAssignment
 		})
 		return nil, err
 	}
+	if err := s.enforceTargetRateLimit(ctx, policy, target, input); err != nil {
+		return nil, err
+	}
 	node, err := s.selectNode(ctx, policy)
 	if err != nil {
 		return nil, err
@@ -836,12 +848,21 @@ func (s *Service) RequestAssignment(ctx context.Context, input RequestAssignment
 	if err != nil {
 		return nil, err
 	}
+	slotClaimed := true
+	cleanupSlot := func() {
+		if !slotClaimed || slot == nil {
+			return
+		}
+		s.releaseRuntimeSlot(context.Background(), slot.ID)
+	}
 	configYAML, err := s.repo.GetConfigVersion(ctx, node.SubscriptionID, node.ConfigVersion)
 	if err != nil {
+		cleanupSlot()
 		return nil, err
 	}
 	slotResult, err := s.runtime.ConfigureSlot(ctx, slot, node, configYAML, controllerSecret)
 	if err != nil {
+		cleanupSlot()
 		return nil, err
 	}
 	status := adminplusdomain.ProxyRuntimeSlotAssigned
@@ -857,6 +878,7 @@ func (s *Service) RequestAssignment(ctx context.Context, input RequestAssignment
 		SelectedNodeID:   &node.ID,
 	})
 	if err != nil {
+		cleanupSlot()
 		return nil, err
 	}
 	egressIP := ""
@@ -877,8 +899,10 @@ func (s *Service) RequestAssignment(ctx context.Context, input RequestAssignment
 		StartedAt:  now,
 	})
 	if err != nil {
+		cleanupSlot()
 		return nil, err
 	}
+	slotClaimed = false
 	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
 		EventType:  "assignment_created",
 		TaskType:   input.TaskType,
@@ -917,17 +941,7 @@ func (s *Service) ReleaseAssignment(ctx context.Context, id int64, failed bool, 
 	if err != nil {
 		return nil, err
 	}
-	slotStatus := adminplusdomain.ProxyRuntimeSlotIdle
-	if slot, _, slotErr := s.repo.GetRuntimeSlotSecret(ctx, assignment.SlotID); slotErr == nil {
-		_ = s.runtime.RestartSlot(context.Background(), slot)
-	}
-	_, _ = s.repo.UpdateRuntimeSlot(ctx, assignment.SlotID, UpdateRuntimeSlotInput{
-		Status:           &slotStatus,
-		AssignedTaskType: strPtr(""),
-		AssignedTaskID:   strPtr(""),
-		SelectedNodeID:   int64Ptr(0),
-		ProcessID:        ptrToIntPtr(nil),
-	})
+	s.releaseRuntimeSlot(context.Background(), assignment.SlotID)
 	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
 		EventType:  "assignment_released",
 		TaskType:   assignment.TaskType,
@@ -943,6 +957,23 @@ func (s *Service) ReleaseAssignment(ctx context.Context, id int64, failed bool, 
 	return updated, nil
 }
 
+func (s *Service) releaseRuntimeSlot(ctx context.Context, slotID int64) {
+	if s == nil || s.repo == nil || slotID <= 0 {
+		return
+	}
+	if slot, _, slotErr := s.repo.GetRuntimeSlotSecret(ctx, slotID); slotErr == nil && s.runtime != nil {
+		_ = s.runtime.RestartSlot(ctx, slot)
+	}
+	slotStatus := adminplusdomain.ProxyRuntimeSlotIdle
+	_, _ = s.repo.UpdateRuntimeSlot(ctx, slotID, UpdateRuntimeSlotInput{
+		Status:           &slotStatus,
+		AssignedTaskType: strPtr(""),
+		AssignedTaskID:   strPtr(""),
+		SelectedNodeID:   int64Ptr(0),
+		ProcessID:        ptrToIntPtr(nil),
+	})
+}
+
 func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAssignmentInput) (*adminplusdomain.ProxyAssignment, error) {
 	assignment, err := s.repo.GetAssignment(ctx, id)
 	if err != nil {
@@ -950,6 +981,28 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 	}
 	if assignment.Status != adminplusdomain.ProxyAssignmentActive {
 		return nil, conflict("PROXY_ASSIGNMENT_NOT_ACTIVE", "proxy assignment is not active")
+	}
+	policy, err := s.repo.GetPolicy(ctx, assignment.PolicyID)
+	if err != nil {
+		return nil, err
+	}
+	if policy.MaxSwitchesPerTask >= 0 && assignment.SwitchCount >= policy.MaxSwitchesPerTask {
+		_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+			EventType:  "node_switch_denied",
+			TaskType:   assignment.TaskType,
+			TaskID:     assignment.TaskID,
+			PolicyID:   assignment.PolicyID,
+			SlotID:     assignment.SlotID,
+			NodeID:     assignment.NodeID,
+			TargetHost: assignment.TargetHost,
+			Level:      adminplusdomain.ProxyAuditWarning,
+			Message:    "代理节点切换超过策略预算",
+			Payload: map[string]any{
+				"switch_count":          assignment.SwitchCount,
+				"max_switches_per_task": policy.MaxSwitchesPerTask,
+			},
+		})
+		return nil, conflict("PROXY_SWITCH_BUDGET_EXHAUSTED", "proxy switch budget is exhausted")
 	}
 	node, err := s.repo.GetNode(ctx, input.NodeID)
 	if err != nil {
@@ -968,6 +1021,7 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 	}
 	if s.runtimeCfg.BinaryPath != "" {
 		if err := s.runtime.SwitchNode(ctx, slot, node.DisplayName, controllerSecret); err != nil {
+			s.markAssignmentNodeSuspect(ctx, assignment, "PROXY_NODE_SWITCH_FAILED", err.Error())
 			return nil, err
 		}
 	}
@@ -975,6 +1029,8 @@ func (s *Service) SwitchAssignment(ctx context.Context, id int64, input SwitchAs
 	if s.runtimeCfg.BinaryPath != "" {
 		if ip, verifyErr := s.runtime.VerifyEgress(ctx, slot.MixedPort); verifyErr == nil {
 			egressIP = ip
+		} else {
+			s.markAssignmentNodeSuspect(ctx, assignment, "PROXY_EGRESS_VERIFY_FAILED", verifyErr.Error())
 		}
 	}
 	switchCount := assignment.SwitchCount + 1
@@ -1027,6 +1083,24 @@ func (s *Service) ensureNodeAllowedByAssignment(ctx context.Context, assignment 
 	return nil
 }
 
+func (s *Service) markAssignmentNodeSuspect(ctx context.Context, assignment *adminplusdomain.ProxyAssignment, code string, message string) {
+	if s == nil || s.repo == nil || assignment == nil || assignment.NodeID <= 0 {
+		return
+	}
+	now := s.now()
+	status := adminplusdomain.ProxyNodeHealthSuspect
+	_, _ = s.repo.UpdateNodeHealth(ctx, assignment.NodeID, status, nil, "", code, trimLimit(message, 500), &now)
+	_, _ = s.repo.RecordHealthCheck(ctx, &adminplusdomain.ProxyHealthCheck{
+		NodeID:       assignment.NodeID,
+		CheckType:    "target_reachability",
+		Status:       "failed",
+		TargetHost:   assignment.TargetHost,
+		ErrorCode:    code,
+		ErrorMessage: trimLimit(message, 500),
+		CheckedAt:    now,
+	})
+}
+
 func (s *Service) ListAssignments(ctx context.Context, filter AssignmentFilter) ([]*adminplusdomain.ProxyAssignment, error) {
 	return s.repo.ListAssignments(ctx, filter)
 }
@@ -1070,6 +1144,32 @@ func (s *Service) findAllowedTarget(ctx context.Context, policyID int64, targetH
 		return nil, forbidden("PROXY_POLICY_METHOD_DENIED", "request method is not allowed by proxy target policy")
 	}
 	return nil, forbidden("PROXY_POLICY_TARGET_DENIED", "target host is not allowed by proxy policy")
+}
+
+func (s *Service) enforceTargetRateLimit(ctx context.Context, policy *adminplusdomain.ProxyPolicy, target *adminplusdomain.ProxyTargetPolicy, input RequestAssignmentInput) error {
+	if s == nil || s.rateLimiter == nil || policy == nil || target == nil || target.RateLimitPerMinute <= 0 {
+		return nil
+	}
+	allowed, retryAfter := s.rateLimiter.allow(target.PolicyID, target.ID, target.RateLimitPerMinute, s.now())
+	if allowed {
+		return nil
+	}
+	err := unavailable("PROXY_POLICY_RATE_LIMITED", "proxy target policy rate limit exceeded")
+	_, _ = s.audit(ctx, &adminplusdomain.ProxyAuditEvent{
+		EventType:  "policy_rate_limited",
+		TaskType:   input.TaskType,
+		TaskID:     input.TaskID,
+		PolicyID:   policy.ID,
+		TargetHost: input.TargetHost,
+		Level:      adminplusdomain.ProxyAuditWarning,
+		Message:    "代理目标白名单频率限制已触发",
+		Payload: map[string]any{
+			"target_policy_id":      target.ID,
+			"rate_limit_per_minute": target.RateLimitPerMinute,
+			"retry_after_seconds":   int(retryAfter.Seconds()),
+		},
+	})
+	return err
 }
 
 func (s *Service) selectNode(ctx context.Context, policy *adminplusdomain.ProxyPolicy) (*adminplusdomain.ProxyNode, error) {
@@ -1391,6 +1491,42 @@ func containsInt64(values []int64, target int64) bool {
 		}
 	}
 	return false
+}
+
+type targetRateLimiter struct {
+	mu      sync.Mutex
+	windows map[string]rateWindow
+}
+
+type rateWindow struct {
+	start time.Time
+	count int
+}
+
+func (l *targetRateLimiter) allow(policyID int64, targetID int64, limit int, now time.Time) (bool, time.Duration) {
+	if l == nil || limit <= 0 {
+		return true, 0
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	key := fmt.Sprintf("%d:%d", policyID, targetID)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.windows == nil {
+		l.windows = make(map[string]rateWindow)
+	}
+	window := l.windows[key]
+	if window.start.IsZero() || now.Sub(window.start) >= time.Minute || now.Before(window.start) {
+		l.windows[key] = rateWindow{start: now, count: 1}
+		return true, 0
+	}
+	if window.count >= limit {
+		return false, time.Minute - now.Sub(window.start)
+	}
+	window.count++
+	l.windows[key] = window
+	return true, 0
 }
 
 func randomSecret() string {

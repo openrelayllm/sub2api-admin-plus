@@ -2895,6 +2895,10 @@ export async function listProxyAuditEvents(params?: {
   event_type?: string
   task_type?: string
   task_id?: string
+  policy_id?: number
+  slot_id?: number
+  node_id?: number
+  subscription_id?: number
   level?: ProxyAuditLevel | ''
   target_host?: string
 } & AdminPlusPaginationParams): Promise<AdminPlusListResponse<ProxyAuditEvent>> {

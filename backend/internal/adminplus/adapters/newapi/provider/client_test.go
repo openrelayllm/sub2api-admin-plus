@@ -658,6 +658,83 @@ func TestClientRegisterAccountRetriesTransientStatusEOF(t *testing.T) {
 	require.Equal(t, ports.DirectRegistrationStageNeedEmailCode, result.Stage)
 }
 
+func TestClientRegisterAccountUsesRegisterEndpointWhenStatusProbeTimesOut(t *testing.T) {
+	statusStarted := make(chan struct{})
+	releaseStatus := make(chan struct{})
+	var sawRegister bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"email_verification":true,"logo":"`))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			close(statusStarted)
+			<-releaseStatus
+		case "/api/user/register":
+			sawRegister = true
+			_, _ = w.Write([]byte(`{"success":false,"message":"管理员关闭了新用户注册"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	defer close(releaseStatus)
+
+	httpClient := server.Client()
+	httpClient.Timeout = 250 * time.Millisecond
+	client := NewClient(httpClient)
+	_, err := client.RegisterAccount(context.Background(), ports.DirectRegistrationInput{
+		ProviderType: "new_api",
+		Origin:       server.URL,
+		APIBaseURL:   server.URL,
+		Email:        "ops@example.com",
+		Password:     "secret",
+	})
+
+	require.Error(t, err)
+	require.True(t, sawRegister)
+	require.Equal(t, "REGISTRATION_DISABLED", infraerrors.Reason(err))
+}
+
+func TestClientRegisterAccountRequestsCodeWhenRegisterEndpointRequiresVerification(t *testing.T) {
+	var sawRegister bool
+	var sawVerification bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"logo":"tiny"}}`))
+		case "/api/user/register":
+			sawRegister = true
+			_, _ = w.Write([]byte(`{"success":false,"message":"管理员开启了邮箱验证，请输入邮箱地址和验证码"}`))
+		case "/api/verification":
+			sawVerification = true
+			require.Equal(t, "ops@example.com", r.URL.Query().Get("email"))
+			_, _ = w.Write([]byte(`{"success":true,"message":""}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	result, err := client.RegisterAccount(context.Background(), ports.DirectRegistrationInput{
+		ProviderType: "new_api",
+		Origin:       server.URL,
+		APIBaseURL:   server.URL,
+		Email:        "ops@example.com",
+		Password:     "secret",
+	})
+
+	require.NoError(t, err)
+	require.True(t, sawRegister)
+	require.True(t, sawVerification)
+	require.Equal(t, ports.DirectRegistrationStageNeedEmailCode, result.Stage)
+	require.True(t, result.EmailCodeRequired)
+}
+
 func TestClientRegisterAccountDecodesStatusBeforeConnectionClose(t *testing.T) {
 	statusStarted := make(chan struct{})
 	releaseStatus := make(chan struct{})

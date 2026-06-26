@@ -440,7 +440,7 @@
       </section>
 
       <section v-else class="card overflow-hidden">
-        <div class="grid gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 md:grid-cols-[180px_1fr_auto] md:items-end">
+        <div class="grid gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 md:grid-cols-2 xl:grid-cols-[160px_180px_160px_160px_140px_minmax(0,1fr)_auto] xl:items-end">
           <label class="block">
             <span class="input-label">级别</span>
             <select v-model="auditFilters.level" class="input" @change="loadAudits">
@@ -449,6 +449,22 @@
               <option value="warning">Warning</option>
               <option value="error">Error</option>
             </select>
+          </label>
+          <label class="block">
+            <span class="input-label">事件类型</span>
+            <input v-model.trim="auditFilters.event_type" class="input font-mono text-sm" @keyup.enter="loadAudits" />
+          </label>
+          <label class="block">
+            <span class="input-label">任务类型</span>
+            <input v-model.trim="auditFilters.task_type" class="input font-mono text-sm" @keyup.enter="loadAudits" />
+          </label>
+          <label class="block">
+            <span class="input-label">任务 ID</span>
+            <input v-model.trim="auditFilters.task_id" class="input font-mono text-sm" @keyup.enter="loadAudits" />
+          </label>
+          <label class="block">
+            <span class="input-label">节点 ID</span>
+            <input v-model.number="auditFilters.node_id" type="number" min="0" class="input" @keyup.enter="loadAudits" />
           </label>
           <label class="block">
             <span class="input-label">目标 Host</span>
@@ -619,6 +635,10 @@ const targetForm = reactive({
 })
 
 const auditFilters = reactive({
+  event_type: '',
+  task_type: '',
+  task_id: '',
+  node_id: 0,
   level: '' as ProxyAuditLevel | '',
   target_host: ''
 })
@@ -725,6 +745,10 @@ async function loadAudits() {
   const result = await listProxyAuditEvents({
     page: 1,
     page_size: 100,
+    event_type: auditFilters.event_type || undefined,
+    task_type: auditFilters.task_type || undefined,
+    task_id: auditFilters.task_id || undefined,
+    node_id: auditFilters.node_id > 0 ? auditFilters.node_id : undefined,
     level: auditFilters.level || undefined,
     target_host: auditFilters.target_host || undefined
   })

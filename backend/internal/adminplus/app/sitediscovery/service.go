@@ -1183,7 +1183,6 @@ func registrationContextPayload(item *adminplusdomain.SiteDiscoveryItem, credent
 		payload["proxy_slot_id"] = proxyCtx.Assignment.SlotID
 		payload["proxy_node_id"] = proxyCtx.Assignment.NodeID
 		payload["proxy_mixed_port"] = proxyCtx.Assignment.MixedPort
-		payload["proxy_url"] = proxyCtx.ProxyURL
 		payload["proxy_required"] = true
 	}
 	return payload
