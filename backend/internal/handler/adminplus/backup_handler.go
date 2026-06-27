@@ -31,7 +31,6 @@ type BackupHandler struct {
 	notificationService *notificationsapp.Service
 	opsService          *service.OpsService
 	settingRepo         service.SettingRepository
-	secretEncryptor     service.SecretEncryptor
 
 	renewalLoopOnce sync.Once
 }
@@ -70,22 +69,18 @@ type backupStatusResponse struct {
 }
 
 type serverRenewalConfig struct {
-	Enabled               bool   `json:"enabled"`
-	ServerName            string `json:"server_name"`
-	Provider              string `json:"provider"`
-	HostID                string `json:"host_id,omitempty"`
-	IPAddress             string `json:"ip_address,omitempty"`
-	OperatingSystem       string `json:"operating_system,omitempty"`
-	SSHUsername           string `json:"ssh_username,omitempty"`
-	SSHPassword           string `json:"ssh_password,omitempty"`
-	SSHPasswordConfigured bool   `json:"ssh_password_configured,omitempty"`
-	SSHPort               int    `json:"ssh_port,omitempty"`
-	PanelURL              string `json:"panel_url,omitempty"`
-	ExpiresAt             string `json:"expires_at"`
-	ExpiresAtTime         string `json:"expires_at_time,omitempty"`
-	ReminderDays          []int  `json:"reminder_days"`
-	LastNotifiedAt        string `json:"last_notified_at,omitempty"`
-	LastNotifiedKey       string `json:"last_notified_key,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	ServerName      string `json:"server_name"`
+	Provider        string `json:"provider"`
+	HostID          string `json:"host_id,omitempty"`
+	IPAddress       string `json:"ip_address,omitempty"`
+	OperatingSystem string `json:"operating_system,omitempty"`
+	PanelURL        string `json:"panel_url,omitempty"`
+	ExpiresAt       string `json:"expires_at"`
+	ExpiresAtTime   string `json:"expires_at_time,omitempty"`
+	ReminderDays    []int  `json:"reminder_days"`
+	LastNotifiedAt  string `json:"last_notified_at,omitempty"`
+	LastNotifiedKey string `json:"last_notified_key,omitempty"`
 }
 
 type serverRenewalStatus struct {
@@ -107,14 +102,12 @@ func NewBackupHandler(
 	notificationService *notificationsapp.Service,
 	opsService *service.OpsService,
 	settingRepo service.SettingRepository,
-	secretEncryptor service.SecretEncryptor,
 ) *BackupHandler {
 	h := &BackupHandler{
 		backupService:       backupService,
 		notificationService: notificationService,
 		opsService:          opsService,
 		settingRepo:         settingRepo,
-		secretEncryptor:     secretEncryptor,
 	}
 	h.startRenewalLoop()
 	return h
@@ -386,16 +379,6 @@ func (h *BackupHandler) updateRenewalConfig(ctx context.Context, cfg serverRenew
 	}
 	normalizeRenewalConfig(&cfg)
 	old, _ := h.loadRenewalConfig(ctx)
-	if strings.TrimSpace(cfg.SSHPassword) == "" {
-		cfg.SSHPassword = old.SSHPassword
-	} else if h.secretEncryptor != nil {
-		encrypted, err := h.secretEncryptor.Encrypt(cfg.SSHPassword)
-		if err != nil {
-			return fmt.Errorf("encrypt ssh password: %w", err)
-		}
-		cfg.SSHPassword = encrypted
-	}
-	cfg.SSHPasswordConfigured = strings.TrimSpace(cfg.SSHPassword) != ""
 	cfg.LastNotifiedAt = old.LastNotifiedAt
 	cfg.LastNotifiedKey = old.LastNotifiedKey
 	return h.saveRenewalConfig(ctx, cfg)
@@ -434,8 +417,6 @@ func (h *BackupHandler) renewalStatus(ctx context.Context, now time.Time) (serve
 }
 
 func sanitizeRenewalStatus(status serverRenewalStatus) serverRenewalStatus {
-	status.SSHPasswordConfigured = strings.TrimSpace(status.SSHPassword) != "" || status.SSHPasswordConfigured
-	status.SSHPassword = ""
 	return status
 }
 
@@ -615,16 +596,7 @@ func normalizeRenewalConfig(cfg *serverRenewalConfig) {
 	cfg.HostID = strings.TrimSpace(cfg.HostID)
 	cfg.IPAddress = strings.TrimSpace(cfg.IPAddress)
 	cfg.OperatingSystem = strings.TrimSpace(cfg.OperatingSystem)
-	cfg.SSHUsername = strings.TrimSpace(cfg.SSHUsername)
-	cfg.SSHPassword = strings.TrimSpace(cfg.SSHPassword)
-	cfg.SSHPasswordConfigured = strings.TrimSpace(cfg.SSHPassword) != "" || cfg.SSHPasswordConfigured
 	cfg.PanelURL = strings.TrimSpace(cfg.PanelURL)
-	if cfg.SSHPort <= 0 {
-		cfg.SSHPort = 22
-	}
-	if cfg.SSHPort > 65535 {
-		cfg.SSHPort = 65535
-	}
 	cfg.ExpiresAt = strings.TrimSpace(cfg.ExpiresAt)
 	cfg.ExpiresAtTime = strings.TrimSpace(cfg.ExpiresAtTime)
 	if len(cfg.ReminderDays) == 0 {

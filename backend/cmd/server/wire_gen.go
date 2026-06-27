@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/provisionjobs"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/proxy"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
@@ -231,7 +232,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	balanceHandler := adminplus.NewBalanceHandler(balancesService)
 	healthHandler := adminplus.NewHealthHandler(healthService)
 	notificationHandler := adminplus.NewNotificationHandler(notificationsService)
-	backupHandler := adminplus.NewBackupHandler(backupService, notificationsService, opsService, settingRepository, secretEncryptor)
+	backupHandler := adminplus.NewBackupHandler(backupService, notificationsService, opsService, settingRepository)
 	usageCostHandler := adminplus.NewUsageCostHandler(usagecostsService)
 	costHandler := adminplus.NewCostHandlerWithProvisionJobs(costsService, provisionjobsService)
 	channelCheckHandler := adminplus.NewChannelCheckHandlerWithProvisionJobs(channelchecksService, provisionjobsService)
@@ -249,6 +250,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	sitecatalogService := sitecatalog.NewService(sitecatalogSQLRepository)
 	siteCatalogHandler := adminplus.NewSiteCatalogHandler(sitecatalogService, sitediscoveryService)
 	publicProxyAIHandler := adminplus.NewPublicProxyAIHandler(sitecatalogService)
+	puritySQLRepository := purity.NewSQLRepository(db)
+	purityService := purity.ProvideService(puritySQLRepository, accountRepository)
+	purityHandler := adminplus.NewPurityHandler(purityService, authService)
 	mailVerificationHandler := adminplus.NewMailVerificationHandler(mailVerificationService)
 	sessionHandler := adminplus.NewSessionHandler(sessionsService, balancesService)
 	schedulerSQLRepository := scheduler.NewSQLRepository(db)
@@ -278,7 +282,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	tlsFingerprintProfileService := service.NewTLSFingerprintProfileService(tlsFingerprintProfileRepository, tlsFingerprintProfileCache)
 	accountTestService := service.NewAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService)
 	sub2APIHandler := adminplus.NewSub2APIHandlerWithAccountTest(sub2apiService, accountTestService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, extensionHandler, siteDiscoveryHandler, siteCatalogHandler, publicProxyAIHandler, mailVerificationHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler, proxyHandler, backupHandler)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, extensionHandler, siteDiscoveryHandler, siteCatalogHandler, publicProxyAIHandler, purityHandler, mailVerificationHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler, proxyHandler, backupHandler)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)

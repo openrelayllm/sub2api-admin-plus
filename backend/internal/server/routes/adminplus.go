@@ -77,6 +77,7 @@ func RegisterAdminPlusRoutes(
 		{
 			siteCatalog.GET("/sites", h.AdminPlus.SiteCatalog.ListSites)
 			siteCatalog.POST("/sites", h.AdminPlus.SiteCatalog.CreateSite)
+			siteCatalog.POST("/sites/bulk-publish", h.AdminPlus.SiteCatalog.BulkPublishSites)
 			siteCatalog.GET("/sites/:id", h.AdminPlus.SiteCatalog.GetSite)
 			siteCatalog.GET("/categories", h.AdminPlus.SiteCatalog.ListCategories)
 			siteCatalog.GET("/tags", h.AdminPlus.SiteCatalog.ListTags)
@@ -89,10 +90,16 @@ func RegisterAdminPlusRoutes(
 			sub2api.GET("/accounts", h.AdminPlus.Supplier.ListLocalAccounts)
 			sub2api.GET("/accounts/:accountID/models", h.AdminPlus.Sub2API.ListLocalAccountModels)
 			sub2api.POST("/accounts/:accountID/test", h.AdminPlus.Sub2API.TestLocalAccount)
+			sub2api.POST("/accounts/:accountID/purity/checks/stream", h.AdminPlus.Purity.AccountCheckStream)
 			sub2api.GET("/account-runtime", h.AdminPlus.Sub2API.ListAccountRuntime)
 			sub2api.GET("/usage-lines", h.AdminPlus.Sub2API.ListLocalUsageLines)
 			sub2api.GET("/usage-summary", h.AdminPlus.Sub2API.ListLocalUsageSummaries)
 			sub2api.GET("/account-usage-summary", h.AdminPlus.Sub2API.ListLocalAccountUsageSummaries)
+		}
+
+		proxyAI := adminPlus.Group("/proxyai")
+		{
+			proxyAI.POST("/accounts/:accountID/purity/checks/stream", h.AdminPlus.Purity.AccountCheckStream)
 		}
 
 		provisionJobs := adminPlus.Group("/supplier-provision-jobs")

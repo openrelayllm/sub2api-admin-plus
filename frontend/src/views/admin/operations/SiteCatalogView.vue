@@ -8,10 +8,15 @@
             未来前台网址导航的站点主数据，和采集候选保持独立。
           </p>
         </div>
-        <button type="button" class="btn btn-secondary" :disabled="loading" @click="loadSites">
-          <Icon name="refresh" size="sm" />
-          刷新
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="btn btn-primary" :disabled="loading || publishing || pagination.total === 0" @click="publishAllMatchingSites">
+            {{ publishButtonLabel }}
+          </button>
+          <button type="button" class="btn btn-secondary" :disabled="loading || publishing" @click="loadSites">
+            <Icon name="refresh" size="sm" />
+            刷新
+          </button>
+        </div>
       </section>
 
       <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -96,6 +101,7 @@
                 <td class="px-4 py-4">
                   <div class="flex flex-wrap gap-2">
                     <span class="badge" :class="statusClass(site.status)">{{ statusLabel(site.status) }}</span>
+                    <span class="badge" :class="visibilityClass(site.visibility)">{{ visibilityLabel(site.visibility) }}</span>
                     <span class="badge" :class="providerClass(site.provider_type)">{{ providerLabel(site.provider_type) }}</span>
                     <span class="badge" :class="qualityClass(site.quality_status)">{{ qualityLabel(site.quality_status) }}</span>
                   </div>
@@ -147,19 +153,21 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useAppStore } from '@/stores/app'
 import {
+  bulkPublishSiteCatalogSites,
   listSiteCatalogSites,
   type SiteCatalogKind,
   type SiteCatalogLink,
   type SiteCatalogQualityStatus,
   type SiteCatalogSite,
-  type SiteCatalogStatus
+  type SiteCatalogStatus,
+  type SiteCatalogVisibility
 } from '@/api/admin/adminPlus'
 
 type PaginationState = {
@@ -171,6 +179,7 @@ type PaginationState = {
 
 const appStore = useAppStore()
 const loading = ref(false)
+const publishing = ref(false)
 const sites = ref<SiteCatalogSite[]>([])
 const filters = reactive({
   q: '',
@@ -183,6 +192,12 @@ const pagination = reactive<PaginationState>({
   page_size: getPersistedPageSize(),
   total: 0,
   pages: 0
+})
+
+const publishButtonLabel = computed(() => {
+  if (publishing.value) return '公开中...'
+  if (pagination.total === 0) return '暂无可公开站点'
+  return `一键公开全部 ${pagination.total}`
 })
 
 onMounted(() => {
@@ -228,6 +243,27 @@ function handlePageSizeChange(pageSize: number) {
   void loadSites()
 }
 
+async function publishAllMatchingSites() {
+  if (pagination.total === 0 || publishing.value) return
+  const confirmed = window.confirm(`确认将当前筛选下的 ${pagination.total} 个站点全部转为公开并发布？`)
+  if (!confirmed) return
+  publishing.value = true
+  try {
+    const result = await bulkPublishSiteCatalogSites({
+      q: filters.q || undefined,
+      status: filters.status,
+      site_kind: filters.site_kind,
+      provider_type: filters.provider_type
+    })
+    appStore.showSuccess(result.updated > 0 ? `已公开 ${result.updated} 个站点` : '当前筛选下没有需要公开的站点')
+    await loadSites()
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  } finally {
+    publishing.value = false
+  }
+}
+
 function statusCount(status: SiteCatalogStatus): number {
   return sites.value.filter((site) => site.status === status).length
 }
@@ -249,6 +285,15 @@ function statusClass(status: SiteCatalogStatus): string {
   if (status === 'reviewing') return 'badge-warning'
   if (status === 'archived') return 'badge-gray'
   return 'badge-primary'
+}
+
+function visibilityLabel(value: SiteCatalogVisibility): string {
+  return { public: '公开', private: '私有' }[value] || value
+}
+
+function visibilityClass(value: SiteCatalogVisibility): string {
+  if (value === 'public') return 'badge-success'
+  return 'badge-gray'
 }
 
 function providerLabel(value?: string): string {

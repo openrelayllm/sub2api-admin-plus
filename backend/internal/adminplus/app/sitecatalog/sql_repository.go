@@ -12,6 +12,7 @@ import (
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/lib/pq"
 )
 
 type SQLRepository struct {
@@ -26,27 +27,10 @@ func (r *SQLRepository) ListSites(ctx context.Context, filter SiteFilter) ([]*ad
 	if r == nil || r.db == nil {
 		return nil, dbNotConfigured()
 	}
-	where := []string{"1=1"}
 	args := make([]any, 0, 5)
-	addArg := func(value any) string {
-		args = append(args, value)
-		return fmt.Sprintf("$%d", len(args))
-	}
-	if filter.Query != "" {
-		query := "%" + strings.ToLower(filter.Query) + "%"
-		ref := addArg(query)
-		where = append(where, "(LOWER(name) LIKE "+ref+" OR LOWER(canonical_host) LIKE "+ref+" OR LOWER(summary) LIKE "+ref+")")
-	}
-	if filter.Status != "" {
-		where = append(where, "status = "+addArg(string(filter.Status)))
-	}
-	if filter.SiteKind != "" {
-		where = append(where, "site_kind = "+addArg(string(filter.SiteKind)))
-	}
-	if filter.Provider != "" {
-		where = append(where, "provider_type = "+addArg(string(filter.Provider)))
-	}
-	limitRef := addArg(filter.Limit)
+	where, args := siteCatalogSiteWhere(filter, args)
+	args = append(args, filter.Limit)
+	limitRef := fmt.Sprintf("$%d", len(args))
 	rows, err := r.db.QueryContext(ctx, siteCatalogSiteSelectClause()+`
 		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY updated_at DESC, id DESC
@@ -120,6 +104,60 @@ func (r *SQLRepository) CreateSite(ctx context.Context, site *adminplusdomain.Si
 	}
 	err = nil
 	return r.GetSite(ctx, created.ID)
+}
+
+func (r *SQLRepository) BulkPublishSites(ctx context.Context, input BulkPublishSitesInput, publishedAt time.Time) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, dbNotConfigured()
+	}
+	args := make([]any, 0, 7)
+	where, args := siteCatalogSiteWhere(SiteFilter{
+		Query:    input.Query,
+		Status:   input.Status,
+		SiteKind: input.SiteKind,
+		Provider: input.Provider,
+	}, args)
+	if len(input.IDs) > 0 {
+		args = append(args, pq.Array(input.IDs))
+		where = append(where, fmt.Sprintf("id = ANY($%d)", len(args)))
+	}
+	where = append(where, "(status <> 'published' OR visibility <> 'public')")
+	args = append(args, publishedAt)
+	publishedAtRef := fmt.Sprintf("$%d", len(args))
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE admin_plus_site_catalog_sites
+		SET status = 'published',
+			visibility = 'public',
+			published_at = COALESCE(published_at, `+publishedAtRef+`),
+			updated_at = `+publishedAtRef+`
+		WHERE `+strings.Join(where, " AND "), args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func siteCatalogSiteWhere(filter SiteFilter, args []any) ([]string, []any) {
+	where := []string{"1=1"}
+	addArg := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if filter.Query != "" {
+		query := "%" + strings.ToLower(filter.Query) + "%"
+		ref := addArg(query)
+		where = append(where, "(LOWER(name) LIKE "+ref+" OR LOWER(canonical_host) LIKE "+ref+" OR LOWER(summary) LIKE "+ref+")")
+	}
+	if filter.Status != "" {
+		where = append(where, "status = "+addArg(string(filter.Status)))
+	}
+	if filter.SiteKind != "" {
+		where = append(where, "site_kind = "+addArg(string(filter.SiteKind)))
+	}
+	if filter.Provider != "" {
+		where = append(where, "provider_type = "+addArg(string(filter.Provider)))
+	}
+	return where, args
 }
 
 func (r *SQLRepository) AddDiscoveryCandidate(ctx context.Context, candidate *adminplusdomain.SiteDiscoveryItem, input AddDiscoveryCandidateInput) (*adminplusdomain.SiteCatalogSite, error) {

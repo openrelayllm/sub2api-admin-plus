@@ -122,6 +122,10 @@ func (r *fakePublicProxyAIRepo) CreateSite(context.Context, *adminplusdomain.Sit
 	return nil, errors.New("not implemented")
 }
 
+func (r *fakePublicProxyAIRepo) BulkPublishSites(context.Context, sitecatalogapp.BulkPublishSitesInput, time.Time) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
 func (r *fakePublicProxyAIRepo) AddDiscoveryCandidate(context.Context, *adminplusdomain.SiteDiscoveryItem, sitecatalogapp.AddDiscoveryCandidateInput) (*adminplusdomain.SiteCatalogSite, error) {
 	return nil, errors.New("not implemented")
 }

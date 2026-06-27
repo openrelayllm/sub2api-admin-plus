@@ -16,6 +16,7 @@ type Repository interface {
 	ListSites(ctx context.Context, filter SiteFilter) ([]*adminplusdomain.SiteCatalogSite, error)
 	GetSite(ctx context.Context, id int64) (*adminplusdomain.SiteCatalogSite, error)
 	CreateSite(ctx context.Context, site *adminplusdomain.SiteCatalogSite) (*adminplusdomain.SiteCatalogSite, error)
+	BulkPublishSites(ctx context.Context, input BulkPublishSitesInput, publishedAt time.Time) (int64, error)
 	AddDiscoveryCandidate(ctx context.Context, candidate *adminplusdomain.SiteDiscoveryItem, input AddDiscoveryCandidateInput) (*adminplusdomain.SiteCatalogSite, error)
 	ListCategories(ctx context.Context) ([]*adminplusdomain.SiteCatalogCategory, error)
 	ListTags(ctx context.Context) ([]*adminplusdomain.SiteCatalogTag, error)
@@ -93,6 +94,7 @@ type BulkAddDiscoveryCandidatesInput struct {
 	RiskLevel            adminplusdomain.SiteCatalogRiskLevel           `json:"risk_level"`
 	CategoryIDs          []int64                                        `json:"category_ids"`
 	TagIDs               []int64                                        `json:"tag_ids"`
+	IncludeUnsupported   bool                                           `json:"include_unsupported"`
 }
 
 type BulkAddDiscoveryCandidatesResult struct {
@@ -108,6 +110,20 @@ type BulkAddDiscoveryCandidateError struct {
 	DiscoveryID int64  `json:"discovery_id"`
 	Name        string `json:"name"`
 	Error       string `json:"error"`
+}
+
+type BulkPublishSitesInput struct {
+	IDs      []int64                           `json:"ids"`
+	Query    string                            `json:"q"`
+	Status   adminplusdomain.SiteCatalogStatus `json:"status"`
+	SiteKind adminplusdomain.SiteCatalogKind   `json:"site_kind"`
+	Provider adminplusdomain.SupplierType      `json:"provider_type"`
+}
+
+type BulkPublishSitesResult struct {
+	Total   int   `json:"total"`
+	Updated int64 `json:"updated"`
+	Skipped int   `json:"skipped"`
 }
 
 type BulkAddDiscoveryCandidateProgressEvent struct {
@@ -156,6 +172,22 @@ func (s *Service) CreateSite(ctx context.Context, in CreateSiteInput) (*adminplu
 		return nil, err
 	}
 	return s.repo.CreateSite(ctx, site)
+}
+
+func (s *Service) BulkPublishSites(ctx context.Context, in BulkPublishSitesInput) (*BulkPublishSitesResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("site catalog service is not configured")
+	}
+	in.IDs = uniquePositiveIDs(in.IDs)
+	in.Query = strings.TrimSpace(in.Query)
+	updated, err := s.repo.BulkPublishSites(ctx, in, s.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return &BulkPublishSitesResult{
+		Total:   int(updated),
+		Updated: updated,
+	}, nil
 }
 
 func (s *Service) AddDiscoveryCandidate(ctx context.Context, candidate *adminplusdomain.SiteDiscoveryItem, in AddDiscoveryCandidateInput) (*adminplusdomain.SiteCatalogSite, error) {
@@ -223,7 +255,7 @@ func (s *Service) BulkAddDiscoveryCandidates(ctx context.Context, candidates []*
 			emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_skipped", Level: "warning", Message: "已在目录中，跳过：" + name, Current: current, Total: len(candidates)})
 			continue
 		}
-		if candidate.ClassificationStatus != adminplusdomain.SiteDiscoveryClassificationSupported || (candidate.ProviderType != adminplusdomain.SupplierTypeNewAPI && candidate.ProviderType != adminplusdomain.SupplierTypeSub2API) {
+		if !in.IncludeUnsupported && (candidate.ClassificationStatus != adminplusdomain.SiteDiscoveryClassificationSupported || (candidate.ProviderType != adminplusdomain.SupplierTypeNewAPI && candidate.ProviderType != adminplusdomain.SupplierTypeSub2API)) {
 			result.Skipped++
 			emitBulkAddProgress(emit, BulkAddDiscoveryCandidateProgressEvent{Type: "item_skipped", Level: "warning", Message: "未识别为支持类型，跳过：" + name, Current: current, Total: len(candidates)})
 			continue
@@ -504,4 +536,20 @@ func tagsFromIDs(ids []int64) []*adminplusdomain.SiteCatalogTag {
 		}
 	}
 	return tags
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	out := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }

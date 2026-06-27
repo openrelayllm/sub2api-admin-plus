@@ -15,6 +15,7 @@ import (
 	notificationsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
 	provisionjobsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/provisionjobs"
 	proxyapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/proxy"
+	purityapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
@@ -86,6 +87,7 @@ var ProviderSet = wire.NewSet(
 	healthapp.ProviderSet,
 	mailverificationapp.ProviderSet,
 	notificationsapp.ProviderSet,
+	purityapp.ProviderSet,
 	ratesapp.ProviderSet,
 	provisionjobsapp.ProviderSet,
 	proxyapp.ProviderSet,

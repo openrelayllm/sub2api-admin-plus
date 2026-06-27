@@ -34,6 +34,7 @@
           </div>
           <div class="flex flex-wrap gap-2">
             <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length !== 1" title="请选择一个账号测试" @click="testSelected">测试账号</button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length !== 1 || !selectedSupportsPurity" title="请选择一个 OpenAI API Key 账号检测纯度" @click="puritySelected">纯度检测</button>
             <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length !== 1" title="请选择一个账号查看分组" @click="openSelectedSupplier">查看分组</button>
             <button type="button" class="btn btn-primary btn-sm" :disabled="selectedIds.length !== 1" title="请选择一个账号后到供应商分组更新" @click="openSelectedSupplier">批量更新</button>
           </div>
@@ -195,10 +196,20 @@
 	          </template>
 
           <template #cell-actions="{ row }">
-            <div class="flex min-w-[112px] items-center justify-end gap-1">
+            <div class="flex min-w-[150px] items-center justify-end gap-1">
               <button type="button" class="row-action hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-300" title="测试渠道" @click="openTestDialog(row)">
                 <Icon name="beaker" size="sm" />
                 <span class="text-xs">测试</span>
+              </button>
+              <button
+                type="button"
+                class="row-action hover:bg-primary-50 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-primary-900/20 dark:hover:text-primary-400"
+                :disabled="!supportsPurity(row)"
+                title="检测 OpenAI API 纯度"
+                @click="openPurityDialog(row)"
+              >
+                <Icon name="shield" size="sm" />
+                <span class="text-xs">纯度</span>
               </button>
               <button type="button" class="row-action hover:bg-primary-50 hover:text-primary-600 dark:hover:bg-primary-900/20 dark:hover:text-primary-400" title="查看供应商分组" @click="goSupplierGroups(row)">
                 <Icon name="externalLink" size="sm" />
@@ -230,6 +241,7 @@
     </TablePageLayout>
 
     <LocalAccountTestModal :show="Boolean(testingAccount)" :account="testingAccount" @close="testingAccount = null" />
+    <LocalAccountPurityModal :show="Boolean(purityAccount)" :account="purityAccount" @close="purityAccount = null" />
   </AppLayout>
 </template>
 
@@ -244,6 +256,7 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LocalAccountTestModal from '@/components/admin-plus/LocalAccountTestModal.vue'
+import LocalAccountPurityModal from '@/components/admin-plus/LocalAccountPurityModal.vue'
 import SupplierAccountsToolbar from './SupplierAccountsToolbar.vue'
 import {
   accountStatusClass,
@@ -292,6 +305,7 @@ const usageByAccountID = ref<Record<number, AccountUsageWindow>>({})
 const selectedSupplierId = ref(0)
 const selectedIds = ref<number[]>([])
 const testingAccount = ref<LocalSub2APIAccount | null>(null)
+const purityAccount = ref<LocalSub2APIAccount | null>(null)
 const suppressSupplierWatch = ref(false)
 const hiddenColumns = reactive(new Set<string>(['notes', 'updated_at']))
 
@@ -341,6 +355,10 @@ const columns: Column[] = [
 	]
 
 const selectedSet = computed(() => new Set(selectedIds.value))
+const selectedSupportsPurity = computed(() => {
+  const first = selectedRows()[0]
+  return Boolean(first && supportsPurity(first))
+})
 const filteredBindings = computed(() => sortBindingsDesc(bindings.value.filter(matchesFilters)))
 const pagedBindings = computed(() => {
   const start = (pagination.page - 1) * pagination.page_size
@@ -565,6 +583,11 @@ function testSelected() {
   if (first) openTestDialog(first)
 }
 
+function puritySelected() {
+  const first = selectedRows()[0]
+  if (first) openPurityDialog(first)
+}
+
 function openSelectedSupplier() {
   const first = selectedRows()[0]
   if (first) goSupplierGroups(first)
@@ -577,6 +600,23 @@ function goSupplierGroups(row: SupplierAccount) {
 function openTestDialog(row: SupplierAccount) {
   const account = localAccount(row)
   if (account) testingAccount.value = account
+}
+
+function openPurityDialog(row: SupplierAccount) {
+  const account = localAccount(row)
+  if (!account) return
+  if (!supportsPurity(row)) {
+    appStore.showError('仅支持 OpenAI API Key 账号执行纯度检测')
+    return
+  }
+  purityAccount.value = account
+}
+
+function supportsPurity(row: SupplierAccount): boolean {
+  const account = localAccount(row)
+  const platform = (account?.platform || row.local_account_platform || '').toLowerCase()
+  const type = (account?.type || row.local_account_type || '').toLowerCase()
+  return platform === 'openai' && type === 'apikey'
 }
 
 async function loadSuppliers() {

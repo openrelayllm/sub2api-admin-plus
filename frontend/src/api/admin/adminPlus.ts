@@ -43,10 +43,6 @@ export interface ServerRenewalStatus {
   host_id?: string
   ip_address?: string
   operating_system?: string
-  ssh_username?: string
-  ssh_password?: string
-  ssh_password_configured?: boolean
-  ssh_port?: number
   panel_url?: string
   expires_at: string
   expires_at_time?: string
@@ -648,6 +644,162 @@ export interface LocalAccountTestPayload {
   model_id: string
   prompt?: string
   mode?: string
+}
+
+export type PurityProvider = 'openai' | 'anthropic'
+export type PurityCheckStatus = 'pass' | 'warn' | 'fail'
+export type PurityRunStatus = 'pending' | 'running' | 'done' | string
+
+export interface PurityScoreBreakdown {
+  tag_check?: number
+  structure?: number
+  behavior?: number
+  signature_proto?: number
+  multimodal?: number
+  token_audit?: number
+  [key: string]: number | undefined
+}
+
+export interface PurityValidationResult {
+  id: string
+  name: string
+  status: PurityCheckStatus
+  message: string
+  related_check_ids?: string[]
+  details?: Record<string, unknown>
+}
+
+export interface PurityCheckResult {
+  id: string
+  name: string
+  status: PurityCheckStatus
+  score: number
+  max_score: number
+  message: string
+  details?: Record<string, unknown>
+}
+
+export interface PurityTokenUsage {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cache_creation_tokens?: number
+  cached_tokens?: number
+  reasoning_tokens?: number
+}
+
+export interface PurityCheckMetrics {
+  models_latency_ms?: number
+  responses_latency_ms?: number
+  messages_latency_ms?: number
+  stream_first_token_ms?: number
+  stream_total_latency_ms?: number
+  multimodal_latency_ms?: number
+  chat_completions_latency_ms?: number
+  latency_ms?: number
+  tokens_per_second?: number
+  usage?: PurityTokenUsage
+  error_class?: string
+  error_message?: string
+}
+
+export interface PurityTokenAuditSample {
+  index: number
+  round?: number
+  input_tokens: number
+  output_tokens: number
+  uncached_input_tokens: number
+  cache_creation_tokens: number
+  cache_creation_input_tokens?: number
+  cached_tokens: number
+  cache_read_input_tokens?: number
+  reasoning_tokens?: number
+  total_tokens: number
+  official_baseline_usd: number
+  baseline_cost?: number
+  actual_cost_usd: number
+  cost?: number
+  multiplier: number
+  ratio?: number
+  latency_ms: number
+  status: PurityCheckStatus
+}
+
+export interface PurityTokenAuditReport {
+  status: PurityCheckStatus
+  summary: string
+  price_source: string
+  official_baseline_usd: number
+  baseline_total_cost_usd?: number
+  actual_cost_usd: number
+  total_cost?: number
+  multiplier: number
+  overall_ratio?: number
+  cache_hit_rate: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cached_tokens: number
+  sample_count: number
+  anomalies?: string[]
+  samples: PurityTokenAuditSample[]
+  rows?: PurityTokenAuditSample[]
+}
+
+export interface PurityReport {
+  provider: string
+  report_id: string
+  api_base_host: string
+  model_id: string
+  expected_model?: string
+  response_model?: string
+  status?: PurityRunStatus
+  step?: number
+  step_name?: string
+  progress?: number
+  scores?: PurityScoreBreakdown
+  score: number
+  official_score: number
+  compatibility_score: number
+  verdict: string
+  summary: string
+  error?: string
+  stream_channel?: string
+  non_stream_channel?: string
+  has_vertex?: boolean
+  is_kiro?: boolean
+  validations: PurityValidationResult[]
+  checks: PurityCheckResult[]
+  metrics: PurityCheckMetrics
+  token_audit?: PurityTokenAuditReport
+  token_audit_progress?: string
+  token_audit_partial?: PurityTokenAuditSample[]
+  checked_at: string
+}
+
+export interface PurityCheckEvent {
+  type: 'started' | 'progress' | 'check' | 'validation' | 'metrics' | 'token_audit_sample' | 'token_audit' | 'report' | 'error'
+  report_id?: string
+  status?: PurityRunStatus
+  step?: number
+  step_name?: string
+  progress?: number
+  scores?: PurityScoreBreakdown
+  check?: PurityCheckResult
+  validation?: PurityValidationResult
+  metrics?: PurityCheckMetrics
+  sample?: PurityTokenAuditSample
+  token_audit?: PurityTokenAuditReport
+  token_audit_progress?: string
+  token_audit_partial?: PurityTokenAuditSample[]
+  report?: PurityReport
+  error_class?: string
+  error_message?: string
+}
+
+export interface LocalAccountPurityPayload {
+  provider?: PurityProvider
+  model_id?: string
 }
 
 export interface SupplierAccount {
@@ -1505,6 +1657,20 @@ export interface BulkAddDiscoveryCandidatesResult {
   errors?: Array<{ discovery_id: number; name: string; error: string }>
 }
 
+export interface BulkPublishSiteCatalogSitesResult {
+  total: number
+  updated: number
+  skipped: number
+}
+
+export interface BulkPublishSiteCatalogSitesPayload {
+  ids?: number[]
+  q?: string
+  status?: SiteCatalogStatus | ''
+  site_kind?: SiteCatalogKind | ''
+  provider_type?: 'new_api' | 'sub2api' | ''
+}
+
 export interface BulkAddDiscoveryCandidatesProgressEvent {
   type: 'started' | 'item_success' | 'item_skipped' | 'item_failed' | 'failed' | 'completed' | string
   level?: SiteDiscoveryRunProgressLevel
@@ -2246,6 +2412,11 @@ export function localAccountTestURL(accountId: number): string {
   return `${String(baseURL).replace(/\/+$/, '')}/admin-plus/sub2api/accounts/${accountId}/test`
 }
 
+export function localAccountPurityStreamURL(accountId: number): string {
+  const baseURL = apiClient.defaults.baseURL || '/api/v1'
+  return `${String(baseURL).replace(/\/+$/, '')}/admin-plus/proxyai/accounts/${accountId}/purity/checks/stream`
+}
+
 export async function listLocalUsageLines(params?: { account_id?: number; model?: string; from?: string; to?: string } & AdminPlusPaginationParams): Promise<AdminPlusListResponse<LocalUsageLine>> {
   const { data } = await apiClient.get<AdminPlusListResponse<LocalUsageLine>>('/admin-plus/sub2api/usage-lines', { params })
   return data
@@ -2713,6 +2884,11 @@ export async function createSiteCatalogSite(payload: Partial<SiteCatalogSite> & 
   return data
 }
 
+export async function bulkPublishSiteCatalogSites(payload: BulkPublishSiteCatalogSitesPayload): Promise<BulkPublishSiteCatalogSitesResult> {
+  const { data } = await apiClient.post<BulkPublishSiteCatalogSitesResult>('/admin-plus/site-catalog/sites/bulk-publish', payload)
+  return data
+}
+
 export async function listSiteCatalogCategories(): Promise<{ items: SiteCatalogCategory[] }> {
   const { data } = await apiClient.get<{ items: SiteCatalogCategory[] }>('/admin-plus/site-catalog/categories')
   return data
@@ -3139,6 +3315,7 @@ export const adminPlusAPI = {
   listLocalAccountRuntime,
   listLocalAccountTestModels,
   localAccountTestURL,
+  localAccountPurityStreamURL,
   listLocalUsageLines,
   listLocalUsageSummary,
   listSupplierAccounts,
@@ -3201,6 +3378,7 @@ export const adminPlusAPI = {
   listSiteCatalogSites,
   getSiteCatalogSite,
   createSiteCatalogSite,
+  bulkPublishSiteCatalogSites,
   listSiteCatalogCategories,
   listSiteCatalogTags,
   addDiscoveryCandidateToCatalog,

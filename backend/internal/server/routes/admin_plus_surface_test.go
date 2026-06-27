@@ -16,6 +16,7 @@ import (
 	mailverificationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/mailverification"
 	notificationsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
 	proxyapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/proxy"
+	purityapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	schedulerapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/scheduler"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
@@ -88,13 +89,14 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 			Extension:        adminplushandler.NewExtensionHandler(extensionService, nil),
 			SiteDiscovery:    adminplushandler.NewSiteDiscoveryHandler(siteDiscoveryService),
 			PublicProxyAI:    adminplushandler.NewPublicProxyAIHandler(nil),
+			Purity:           adminplushandler.NewPurityHandler(purityapp.NewService(nil), nil),
 			MailVerification: adminplushandler.NewMailVerificationHandler(mailVerificationService),
 			Session:          adminplushandler.NewSessionHandler(sessionService, nil),
 			Scheduler:        adminplushandler.NewSchedulerHandler(schedulerapp.NewService(supplierService, extensionService)),
 			Action:           adminplushandler.NewActionHandler(actionsapp.NewRuleService()),
 			Sub2API:          adminplushandler.NewSub2APIHandler(sub2apiapp.NewService(newRouteSurfaceSub2APIRepository(), newRouteSurfaceSub2APIRuntimeReader())),
 			Proxy:            adminplushandler.NewProxyHandler(proxyapp.NewService(nil, nil, nil, nil, proxyapp.RuntimeConfig{})),
-			Backup:           adminplushandler.NewBackupHandler(nil, nil, nil, nil, nil),
+			Backup:           adminplushandler.NewBackupHandler(nil, nil, nil, nil),
 		},
 	}
 
@@ -129,6 +131,8 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/public/proxyai/summary",
 		"GET /api/v1/public/proxyai/sites",
 		"GET /api/v1/public/proxyai/sites/:slug",
+		"POST /api/v1/public/proxyai/purity/checks",
+		"POST /api/v1/public/proxyai/purity/checks/stream",
 		"OPTIONS /api/v1/public/proxyai/*path",
 		"POST /api/v1/auth/login",
 		"POST /api/v1/auth/login/2fa",
@@ -177,6 +181,8 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/admin-plus/sub2api/accounts",
 		"GET /api/v1/admin-plus/sub2api/accounts/:accountID/models",
 		"POST /api/v1/admin-plus/sub2api/accounts/:accountID/test",
+		"POST /api/v1/admin-plus/sub2api/accounts/:accountID/purity/checks/stream",
+		"POST /api/v1/admin-plus/proxyai/accounts/:accountID/purity/checks/stream",
 		"GET /api/v1/admin-plus/sub2api/account-runtime",
 		"GET /api/v1/admin-plus/sub2api/account-usage-summary",
 		"GET /api/v1/admin-plus/sub2api/usage-lines",
@@ -353,7 +359,7 @@ func TestPublicProxyAIRoutesAllowCrossOriginPreflight(t *testing.T) {
 
 	require.Equal(t, http.StatusNoContent, w.Code)
 	require.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
-	require.Equal(t, "GET, HEAD, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
+	require.Equal(t, "GET, HEAD, POST, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
 }
 
 func registeredRouteSet(router *gin.Engine) map[string]struct{} {

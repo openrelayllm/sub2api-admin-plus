@@ -90,6 +90,14 @@ type bulkAddDiscoveryCandidatesRequest struct {
 	TagIDs               []int64 `json:"tag_ids"`
 }
 
+type bulkPublishSiteCatalogSitesRequest struct {
+	IDs          []int64 `json:"ids"`
+	Query        string  `json:"q"`
+	Status       string  `json:"status"`
+	SiteKind     string  `json:"site_kind"`
+	ProviderType string  `json:"provider_type"`
+}
+
 func (h *SiteCatalogHandler) ListSites(c *gin.Context) {
 	page := parsePagination(c)
 	items, err := h.service.ListSites(c.Request.Context(), sitecatalogapp.SiteFilter{
@@ -152,6 +160,25 @@ func (h *SiteCatalogHandler) CreateSite(c *gin.Context) {
 		return
 	}
 	response.Created(c, item)
+}
+
+func (h *SiteCatalogHandler) BulkPublishSites(c *gin.Context) {
+	var req bulkPublishSiteCatalogSitesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	result, err := h.service.BulkPublishSites(c.Request.Context(), sitecatalogapp.BulkPublishSitesInput{
+		IDs:      req.IDs,
+		Query:    req.Query,
+		Status:   adminplusdomain.SiteCatalogStatus(strings.TrimSpace(req.Status)),
+		SiteKind: adminplusdomain.SiteCatalogKind(strings.TrimSpace(req.SiteKind)),
+		Provider: normalizeDiscoveryProviderType(req.ProviderType),
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *SiteCatalogHandler) AddDiscoveryCandidate(c *gin.Context) {
@@ -243,6 +270,7 @@ func (h *SiteCatalogHandler) BulkAddDiscoveryCandidatesStream(c *gin.Context) {
 		RiskLevel:            adminplusdomain.SiteCatalogRiskLevel(strings.TrimSpace(req.RiskLevel)),
 		CategoryIDs:          req.CategoryIDs,
 		TagIDs:               req.TagIDs,
+		IncludeUnsupported:   !boolDefault(req.OnlySupported, true),
 	}, emit)
 	if err != nil {
 		emit(sitecatalogapp.BulkAddDiscoveryCandidateProgressEvent{
