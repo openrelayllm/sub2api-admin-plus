@@ -716,6 +716,8 @@ export interface PurityTokenAuditSample {
   reasoning_tokens?: number
   total_tokens: number
   official_baseline_usd: number
+  uncached_baseline_usd?: number
+  cache_discount_usd?: number
   baseline_cost?: number
   actual_cost_usd: number
   cost?: number
@@ -723,6 +725,11 @@ export interface PurityTokenAuditSample {
   ratio?: number
   latency_ms: number
   status: PurityCheckStatus
+  response_id?: string
+  previous_response_id?: string
+  prompt_cache_key?: string
+  store?: boolean
+  state_linked?: boolean
 }
 
 export interface PurityTokenAuditReport {
@@ -730,6 +737,7 @@ export interface PurityTokenAuditReport {
   summary: string
   price_source: string
   official_baseline_usd: number
+  uncached_baseline_usd?: number
   baseline_total_cost_usd?: number
   actual_cost_usd: number
   total_cost?: number
@@ -741,6 +749,10 @@ export interface PurityTokenAuditReport {
   cache_creation_tokens: number
   cached_tokens: number
   sample_count: number
+  prompt_cache_key?: string
+  store_enabled?: boolean
+  stateful_rounds?: number
+  previous_response_chain_ok?: boolean
   anomalies?: string[]
   samples: PurityTokenAuditSample[]
   rows?: PurityTokenAuditSample[]
