@@ -1,26 +1,24 @@
 # Release Notes
 
-## v0.21.0 - 2026-06-27
+## v0.22.0 - 2026-06-27
 
 ### 新增
 
-- 新增 ProxyAI 纯度检测能力，支持公开 OpenAI/Claude API Key 检测与后台账号流式检测。
-- 新增纯度检测公开报告表，用于沉淀公开检测摘要、评分、校验项和指标。
-- 后台供应商账号列表新增 OpenAI API Key 纯度检测入口。
-- 站点目录新增一键公开当前筛选结果能力。
+- 新增 ProxyAI Developer API 纯度检测入口，支持 API Key 鉴权的普通检测与流式检测。
+- 新增纯度检测报告访问模式与计费模式字段，区分 Web、Developer API 和后台账号来源。
 
 ### 改进
 
-- 公开 ProxyAI API 支持 POST 预检，便于独立页面直接调用纯度检测接口。
-- 站点采集批量入库支持包含未识别候选，用于人工整理后统一公开。
-- 服务器续费提醒仅保留非敏感续费信息，不再保存或展示 SSH 凭据。
+- Web 公开纯度检测继续使用 Turnstile 与限流保护，Developer API 入口改为 API Key 计量鉴权。
+- 公开 ProxyAI CORS 预检允许 `Authorization`、`X-API-Key` 和 `X-ProxyAI-Key`，便于独立页面调用 Developer API。
+- 旧版 `/api/v1/public/proxyai/purity/checks*` 路径收敛到 API Key 鉴权入口，避免绕过 Developer API 权限模型。
 
 ### 修复
 
-- 补充纯度检测、站点目录批量公开和公开 ProxyAI 路由测试，降低接口回归风险。
+- 补充 ProxyAI 公开路由、CORS、fail-closed 鉴权和纯度报告模式字段测试，降低接口回归风险。
 
 ### 发布
 
-- 更新版本号到 `0.21.0`。
+- 更新版本号到 `0.22.0`。
 - GitHub Release 继续只发布 Linux 产物：`linux_amd64`、`linux_arm64` 和 `checksums.txt`。
 - DockerHub/Railway 镜像渠道不随常规发布自动执行；如需要，单独走“镜像渠道发布”流程。

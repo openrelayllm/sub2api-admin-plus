@@ -81,6 +81,8 @@ func (s *Service) RunPublicCheck(ctx context.Context, in PublicCheckInput) (*Pub
 	return s.runCheck(ctx, in, nil, checkRunOptions{
 		EnforceRateLimit:  true,
 		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AccessMode:        AccessModeWeb,
+		BillingMode:       BillingModeCaptchaRateLimit,
 	})
 }
 
@@ -88,6 +90,26 @@ func (s *Service) RunPublicCheckStream(ctx context.Context, in PublicCheckInput,
 	return s.runCheck(ctx, in, emit, checkRunOptions{
 		EnforceRateLimit:  true,
 		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AccessMode:        AccessModeWeb,
+		BillingMode:       BillingModeCaptchaRateLimit,
+	})
+}
+
+func (s *Service) RunDeveloperAPICheck(ctx context.Context, in PublicCheckInput) (*PublicReport, error) {
+	return s.runCheck(ctx, in, nil, checkRunOptions{
+		EnforceRateLimit:  false,
+		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AccessMode:        AccessModeDeveloperAPI,
+		BillingMode:       BillingModeAPIKeyMetered,
+	})
+}
+
+func (s *Service) RunDeveloperAPICheckStream(ctx context.Context, in PublicCheckInput, emit PublicCheckEventSink) (*PublicReport, error) {
+	return s.runCheck(ctx, in, emit, checkRunOptions{
+		EnforceRateLimit:  false,
+		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AccessMode:        AccessModeDeveloperAPI,
+		BillingMode:       BillingModeAPIKeyMetered,
 	})
 }
 
@@ -103,12 +125,16 @@ func (s *Service) RunAccountCheckStream(ctx context.Context, in AccountCheckInpu
 	return s.runCheck(ctx, publicInput, emit, checkRunOptions{
 		EnforceRateLimit:  false,
 		AllowPrivateHosts: true,
+		AccessMode:        AccessModeAccount,
+		BillingMode:       BillingModeAccountInternal,
 	})
 }
 
 type checkRunOptions struct {
 	EnforceRateLimit  bool
 	AllowPrivateHosts bool
+	AccessMode        string
+	BillingMode       string
 }
 
 func (s *Service) runCheck(ctx context.Context, in PublicCheckInput, emit PublicCheckEventSink, options checkRunOptions) (*PublicReport, error) {
@@ -154,6 +180,8 @@ func (s *Service) runCheck(ctx context.Context, in PublicCheckInput, emit Public
 	report := &PublicReport{
 		Provider:        provider,
 		ReportID:        newReportID(provider, host, model, checkedAt),
+		AccessMode:      normalizeAccessMode(options.AccessMode),
+		BillingMode:     normalizeBillingMode(options.BillingMode),
 		APIBaseHost:     host,
 		ModelID:         model,
 		CheckTokenUsage: !in.SkipTokenAudit,
@@ -357,6 +385,28 @@ func normalizeProvider(provider string) string {
 	return value
 }
 
+func normalizeAccessMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case AccessModeDeveloperAPI:
+		return AccessModeDeveloperAPI
+	case AccessModeAccount:
+		return AccessModeAccount
+	default:
+		return AccessModeWeb
+	}
+}
+
+func normalizeBillingMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case BillingModeAPIKeyMetered:
+		return BillingModeAPIKeyMetered
+	case BillingModeAccountInternal:
+		return BillingModeAccountInternal
+	default:
+		return BillingModeCaptchaRateLimit
+	}
+}
+
 func (s *Service) normalizeBaseURL(raw string, allowPrivate bool) (string, string, bool, error) {
 	normalized, err := urlvalidator.ValidateHTTPURL(raw, true, urlvalidator.ValidationOptions{
 		AllowPrivate: allowPrivate,
@@ -461,6 +511,8 @@ func syncReportCompat(report *PublicReport) {
 		return
 	}
 	report.StepNameCompat = report.StepName
+	report.AccessModeCompat = report.AccessMode
+	report.BillingModeCompat = report.BillingMode
 	report.Total = report.Score
 	report.VerdictKey = cctestVerdictKey(report.Verdict)
 	report.ExpectedModelCompat = report.ExpectedModel

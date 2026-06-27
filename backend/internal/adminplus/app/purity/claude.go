@@ -97,6 +97,8 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 	report := &PublicReport{
 		Provider:        ProviderAnthropic,
 		ReportID:        newReportID(ProviderAnthropic, host, model, checkedAt),
+		AccessMode:      normalizeAccessMode(options.AccessMode),
+		BillingMode:     normalizeBillingMode(options.BillingMode),
 		APIBaseHost:     host,
 		ModelID:         model,
 		CheckTokenUsage: !in.SkipTokenAudit,

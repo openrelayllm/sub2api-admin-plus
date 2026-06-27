@@ -761,6 +761,10 @@ export interface PurityTokenAuditReport {
 export interface PurityReport {
   provider: string
   report_id: string
+  access_mode?: 'web' | 'developer_api' | 'account' | string
+  accessMode?: string
+  billing_mode?: 'captcha_rate_limit' | 'api_key_metered' | 'account_internal' | string
+  billingMode?: string
   api_base_host: string
   model_id: string
   expected_model?: string

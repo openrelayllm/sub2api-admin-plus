@@ -35,6 +35,30 @@ type accountPurityCheckRequest struct {
 }
 
 func (h *PurityHandler) PublicCheck(c *gin.Context) {
+	h.runPublicCheck(c, true, false)
+}
+
+func (h *PurityHandler) PublicCheckStream(c *gin.Context) {
+	h.runPublicCheckStream(c, true, false)
+}
+
+func (h *PurityHandler) WebCheck(c *gin.Context) {
+	h.runPublicCheck(c, true, false)
+}
+
+func (h *PurityHandler) WebCheckStream(c *gin.Context) {
+	h.runPublicCheckStream(c, true, false)
+}
+
+func (h *PurityHandler) APICheck(c *gin.Context) {
+	h.runPublicCheck(c, false, true)
+}
+
+func (h *PurityHandler) APICheckStream(c *gin.Context) {
+	h.runPublicCheckStream(c, false, true)
+}
+
+func (h *PurityHandler) runPublicCheck(c *gin.Context, verifyTurnstile bool, developerAPI bool) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	var req publicPurityCheckRequest
@@ -43,7 +67,7 @@ func (h *PurityHandler) PublicCheck(c *gin.Context) {
 		return
 	}
 	clientIP := ip.GetClientIP(c)
-	if h != nil && h.authService != nil {
+	if verifyTurnstile && h != nil && h.authService != nil {
 		if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, clientIP); response.ErrorFrom(c, err) {
 			return
 		}
@@ -52,21 +76,28 @@ func (h *PurityHandler) PublicCheck(c *gin.Context) {
 		response.InternalError(c, "purity service is not configured")
 		return
 	}
-	report, err := h.service.RunPublicCheck(c.Request.Context(), purityapp.PublicCheckInput{
+	input := purityapp.PublicCheckInput{
 		Provider:       req.Provider,
 		APIBaseURL:     req.APIBaseURL,
 		APIKey:         req.APIKey,
 		ModelID:        req.ModelID,
 		ClientIP:       clientIP,
 		SkipTokenAudit: req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
-	})
+	}
+	var report *purityapp.PublicReport
+	var err error
+	if developerAPI {
+		report, err = h.service.RunDeveloperAPICheck(c.Request.Context(), input)
+	} else {
+		report, err = h.service.RunPublicCheck(c.Request.Context(), input)
+	}
 	if response.ErrorFrom(c, err) {
 		return
 	}
 	response.Success(c, report)
 }
 
-func (h *PurityHandler) PublicCheckStream(c *gin.Context) {
+func (h *PurityHandler) runPublicCheckStream(c *gin.Context, verifyTurnstile bool, developerAPI bool) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	var req publicPurityCheckRequest
@@ -75,7 +106,7 @@ func (h *PurityHandler) PublicCheckStream(c *gin.Context) {
 		return
 	}
 	clientIP := ip.GetClientIP(c)
-	if h != nil && h.authService != nil {
+	if verifyTurnstile && h != nil && h.authService != nil {
 		if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, clientIP); response.ErrorFrom(c, err) {
 			return
 		}
@@ -89,14 +120,15 @@ func (h *PurityHandler) PublicCheckStream(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	encoder := json.NewEncoder(c.Writer)
 	var writeErr error
-	report, err := h.service.RunPublicCheckStream(c.Request.Context(), purityapp.PublicCheckInput{
+	input := purityapp.PublicCheckInput{
 		Provider:       req.Provider,
 		APIBaseURL:     req.APIBaseURL,
 		APIKey:         req.APIKey,
 		ModelID:        req.ModelID,
 		ClientIP:       clientIP,
 		SkipTokenAudit: req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
-	}, func(event purityapp.PublicCheckEvent) {
+	}
+	emit := func(event purityapp.PublicCheckEvent) {
 		if writeErr != nil {
 			return
 		}
@@ -107,7 +139,14 @@ func (h *PurityHandler) PublicCheckStream(c *gin.Context) {
 		if writeErr == nil {
 			c.Writer.Flush()
 		}
-	})
+	}
+	var report *purityapp.PublicReport
+	var err error
+	if developerAPI {
+		report, err = h.service.RunDeveloperAPICheckStream(c.Request.Context(), input, emit)
+	} else {
+		report, err = h.service.RunPublicCheckStream(c.Request.Context(), input, emit)
+	}
 	if err != nil {
 		if !c.Writer.Written() {
 			response.ErrorFrom(c, err)

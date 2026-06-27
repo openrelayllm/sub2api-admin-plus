@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +108,11 @@ func newAdminPlusSurfaceRouter() *gin.Engine {
 		nil,
 		nil,
 	)
-	RegisterPublicProxyAIRoutes(v1, handlers)
+	RegisterPublicProxyAIRoutes(
+		v1,
+		handlers,
+		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) { c.Next() }),
+	)
 	RegisterAdminRoutes(
 		v1,
 		handlers,
@@ -131,6 +136,10 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/public/proxyai/summary",
 		"GET /api/v1/public/proxyai/sites",
 		"GET /api/v1/public/proxyai/sites/:slug",
+		"POST /api/v1/public/proxyai/web/purity/checks",
+		"POST /api/v1/public/proxyai/web/purity/checks/stream",
+		"POST /api/v1/public/proxyai/api/purity/checks",
+		"POST /api/v1/public/proxyai/api/purity/checks/stream",
 		"POST /api/v1/public/proxyai/purity/checks",
 		"POST /api/v1/public/proxyai/purity/checks/stream",
 		"OPTIONS /api/v1/public/proxyai/*path",
@@ -360,6 +369,35 @@ func TestPublicProxyAIRoutesAllowCrossOriginPreflight(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code)
 	require.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
 	require.Equal(t, "GET, HEAD, POST, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
+	require.Contains(t, w.Header().Get("Access-Control-Allow-Headers"), "Authorization")
+	require.Contains(t, w.Header().Get("Access-Control-Allow-Headers"), "X-API-Key")
+	require.Contains(t, w.Header().Get("Access-Control-Allow-Headers"), "X-ProxyAI-Key")
+}
+
+func TestPublicProxyAIDeveloperAPIRoutesFailClosedWithoutAuthMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	v1 := router.Group("/api/v1")
+	handlers := &handler.Handlers{
+		AdminPlus: &handler.AdminPlusHandlers{
+			Purity: adminplushandler.NewPurityHandler(nil, nil),
+		},
+	}
+	RegisterPublicProxyAIRoutes(v1, handlers, nil)
+
+	for _, path := range []string{
+		"/api/v1/public/proxyai/api/purity/checks",
+		"/api/v1/public/proxyai/purity/checks",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code, path)
+		require.Contains(t, w.Body.String(), "proxyai_api_auth_not_configured")
+	}
 }
 
 func registeredRouteSet(router *gin.Engine) map[string]struct{} {

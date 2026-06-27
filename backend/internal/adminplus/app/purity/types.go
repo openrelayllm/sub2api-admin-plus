@@ -11,6 +11,14 @@ const (
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
 
+	AccessModeWeb          = "web"
+	AccessModeDeveloperAPI = "developer_api"
+	AccessModeAccount      = "account"
+
+	BillingModeCaptchaRateLimit = "captcha_rate_limit"
+	BillingModeAPIKeyMetered    = "api_key_metered"
+	BillingModeAccountInternal  = "account_internal"
+
 	CheckStatusPass = "pass"
 	CheckStatusWarn = "warn"
 	CheckStatusFail = "fail"
@@ -51,6 +59,10 @@ type AccountResolver interface {
 type PublicReport struct {
 	Provider               string             `json:"provider"`
 	ReportID               string             `json:"report_id"`
+	AccessMode             string             `json:"access_mode,omitempty"`
+	AccessModeCompat       string             `json:"accessMode,omitempty"`
+	BillingMode            string             `json:"billing_mode,omitempty"`
+	BillingModeCompat      string             `json:"billingMode,omitempty"`
 	APIBaseHost            string             `json:"api_base_host"`
 	ModelID                string             `json:"model_id"`
 	CheckTokenUsage        bool               `json:"checkTokenUsage"`

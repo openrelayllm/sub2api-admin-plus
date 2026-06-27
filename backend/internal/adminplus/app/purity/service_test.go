@@ -74,6 +74,10 @@ func TestServiceRunPublicCheck_OpenAICompatible(t *testing.T) {
 		ClientIP:   "203.0.113.10",
 	})
 	require.NoError(t, err)
+	require.Equal(t, AccessModeWeb, report.AccessMode)
+	require.Equal(t, AccessModeWeb, report.AccessModeCompat)
+	require.Equal(t, BillingModeCaptchaRateLimit, report.BillingMode)
+	require.Equal(t, BillingModeCaptchaRateLimit, report.BillingModeCompat)
 	require.Equal(t, VerdictOfficialOpenAI, report.Verdict)
 	require.NotEmpty(t, report.ReportID)
 	require.Equal(t, 100, report.Score)
@@ -98,6 +102,20 @@ func TestServiceRunPublicCheck_OpenAICompatible(t *testing.T) {
 	require.True(t, strings.HasPrefix(report.TokenAudit.PromptCacheKey, "proxyai_best_"))
 	require.Empty(t, report.TokenAudit.Samples[0].PreviousResponseID)
 	require.Equal(t, "resp_audit_1", report.TokenAudit.Samples[1].PreviousResponseID)
+
+	developerReport, err := service.RunDeveloperAPICheck(context.Background(), PublicCheckInput{
+		Provider:       ProviderOpenAI,
+		APIBaseURL:     server.URL,
+		APIKey:         "sk-test",
+		ModelID:        "gpt-5.4",
+		ClientIP:       "203.0.113.10",
+		SkipTokenAudit: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, AccessModeDeveloperAPI, developerReport.AccessMode)
+	require.Equal(t, AccessModeDeveloperAPI, developerReport.AccessModeCompat)
+	require.Equal(t, BillingModeAPIKeyMetered, developerReport.BillingMode)
+	require.Equal(t, BillingModeAPIKeyMetered, developerReport.BillingModeCompat)
 }
 
 func TestTokenAuditPayloadsUseCumulativeCacheShape(t *testing.T) {
@@ -503,6 +521,8 @@ func TestServiceRunPublicCheckStream_ClaudeCompatible(t *testing.T) {
 		events = append(events, event)
 	})
 	require.NoError(t, err)
+	require.Equal(t, AccessModeWeb, report.AccessMode)
+	require.Equal(t, BillingModeCaptchaRateLimit, report.BillingMode)
 	require.Equal(t, ProviderAnthropic, report.Provider)
 	require.Equal(t, VerdictOfficialClaude, report.Verdict)
 	require.Equal(t, 100, report.CompatibilityScore)
@@ -547,6 +567,8 @@ func TestServiceRunAccountCheckStream_InfersClaudeProvider(t *testing.T) {
 		ModelID:   "claude-sonnet-4-6",
 	}, nil)
 	require.NoError(t, err)
+	require.Equal(t, AccessModeAccount, report.AccessMode)
+	require.Equal(t, BillingModeAccountInternal, report.BillingMode)
 	require.Equal(t, ProviderAnthropic, report.Provider)
 	require.Equal(t, VerdictOfficialClaude, report.Verdict)
 	require.Equal(t, CheckStatusPass, findCheck(t, report, "claude_tool_use").Status)
@@ -621,6 +643,10 @@ func TestServiceRunAccountCheckStream_LoadsAccountCredentialAndEmitsProgress(t *
 		events = append(events, event)
 	})
 	require.NoError(t, err)
+	require.Equal(t, AccessModeAccount, report.AccessMode)
+	require.Equal(t, AccessModeAccount, report.AccessModeCompat)
+	require.Equal(t, BillingModeAccountInternal, report.BillingMode)
+	require.Equal(t, BillingModeAccountInternal, report.BillingModeCompat)
 	require.Equal(t, VerdictOfficialOpenAI, report.Verdict)
 	require.Contains(t, eventTypes(events), PublicCheckEventValidation)
 	require.Contains(t, eventTypes(events), PublicCheckEventTokenAuditSample)
