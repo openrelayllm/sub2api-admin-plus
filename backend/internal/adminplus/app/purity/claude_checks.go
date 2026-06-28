@@ -210,13 +210,18 @@ func parseClaudeUsage(body []byte) *TokenUsage {
 	input := usage.Get("input_tokens").Int()
 	output := usage.Get("output_tokens").Int()
 	cacheCreate := usage.Get("cache_creation_input_tokens").Int()
-	cacheRead := usage.Get("cache_read_input_tokens").Int()
+	if cacheCreate <= 0 {
+		cacheCreate = usage.Get("cache_creation.ephemeral_5m_input_tokens").Int() + usage.Get("cache_creation.ephemeral_1h_input_tokens").Int()
+	}
+	cacheRead := firstPositiveUsageInt(usage, "cache_read_input_tokens", "cached_tokens")
 	return &TokenUsage{
-		InputTokens:         input,
-		OutputTokens:        output,
-		TotalTokens:         input + output + cacheCreate + cacheRead,
-		CacheCreationTokens: cacheCreate,
-		CachedTokens:        cacheRead,
+		InputTokens:               input,
+		OutputTokens:              output,
+		TotalTokens:               input + output + cacheCreate + cacheRead,
+		CacheCreationTokens:       cacheCreate,
+		CachedTokens:              cacheRead,
+		CacheCreationFieldPresent: usagePathExists(usage, "cache_creation_input_tokens", "cache_creation.ephemeral_5m_input_tokens", "cache_creation.ephemeral_1h_input_tokens"),
+		CachedTokensFieldPresent:  usagePathExists(usage, "cache_read_input_tokens", "cached_tokens"),
 	}
 }
 

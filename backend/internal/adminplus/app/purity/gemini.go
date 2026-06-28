@@ -2,6 +2,7 @@ package purity
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -82,7 +83,7 @@ func (s *Service) runGeminiCheck(ctx context.Context, in PublicCheckInput, emit 
 		upsertAndEmitValidation(report, emit, skippedValidation("behavior", "行为验证", []string{"tool_call", "streaming"}, "基础连接或鉴权未通过，行为验证未执行"))
 		upsertAndEmitValidation(report, emit, skippedValidation("signature", "签名校验", []string{"usage"}, "基础连接或鉴权未通过，签名校验未执行"))
 		upsertAndEmitValidation(report, emit, skippedValidation("multimodal", "多模态能力", []string{"multimodal"}, "基础连接或鉴权未通过，多模态探测未执行"))
-		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{buildGeminiTokenAuditUnsupportedCheck()}))
+		upsertAndEmitValidation(report, emit, skippedValidation("token_audit", "Token 用量审计", []string{"token_audit"}, "基础连接或鉴权未通过，Token 用量审计未执行"))
 		report.Metrics.ErrorClass, report.Metrics.ErrorMessage = firstProbeError(report.Checks)
 		report.Metrics.LatencyMS = int64(s.currentTime().Sub(startedAt) / time.Millisecond)
 		report.HasVertex = hasVertexFingerprint(report.APIBaseHost, modelsProbe.Headers)
@@ -128,15 +129,56 @@ func (s *Service) runGeminiCheck(ctx context.Context, in PublicCheckInput, emit 
 	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("multimodal", "多模态能力", []CheckResult{multimodalCheck}))
 	emitMetrics(report, emit)
 
-	emitProgress(report, emit, 6, "token_audit")
-	tokenAuditCheck := buildGeminiTokenAuditUnsupportedCheck()
-	appendAndEmitChecks(report, emit, tokenAuditCheck)
-	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
-
 	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, modelsProbe.Headers, generateProbe.Headers, streamProbe.Headers)
 	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, modelsProbe, generateProbe, multimodalProbe), gatewayProbe.Headers, modelsProbe.Headers, generateProbe.Headers, streamProbe.Headers, multimodalProbe.Headers)
 	appendAndEmitModelIdentity(report, emit)
 	appendAndEmitWrapperFingerprint(report, emit)
+
+	if in.SkipTokenAudit {
+		tokenAuditCheck := CheckResult{ID: "token_audit", Name: "Token 用量审计", Status: CheckStatusWarn, Score: 0, MaxScore: 15, Message: "本次请求已关闭 Token 用量审计。", Details: map[string]any{"skipped": true}}
+		appendAndEmitChecks(report, emit, tokenAuditCheck)
+		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
+	} else if generateProbe.StatusCode >= 200 && generateProbe.StatusCode < 300 {
+		emitProgress(report, emit, 6, "token_audit")
+		billingSnapshot := s.captureBillingUsageSnapshotForAudit(checkCtx, client, ProviderGemini, baseURL, apiKey, options)
+		report.TokenAudit = s.runGeminiTokenAudit(checkCtx, client, baseURL, apiKey, model, func(sample TokenAuditSample) {
+			report.TokenAuditPartial = upsertTokenAuditPartial(report.TokenAuditPartial, sample)
+			report.TokenAuditProgress = fmt.Sprintf("%d/%d", len(report.TokenAuditPartial), tokenAuditSamples)
+			emitPublicCheckEvent(emit, PublicCheckEvent{
+				Type:               PublicCheckEventTokenAuditSample,
+				ReportID:           report.ReportID,
+				Status:             report.Status,
+				Step:               report.Step,
+				StepName:           report.StepName,
+				Progress:           report.Progress,
+				Scores:             cloneScores(report.Scores),
+				Sample:             &sample,
+				TokenAuditProgress: report.TokenAuditProgress,
+				TokenAuditPartial:  append([]TokenAuditSample(nil), report.TokenAuditPartial...),
+			})
+		})
+		s.applyTokenAuditBillingMultiplierForAudit(checkCtx, client, ProviderGemini, baseURL, apiKey, report.TokenAudit, billingSnapshot, options)
+		tokenAuditCheck := buildTokenAuditCheck(report.TokenAudit)
+		appendAndEmitChecks(report, emit, tokenAuditCheck)
+		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
+		emitPublicCheckEvent(emit, PublicCheckEvent{
+			Type:               PublicCheckEventTokenAudit,
+			ReportID:           report.ReportID,
+			Status:             report.Status,
+			Step:               report.Step,
+			StepName:           report.StepName,
+			Progress:           report.Progress,
+			Scores:             cloneScores(report.Scores),
+			TokenAudit:         report.TokenAudit,
+			TokenAuditProgress: report.TokenAuditProgress,
+			TokenAuditPartial:  append([]TokenAuditSample(nil), report.TokenAuditPartial...),
+		})
+	} else {
+		tokenAuditCheck := failCheck("token_audit", "Token 用量审计", 15, "GenerateContent 非流式探测未通过，Token 用量审计未执行。", nil)
+		appendAndEmitChecks(report, emit, tokenAuditCheck)
+		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
+	}
+
 	emitProgress(report, emit, 7, "evaluate")
 	report.Metrics.LatencyMS = int64(s.currentTime().Sub(startedAt) / time.Millisecond)
 	s.finalizeAndSave(ctx, report, baseURL)

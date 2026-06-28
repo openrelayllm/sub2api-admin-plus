@@ -41,12 +41,13 @@ const (
 )
 
 type PublicCheckInput struct {
-	Provider       string
-	APIBaseURL     string
-	APIKey         string
-	ModelID        string
-	ClientIP       string
-	SkipTokenAudit bool
+	Provider            string
+	APIBaseURL          string
+	APIKey              string
+	ModelID             string
+	ClientIP            string
+	SkipTokenAudit      bool
+	AllowPrivateBaseURL bool
 }
 
 type AccountCheckInput struct {
@@ -203,83 +204,109 @@ type PublicCheckMetrics struct {
 }
 
 type TokenUsage struct {
-	InputTokens         int64 `json:"input_tokens"`
-	OutputTokens        int64 `json:"output_tokens"`
-	TotalTokens         int64 `json:"total_tokens"`
-	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
-	CachedTokens        int64 `json:"cached_tokens,omitempty"`
-	ReasoningTokens     int64 `json:"reasoning_tokens,omitempty"`
+	InputTokens               int64 `json:"input_tokens"`
+	OutputTokens              int64 `json:"output_tokens"`
+	TotalTokens               int64 `json:"total_tokens"`
+	CacheCreationTokens       int64 `json:"cache_creation_tokens,omitempty"`
+	CachedTokens              int64 `json:"cached_tokens,omitempty"`
+	CachedTokensFieldPresent  bool  `json:"cached_tokens_present,omitempty"`
+	CacheCreationFieldPresent bool  `json:"cache_creation_tokens_present,omitempty"`
+	ReasoningTokens           int64 `json:"reasoning_tokens,omitempty"`
 }
 
 type TokenAuditReport struct {
-	Status               string             `json:"status"`
-	Summary              string             `json:"summary"`
-	PriceSource          string             `json:"price_source"`
-	OfficialBaselineUSD  float64            `json:"official_baseline_usd"`
-	UncachedBaselineUSD  float64            `json:"uncached_baseline_usd,omitempty"`
-	BaselineTotalCostUSD float64            `json:"baseline_total_cost_usd,omitempty"`
-	BaselineTotalCost    float64            `json:"baselineTotalCost,omitempty"`
-	ActualCostUSD        float64            `json:"actual_cost_usd"`
-	TotalCostUSD         float64            `json:"total_cost,omitempty"`
-	TotalCost            float64            `json:"totalCost,omitempty"`
-	Multiplier           float64            `json:"multiplier"`
-	OverallRatio         float64            `json:"overall_ratio,omitempty"`
-	OverallRatioCompat   float64            `json:"overallRatio,omitempty"`
-	CacheHitRate         float64            `json:"cache_hit_rate"`
-	CacheHitRatePercent  float64            `json:"cacheHitRate,omitempty"`
-	InputTokens          int64              `json:"input_tokens"`
-	OutputTokens         int64              `json:"output_tokens"`
-	CacheCreationTokens  int64              `json:"cache_creation_tokens"`
-	CachedTokens         int64              `json:"cached_tokens"`
-	SampleCount          int                `json:"sample_count"`
-	PromptCacheKey       string             `json:"prompt_cache_key,omitempty"`
-	StoreEnabled         bool               `json:"store_enabled,omitempty"`
-	StatefulRounds       int                `json:"stateful_rounds,omitempty"`
-	PreviousChainOK      bool               `json:"previous_response_chain_ok,omitempty"`
-	Anomalies            []string           `json:"anomalies,omitempty"`
-	Samples              []TokenAuditSample `json:"samples"`
-	Rows                 []TokenAuditSample `json:"rows,omitempty"`
+	Status                        string             `json:"status"`
+	Summary                       string             `json:"summary"`
+	PriceSource                   string             `json:"price_source"`
+	OfficialBaselineUSD           float64            `json:"official_baseline_usd"`
+	UncachedBaselineUSD           float64            `json:"uncached_baseline_usd,omitempty"`
+	BaselineTotalCostUSD          float64            `json:"baseline_total_cost_usd,omitempty"`
+	BaselineTotalCost             float64            `json:"baselineTotalCost,omitempty"`
+	ActualCostUSD                 float64            `json:"actual_cost_usd"`
+	TotalCostUSD                  float64            `json:"total_cost,omitempty"`
+	TotalCost                     float64            `json:"totalCost,omitempty"`
+	Multiplier                    float64            `json:"multiplier"`
+	OverallRatio                  float64            `json:"overall_ratio,omitempty"`
+	OverallRatioCompat            float64            `json:"overallRatio,omitempty"`
+	BillingMultiplier             *float64           `json:"billing_multiplier,omitempty"`
+	BillingMultiplierCompat       *float64           `json:"billingMultiplier,omitempty"`
+	BillingMultiplierSource       string             `json:"billing_multiplier_source,omitempty"`
+	BillingMultiplierSourceCompat string             `json:"billingMultiplierSource,omitempty"`
+	CacheHitRate                  float64            `json:"cache_hit_rate"`
+	CacheHitRatePercent           float64            `json:"cacheHitRate,omitempty"`
+	InputTokens                   int64              `json:"input_tokens"`
+	OutputTokens                  int64              `json:"output_tokens"`
+	CacheCreationTokens           int64              `json:"cache_creation_tokens"`
+	CachedTokens                  int64              `json:"cached_tokens"`
+	CachedTokensFieldObserved     bool               `json:"cached_tokens_field_observed,omitempty"`
+	CacheCreationFieldObserved    bool               `json:"cache_creation_field_observed,omitempty"`
+	CacheReadFieldObserved        bool               `json:"cache_read_field_observed,omitempty"`
+	CacheProbeRounds              int                `json:"cache_probe_rounds,omitempty"`
+	CacheProbeHits                int                `json:"cache_probe_hits,omitempty"`
+	ContextReplayRounds           int                `json:"context_replay_rounds,omitempty"`
+	ContextReplayLinks            int                `json:"context_replay_links,omitempty"`
+	ContextReplayLinksExpected    int                `json:"context_replay_links_expected,omitempty"`
+	ContextReplayOK               bool               `json:"context_replay_ok,omitempty"`
+	HistoryReplayRounds           int                `json:"history_replay_rounds,omitempty"`
+	HistoryReplayLinks            int                `json:"history_replay_links,omitempty"`
+	HistoryReplayLinksExpected    int                `json:"history_replay_links_expected,omitempty"`
+	HistoryReplayOK               bool               `json:"history_replay_ok,omitempty"`
+	SampleCount                   int                `json:"sample_count"`
+	PromptCacheKey                string             `json:"prompt_cache_key,omitempty"`
+	StoreEnabled                  bool               `json:"store_enabled,omitempty"`
+	StatefulRounds                int                `json:"stateful_rounds,omitempty"`
+	PreviousChainOK               bool               `json:"previous_response_chain_ok,omitempty"`
+	Anomalies                     []string           `json:"anomalies,omitempty"`
+	Samples                       []TokenAuditSample `json:"samples"`
+	Rows                          []TokenAuditSample `json:"rows,omitempty"`
 }
 
 type TokenAuditSample struct {
-	Index                    int     `json:"index"`
-	Round                    int     `json:"round,omitempty"`
-	InputTokens              int64   `json:"input_tokens"`
-	BaselineInputTokens      int64   `json:"baseline_input_tokens,omitempty"`
-	InputDeltaPct            float64 `json:"input_delta_pct,omitempty"`
-	OutputTokens             int64   `json:"output_tokens"`
-	BaselineOutputTokens     int64   `json:"baseline_output_tokens,omitempty"`
-	OutputDeltaPct           float64 `json:"output_delta_pct,omitempty"`
-	UncachedInputTokens      int64   `json:"uncached_input_tokens"`
-	CacheCreationTokens      int64   `json:"cache_creation_tokens"`
-	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens,omitempty"`
-	BaselineCacheCreation    int64   `json:"baseline_cache_creation_input_tokens,omitempty"`
-	CacheCreationDeltaPct    float64 `json:"cache_creation_delta_pct,omitempty"`
-	CachedTokens             int64   `json:"cached_tokens"`
-	CacheReadInputTokens     int64   `json:"cache_read_input_tokens,omitempty"`
-	BaselineCacheRead        int64   `json:"baseline_cache_read_input_tokens,omitempty"`
-	CacheReadDeltaPct        float64 `json:"cache_read_delta_pct,omitempty"`
-	ReasoningTokens          int64   `json:"reasoning_tokens,omitempty"`
-	TotalTokens              int64   `json:"total_tokens"`
-	OfficialBaselineUSD      float64 `json:"official_baseline_usd"`
-	UncachedBaselineUSD      float64 `json:"uncached_baseline_usd,omitempty"`
-	CacheDiscountUSD         float64 `json:"cache_discount_usd,omitempty"`
-	BaselineCostUSD          float64 `json:"baseline_cost,omitempty"`
-	ActualCostUSD            float64 `json:"actual_cost_usd"`
-	CostUSD                  float64 `json:"cost,omitempty"`
-	CostDeltaPct             float64 `json:"cost_delta_pct,omitempty"`
-	Multiplier               float64 `json:"multiplier"`
-	Ratio                    float64 `json:"ratio,omitempty"`
-	LatencyMS                int64   `json:"latency_ms"`
-	Status                   string  `json:"status"`
-	StatusCode               int     `json:"status_code,omitempty"`
-	ErrorClass               string  `json:"error_class,omitempty"`
-	ErrorMessage             string  `json:"error_message,omitempty"`
-	ResponseID               string  `json:"response_id,omitempty"`
-	PreviousResponseID       string  `json:"previous_response_id,omitempty"`
-	PromptCacheKey           string  `json:"prompt_cache_key,omitempty"`
-	Store                    bool    `json:"store,omitempty"`
-	StateLinked              bool    `json:"state_linked,omitempty"`
+	Index                     int     `json:"index"`
+	Round                     int     `json:"round,omitempty"`
+	InputTokens               int64   `json:"input_tokens"`
+	BaselineInputTokens       int64   `json:"baseline_input_tokens,omitempty"`
+	InputDeltaPct             float64 `json:"input_delta_pct,omitempty"`
+	OutputTokens              int64   `json:"output_tokens"`
+	BaselineOutputTokens      int64   `json:"baseline_output_tokens,omitempty"`
+	OutputDeltaPct            float64 `json:"output_delta_pct,omitempty"`
+	UncachedInputTokens       int64   `json:"uncached_input_tokens"`
+	CacheCreationTokens       int64   `json:"cache_creation_tokens"`
+	CacheCreationInputTokens  int64   `json:"cache_creation_input_tokens,omitempty"`
+	CacheCreationFieldPresent bool    `json:"cache_creation_tokens_present,omitempty"`
+	BaselineCacheCreation     int64   `json:"baseline_cache_creation_input_tokens,omitempty"`
+	CacheCreationDeltaPct     float64 `json:"cache_creation_delta_pct,omitempty"`
+	CachedTokens              int64   `json:"cached_tokens"`
+	CacheReadInputTokens      int64   `json:"cache_read_input_tokens,omitempty"`
+	CachedTokensFieldPresent  bool    `json:"cached_tokens_present,omitempty"`
+	BaselineCacheRead         int64   `json:"baseline_cache_read_input_tokens,omitempty"`
+	CacheReadDeltaPct         float64 `json:"cache_read_delta_pct,omitempty"`
+	ReasoningTokens           int64   `json:"reasoning_tokens,omitempty"`
+	TotalTokens               int64   `json:"total_tokens"`
+	OfficialBaselineUSD       float64 `json:"official_baseline_usd"`
+	UncachedBaselineUSD       float64 `json:"uncached_baseline_usd,omitempty"`
+	CacheDiscountUSD          float64 `json:"cache_discount_usd,omitempty"`
+	BaselineCostUSD           float64 `json:"baseline_cost,omitempty"`
+	ActualCostUSD             float64 `json:"actual_cost_usd"`
+	CostUSD                   float64 `json:"cost,omitempty"`
+	CostDeltaPct              float64 `json:"cost_delta_pct,omitempty"`
+	Multiplier                float64 `json:"multiplier"`
+	Ratio                     float64 `json:"ratio,omitempty"`
+	LatencyMS                 int64   `json:"latency_ms"`
+	Status                    string  `json:"status"`
+	StatusCode                int     `json:"status_code,omitempty"`
+	ErrorClass                string  `json:"error_class,omitempty"`
+	ErrorMessage              string  `json:"error_message,omitempty"`
+	ResponseID                string  `json:"response_id,omitempty"`
+	PreviousResponseID        string  `json:"previous_response_id,omitempty"`
+	PromptCacheKey            string  `json:"prompt_cache_key,omitempty"`
+	Store                     bool    `json:"store,omitempty"`
+	StateLinked               bool    `json:"state_linked,omitempty"`
+	RequestMode               string  `json:"request_mode,omitempty"`
+	Retried                   bool    `json:"retried,omitempty"`
+	HistoryMessages           int     `json:"history_messages,omitempty"`
+	SystemCacheControlBlocks  int     `json:"system_cache_control_blocks,omitempty"`
+	MessageCacheControlBlocks int     `json:"message_cache_control_blocks,omitempty"`
 }
 
 type PublicReportRecord struct {

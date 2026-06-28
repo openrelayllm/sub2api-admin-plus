@@ -18,7 +18,17 @@ type tokenAuditProbeResult struct {
 	previousResponseID string
 	promptCacheKey     string
 	store              bool
+	requestMode        string
+	retried            bool
 }
+
+const (
+	openAITokenAuditModeCacheProbe    = "cache_probe"
+	openAITokenAuditModeStateful      = "stateful"
+	openAITokenAuditModeContextReplay = "context_replay"
+	openAITokenAuditModeMinimalRetry  = "minimal_retry"
+	openAITokenAuditCacheProbeRounds  = 8
+)
 
 func (s *Service) runTokenAudit(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, emitSample func(TokenAuditSample)) *TokenAuditReport {
 	pricing := openAIModelPricingFor(model)
@@ -44,10 +54,9 @@ func (s *Service) runTokenAudit(ctx context.Context, client *http.Client, baseUR
 			return report
 		default:
 		}
-		roundCtx, cancelRound := context.WithTimeout(auditCtx, tokenAuditRoundTimeout)
-		probeResult := s.probeResponsesAudit(roundCtx, client, baseURL, apiKey, model, i, auditNonce, previousResponseID, promptCacheKey)
-		cancelRound()
-		sample := tokenAuditSampleFromProbe(i, probeResult.probe, pricing, probeResult.previousResponseID, probeResult.promptCacheKey, probeResult.store)
+		probeResult := s.probeResponsesAudit(auditCtx, client, baseURL, apiKey, model, i, auditNonce, previousResponseID, promptCacheKey)
+		sample := tokenAuditSampleFromProbe(i, probeResult.probe, pricing, probeResult.previousResponseID, probeResult.promptCacheKey, probeResult.store, probeResult.requestMode)
+		sample.Retried = probeResult.retried
 		report.Samples = append(report.Samples, sample)
 		if sample.PromptCacheKey != "" {
 			report.PromptCacheKey = sample.PromptCacheKey
@@ -65,65 +74,79 @@ func (s *Service) runTokenAudit(ctx context.Context, client *http.Client, baseUR
 		report.OutputTokens += sample.OutputTokens
 		report.CacheCreationTokens += sample.CacheCreationTokens
 		report.CachedTokens += sample.CachedTokens
+		if sample.CacheCreationFieldPresent {
+			report.CacheCreationFieldObserved = true
+		}
+		if sample.CachedTokensFieldPresent {
+			report.CachedTokensFieldObserved = true
+		}
 		totalOfficial += sample.OfficialBaselineUSD
 		totalActual += sample.ActualCostUSD
 		totalUncached += sample.UncachedBaselineUSD
-		if sample.StateLinked {
+		if sample.RequestMode == openAITokenAuditModeCacheProbe {
+			report.CacheProbeRounds++
+			if sample.CachedTokens > 0 {
+				report.CacheProbeHits++
+			}
+		}
+		if sample.StateLinked && openAITokenAuditModeCarriesContext(sample.RequestMode) {
 			report.StatefulRounds++
 		}
-		if sample.ResponseID != "" {
+		if sample.RequestMode == openAITokenAuditModeStateful && sample.Store && sample.ResponseID != "" {
 			previousResponseID = sample.ResponseID
 		}
 	}
 	report.OfficialBaselineUSD = roundMoney(totalOfficial)
 	report.ActualCostUSD = roundMoney(totalActual)
 	report.UncachedBaselineUSD = roundMoney(totalUncached)
+	inferOpenAICacheCreationFromReads(report)
 	finalizeOpenAITokenAudit(report)
 	return report
 }
 
 func (s *Service) probeResponsesAudit(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, round int, auditNonce string, previousResponseID string, promptCacheKey string) tokenAuditProbeResult {
+	mode := openAITokenAuditRequestMode(round)
 	body := responsesAuditProbePayload(model, round, auditNonce, previousResponseID, promptCacheKey)
-	probe := s.doJSON(ctx, client, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/responses"), apiKey, body, "application/json")
+	roundCtx, cancelRound := context.WithTimeout(ctx, tokenAuditRoundTimeout)
+	probe := s.doJSON(roundCtx, client, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/responses"), apiKey, body, "application/json")
+	cancelRound()
 	if shouldRetryOpenAITokenAuditMinimal(probe) {
-		fallbackProbe := s.doJSON(ctx, client, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/responses"), apiKey, responsesAuditMinimalProbePayload(model, round, auditNonce), "application/json")
-		return tokenAuditProbeResult{probe: fallbackProbe}
+		fallbackCtx, cancelFallback := context.WithTimeout(ctx, tokenAuditRoundTimeout)
+		fallbackProbe := s.doJSON(fallbackCtx, client, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/responses"), apiKey, responsesAuditMinimalProbePayload(model, round, auditNonce), "application/json")
+		cancelFallback()
+		return tokenAuditProbeResult{probe: fallbackProbe, requestMode: openAITokenAuditModeMinimalRetry, retried: true}
 	}
 	return tokenAuditProbeResult{
 		probe:              probe,
-		previousResponseID: strings.TrimSpace(previousResponseID),
+		previousResponseID: openAITokenAuditPreviousResponseID(mode, previousResponseID),
 		promptCacheKey:     strings.TrimSpace(promptCacheKey),
-		store:              true,
+		store:              mode == openAITokenAuditModeStateful,
+		requestMode:        mode,
 	}
 }
 
 func responsesAuditProbePayload(model string, round int, auditNonce string, previousResponseID string, promptCacheKey string) []byte {
-	return responsesAuditProbePayloadWithOptions(model, round, auditNonce, previousResponseID, promptCacheKey, true)
+	mode := openAITokenAuditRequestMode(round)
+	return responsesAuditProbePayloadWithMode(model, round, auditNonce, previousResponseID, promptCacheKey, mode)
 }
 
 func responsesAuditMinimalProbePayload(model string, round int, auditNonce string) []byte {
-	return responsesAuditProbePayloadWithOptions(model, round, auditNonce, "", "", false)
+	return responsesAuditProbePayloadWithMode(model, round, auditNonce, "", "", openAITokenAuditModeMinimalRetry)
 }
 
-func responsesAuditProbePayloadWithOptions(model string, round int, auditNonce string, previousResponseID string, promptCacheKey string, stateful bool) []byte {
+func responsesAuditProbePayloadWithMode(model string, round int, auditNonce string, previousResponseID string, promptCacheKey string, mode string) []byte {
 	if strings.TrimSpace(model) == "" {
 		model = openai.DefaultTestModel
 	}
+	instructions, inputText := openAITokenAuditPromptParts(round, auditNonce, mode)
 	bodyMap := map[string]any{
-		"model":        model,
-		"instructions": openAITokenAuditInstructions(auditNonce),
-		"input": []map[string]any{
-			{
-				"role": "user",
-				"content": []map[string]any{
-					{"type": "input_text", "text": openAITokenAuditRoundInput(round, auditNonce)},
-				},
-			},
-		},
+		"model":             model,
+		"instructions":      instructions,
+		"input":             openAITokenAuditInputItems(round, auditNonce, mode, inputText),
 		"max_output_tokens": tokenAuditOutputBudget(round),
 		"stream":            false,
 	}
-	if stateful {
+	if mode == openAITokenAuditModeStateful {
 		bodyMap["store"] = true
 		if strings.TrimSpace(promptCacheKey) != "" {
 			bodyMap["prompt_cache_key"] = strings.TrimSpace(promptCacheKey)
@@ -131,13 +154,73 @@ func responsesAuditProbePayloadWithOptions(model string, round int, auditNonce s
 		if strings.TrimSpace(previousResponseID) != "" {
 			bodyMap["previous_response_id"] = strings.TrimSpace(previousResponseID)
 		}
+	} else if mode == openAITokenAuditModeCacheProbe || mode == openAITokenAuditModeContextReplay {
+		if strings.TrimSpace(promptCacheKey) != "" {
+			bodyMap["prompt_cache_key"] = strings.TrimSpace(promptCacheKey)
+		}
 	}
 	body, _ := json.Marshal(bodyMap)
 	return body
 }
 
+func openAITokenAuditInputItems(round int, auditNonce string, mode string, inputText string) []map[string]any {
+	if mode != openAITokenAuditModeContextReplay {
+		return []map[string]any{openAIResponsesTextMessage("user", "input_text", inputText)}
+	}
+	round = clampAuditRound(round)
+	items := make([]map[string]any, 0, (round-openAITokenAuditCacheProbeRounds)*2-1)
+	for i := openAITokenAuditCacheProbeRounds + 1; i < round; i++ {
+		items = append(items,
+			openAIResponsesTextMessage("user", "input_text", openAITokenAuditRoundInput(i, auditNonce)),
+			openAIResponsesTextMessage("assistant", "output_text", openAITokenAuditAssistantMemory(i, auditNonce)),
+		)
+	}
+	items = append(items, openAIResponsesTextMessage("user", "input_text", inputText))
+	return items
+}
+
+func openAIResponsesTextMessage(role string, contentType string, text string) map[string]any {
+	return map[string]any{
+		"type": "message",
+		"role": role,
+		"content": []map[string]any{
+			{"type": contentType, "text": text},
+		},
+	}
+}
+
+func openAITokenAuditRequestMode(round int) string {
+	if clampAuditRound(round) <= openAITokenAuditCacheProbeRounds {
+		return openAITokenAuditModeCacheProbe
+	}
+	return openAITokenAuditModeContextReplay
+}
+
+func openAITokenAuditPreviousResponseID(mode string, previousResponseID string) string {
+	if mode != openAITokenAuditModeStateful {
+		return ""
+	}
+	return strings.TrimSpace(previousResponseID)
+}
+
+func openAITokenAuditModeCarriesContext(mode string) bool {
+	return mode == openAITokenAuditModeContextReplay || mode == openAITokenAuditModeStateful
+}
+
+func openAITokenAuditSampleCarriesContext(sample TokenAuditSample) bool {
+	switch sample.RequestMode {
+	case openAITokenAuditModeContextReplay:
+		return sample.Round > openAITokenAuditCacheProbeRounds+1
+	case openAITokenAuditModeStateful:
+		return sample.PreviousResponseID != "" && sample.ResponseID != ""
+	default:
+		return false
+	}
+}
+
 func shouldRetryOpenAITokenAuditMinimal(probe httpProbe) bool {
-	return probe.StatusCode == http.StatusBadRequest || probe.StatusCode == http.StatusUnprocessableEntity
+	return probe.StatusCode == http.StatusBadRequest ||
+		probe.StatusCode == http.StatusUnprocessableEntity
 }
 
 type openAIModelPricing struct {
@@ -315,7 +398,7 @@ func openAIModelPricingTable() map[string]openAIModelPricing {
 	}
 }
 
-func tokenAuditSampleFromProbe(index int, probe httpProbe, pricing openAIModelPricing, previousResponseID string, promptCacheKey string, store bool) TokenAuditSample {
+func tokenAuditSampleFromProbe(index int, probe httpProbe, pricing openAIModelPricing, previousResponseID string, promptCacheKey string, store bool, requestMode string) TokenAuditSample {
 	sample := TokenAuditSample{
 		Index:              index,
 		Round:              index,
@@ -327,6 +410,7 @@ func tokenAuditSampleFromProbe(index int, probe httpProbe, pricing openAIModelPr
 		PreviousResponseID: strings.TrimSpace(previousResponseID),
 		PromptCacheKey:     strings.TrimSpace(promptCacheKey),
 		Store:              store,
+		RequestMode:        requestMode,
 	}
 	if probe.StatusCode < 200 || probe.StatusCode >= 300 {
 		applyTokenAuditProbeFailure(&sample, probe, "Responses 用量审计请求未成功")
@@ -343,15 +427,17 @@ func tokenAuditSampleFromProbe(index int, probe httpProbe, pricing openAIModelPr
 	sample.CacheCreationTokens = usage.CacheCreationTokens
 	sample.CacheReadInputTokens = usage.CachedTokens
 	sample.CacheCreationInputTokens = usage.CacheCreationTokens
+	sample.CachedTokensFieldPresent = usage.CachedTokensFieldPresent
+	sample.CacheCreationFieldPresent = usage.CacheCreationFieldPresent
 	sample.UncachedInputTokens = maxInt64(0, usage.InputTokens-usage.CachedTokens)
 	sample.ReasoningTokens = usage.ReasoningTokens
 	sample.TotalTokens = usage.TotalTokens
 	sample.ResponseID = strings.TrimSpace(gjson.GetBytes(probe.Body, "id").String())
-	sample.StateLinked = sample.PreviousResponseID != "" && sample.ResponseID != ""
+	sample.StateLinked = openAITokenAuditSampleCarriesContext(sample)
 	sample.UncachedBaselineUSD = roundMoney(tokenCost(usage, pricing, false))
-	sample.OfficialBaselineUSD = roundMoney(tokenCost(usage, pricing, true))
+	sample.OfficialBaselineUSD = sample.UncachedBaselineUSD
 	sample.BaselineCostUSD = sample.OfficialBaselineUSD
-	sample.ActualCostUSD = sample.OfficialBaselineUSD
+	sample.ActualCostUSD = roundMoney(tokenCost(usage, pricing, true))
 	sample.CostUSD = sample.ActualCostUSD
 	if sample.UncachedBaselineUSD > sample.ActualCostUSD {
 		sample.CacheDiscountUSD = roundMoney(sample.UncachedBaselineUSD - sample.ActualCostUSD)
@@ -363,6 +449,59 @@ func tokenAuditSampleFromProbe(index int, probe httpProbe, pricing openAIModelPr
 	sample.Status = CheckStatusPass
 	applyTokenAuditSampleDerivedFields(&sample)
 	return sample
+}
+
+func inferOpenAICacheCreationFromReads(report *TokenAuditReport) {
+	if report == nil || len(report.Samples) == 0 {
+		return
+	}
+	for i := 0; i < len(report.Samples)-1; i++ {
+		current := &report.Samples[i]
+		next := report.Samples[i+1]
+		if current.Status != CheckStatusPass || next.Status != CheckStatusPass {
+			continue
+		}
+		if current.RequestMode != openAITokenAuditModeCacheProbe || next.RequestMode != openAITokenAuditModeCacheProbe {
+			continue
+		}
+		if current.CacheCreationInputTokens > 0 || current.CacheCreationTokens > 0 {
+			continue
+		}
+		if next.CacheReadInputTokens <= 0 {
+			continue
+		}
+		current.CacheCreationInputTokens = next.CacheReadInputTokens
+		current.CacheCreationTokens = next.CacheReadInputTokens
+	}
+	recomputeTokenAuditTotals(report)
+}
+
+func recomputeTokenAuditTotals(report *TokenAuditReport) {
+	if report == nil {
+		return
+	}
+	report.InputTokens = 0
+	report.OutputTokens = 0
+	report.CacheCreationTokens = 0
+	report.CachedTokens = 0
+	report.OfficialBaselineUSD = 0
+	report.ActualCostUSD = 0
+	report.UncachedBaselineUSD = 0
+	for _, sample := range report.Samples {
+		if sample.Status != CheckStatusPass {
+			continue
+		}
+		report.InputTokens += sample.InputTokens
+		report.OutputTokens += sample.OutputTokens
+		report.CacheCreationTokens += sample.CacheCreationTokens
+		report.CachedTokens += sample.CachedTokens
+		report.OfficialBaselineUSD += sample.OfficialBaselineUSD
+		report.ActualCostUSD += sample.ActualCostUSD
+		report.UncachedBaselineUSD += sample.UncachedBaselineUSD
+	}
+	report.OfficialBaselineUSD = roundMoney(report.OfficialBaselineUSD)
+	report.ActualCostUSD = roundMoney(report.ActualCostUSD)
+	report.UncachedBaselineUSD = roundMoney(report.UncachedBaselineUSD)
 }
 
 func applyTokenAuditProbeFailure(sample *TokenAuditSample, probe httpProbe, fallbackMessage string) {
@@ -489,24 +628,107 @@ func finalizeOpenAITokenAudit(report *TokenAuditReport) {
 	if report == nil || report.SampleCount == 0 || report.Status == CheckStatusFail {
 		return
 	}
-	expectedStatefulRounds := maxInt(0, minInt(tokenAuditSamples, report.SampleCount)-1)
-	report.PreviousChainOK = expectedStatefulRounds == 0 || report.StatefulRounds >= expectedStatefulRounds
-	if !report.PreviousChainOK {
-		report.Status = CheckStatusWarn
-		report.Summary = "Responses 状态链路不完整"
-		report.Anomalies = appendUniqueString(report.Anomalies, "previous_response_chain_incomplete")
-	}
-	if report.CachedTokens == 0 {
-		report.Status = CheckStatusWarn
-		if report.PreviousChainOK {
-			report.Summary = "状态链路正常，但未观察到 cached_tokens"
+	stats := openAITokenAuditStatsFromSamples(report.Samples)
+	if stats.cacheProbeRounds > 0 {
+		report.CacheProbeRounds = stats.cacheProbeRounds
+		report.CacheProbeHits = stats.cacheProbeHits
+		report.CacheHitRate = 0
+		if stats.cacheProbeInputTokens > 0 {
+			report.CacheHitRate = roundRatio(float64(stats.cacheProbeCachedTokens) / float64(stats.cacheProbeInputTokens))
 		}
+		report.CacheHitRatePercent = math.Round(report.CacheHitRate * 100)
+	}
+	report.CachedTokensFieldObserved = stats.cachedTokensFieldObserved
+	report.ContextReplayRounds = stats.contextReplayPassedRounds
+	report.ContextReplayLinks = stats.contextReplayLinkedRounds
+	report.ContextReplayLinksExpected = openAITokenAuditExpectedContextReplayLinks(stats.contextReplayAttemptedRounds)
+	report.ContextReplayOK = report.ContextReplayLinksExpected == 0 || report.ContextReplayLinks >= report.ContextReplayLinksExpected
+	report.StatefulRounds = report.ContextReplayLinks
+	report.PreviousChainOK = report.ContextReplayOK
+	if !report.ContextReplayOK {
+		report.Status = CheckStatusWarn
+		report.Summary = "Responses 上下文重放不完整"
+		report.Anomalies = appendUniqueString(report.Anomalies, "context_replay_incomplete")
+	}
+	if stats.cacheProbeRounds > 0 && !stats.cachedTokensFieldObserved {
+		report.Status = CheckStatusWarn
+		report.Summary = "Responses usage 未返回 cached_tokens 字段"
 		report.Anomalies = appendUniqueString(report.Anomalies, "cached_tokens_missing")
+	}
+	if stats.minimalRetryRounds > 0 {
+		report.Status = CheckStatusWarn
+		if !strings.Contains(report.Summary, "第 ") {
+			report.Summary = "Responses 扩展参数不兼容，已降级为 minimal retry"
+		}
+		report.Anomalies = appendUniqueString(report.Anomalies, "responses_audit_minimal_retry")
+	}
+	if report.Status == CheckStatusPass && stats.cacheProbeRounds > 0 {
+		if stats.cacheProbeHits > 0 {
+			report.Summary = "用量正常，已观察到 OpenAI cached_tokens"
+		} else if stats.cachedTokensFieldObserved {
+			report.Summary = "用量正常，本次未观察到 OpenAI 自动缓存命中"
+		}
 	}
 	if report.UncachedBaselineUSD > 0 && report.ActualCostUSD > 0 {
 		report.OverallRatio = roundRatio(report.ActualCostUSD / report.UncachedBaselineUSD)
 		report.OverallRatioCompat = report.OverallRatio
 	}
+}
+
+type openAITokenAuditStats struct {
+	cacheProbeRounds             int
+	cacheProbeHits               int
+	cacheProbeInputTokens        int64
+	cacheProbeCachedTokens       int64
+	statefulPassedRounds         int
+	statefulLinkedRounds         int
+	contextReplayAttemptedRounds int
+	contextReplayPassedRounds    int
+	contextReplayLinkedRounds    int
+	minimalRetryRounds           int
+	cachedTokensFieldObserved    bool
+}
+
+func openAITokenAuditStatsFromSamples(samples []TokenAuditSample) openAITokenAuditStats {
+	var stats openAITokenAuditStats
+	for _, sample := range samples {
+		if sample.CachedTokensFieldPresent {
+			stats.cachedTokensFieldObserved = true
+		}
+		if sample.RequestMode == openAITokenAuditModeContextReplay {
+			stats.contextReplayAttemptedRounds++
+		}
+		if sample.RequestMode == openAITokenAuditModeMinimalRetry {
+			stats.minimalRetryRounds++
+		}
+		if sample.Status != CheckStatusPass {
+			continue
+		}
+		switch sample.RequestMode {
+		case openAITokenAuditModeCacheProbe:
+			stats.cacheProbeRounds++
+			stats.cacheProbeInputTokens += sample.InputTokens
+			stats.cacheProbeCachedTokens += sample.CachedTokens
+			if sample.CachedTokens > 0 {
+				stats.cacheProbeHits++
+			}
+		case openAITokenAuditModeContextReplay:
+			stats.contextReplayPassedRounds++
+			if sample.StateLinked {
+				stats.contextReplayLinkedRounds++
+			}
+		case openAITokenAuditModeStateful:
+			stats.statefulPassedRounds++
+			if sample.StateLinked {
+				stats.statefulLinkedRounds++
+			}
+		}
+	}
+	return stats
+}
+
+func openAITokenAuditExpectedContextReplayLinks(attemptedRounds int) int {
+	return maxInt(0, attemptedRounds-1)
 }
 
 func applyTokenAuditSampleDerivedFields(sample *TokenAuditSample) {
@@ -538,26 +760,55 @@ func roundDeltaPercent(actual float64, baseline float64) float64 {
 }
 
 func openAITokenAuditPrompt(round int, auditNonce string) string {
+	instructions, inputText := openAITokenAuditPromptParts(round, auditNonce, openAITokenAuditModeCacheProbe)
 	return strings.Join([]string{
-		openAITokenAuditInstructions(auditNonce),
-		auditCumulativeRoundText(round),
-		tokenAuditRoundInstruction(round),
+		instructions,
+		inputText,
 	}, "\n\n")
+}
+
+func openAITokenAuditPromptParts(round int, auditNonce string, mode string) (string, string) {
+	switch mode {
+	case openAITokenAuditModeCacheProbe:
+		return openAITokenAuditInstructions(auditNonce), openAITokenAuditCacheProbeInput(round, auditNonce)
+	case openAITokenAuditModeStateful:
+		return openAITokenAuditStatefulInstructions(auditNonce), openAITokenAuditRoundInput(round, auditNonce)
+	default:
+		return openAITokenAuditMinimalInstructions(auditNonce), tokenAuditRoundInstruction(round)
+	}
 }
 
 func openAITokenAuditInstructions(auditNonce string) string {
 	return strings.Join([]string{
-		"proxyai.best OpenAI token audit. Keep responses concise and do not call tools unless explicitly requested. audit_nonce=" + auditNonce,
+		"proxyai.best OpenAI token audit cache probe. Keep responses concise and do not call tools unless explicitly requested. audit_nonce=" + auditNonce,
 		auditStableCacheText(auditNonce),
+	}, "\n\n")
+}
+
+func openAITokenAuditStatefulInstructions(auditNonce string) string {
+	return "proxyai.best OpenAI token audit context replay probe. Keep responses concise and use the prior messages included in input. audit_nonce=" + auditNonce
+}
+
+func openAITokenAuditMinimalInstructions(auditNonce string) string {
+	return "proxyai.best OpenAI token audit minimal usage probe. Keep responses concise. audit_nonce=" + auditNonce
+}
+
+func openAITokenAuditCacheProbeInput(round int, auditNonce string) string {
+	return strings.Join([]string{
+		"Responses cache audit. The long prefix is intentionally stable; only this short suffix changes. audit_nonce=" + auditNonce,
+		tokenAuditRoundInstruction(round),
 	}, "\n\n")
 }
 
 func openAITokenAuditRoundInput(round int, auditNonce string) string {
 	return strings.Join([]string{
-		fmt.Sprintf("Responses stateful audit round %02d. Use the prior response context when previous_response_id is present. audit_nonce=%s", clampAuditRound(round), auditNonce),
-		auditRoundCacheText(round),
+		fmt.Sprintf("Responses context replay audit round %02d. Use the prior messages already included in input. audit_nonce=%s", clampAuditRound(round), auditNonce),
 		tokenAuditRoundInstruction(round),
 	}, "\n\n")
+}
+
+func openAITokenAuditAssistantMemory(round int, auditNonce string) string {
+	return fmt.Sprintf("context replay memory round %02d acknowledged for audit_nonce=%s", clampAuditRound(round), auditNonce)
 }
 
 func openAITokenAuditPromptCacheKey(model string, auditNonce string) string {

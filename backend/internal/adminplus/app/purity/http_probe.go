@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -56,14 +57,7 @@ func (s *Service) doJSONWithHeaders(ctx context.Context, client *http.Client, me
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		errorClass := "network_error"
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			if ctxErr == context.DeadlineExceeded {
-				errorClass = "context_deadline_exceeded"
-			} else {
-				errorClass = "request_canceled"
-			}
-		}
+		errorClass := errorClassForRequestError(ctx, err)
 		return httpProbe{
 			LatencyMS:    int64(s.currentTime().Sub(started) / time.Millisecond),
 			ErrorClass:   errorClass,
@@ -90,6 +84,32 @@ func (s *Service) doJSONWithHeaders(ctx context.Context, client *http.Client, me
 		result.ErrorMessage = sanitizeMessage(errorMessage, secret)
 	}
 	return result
+}
+
+func errorClassForRequestError(ctx context.Context, err error) string {
+	if err == nil {
+		return ""
+	}
+	if ctx != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if ctxErr == context.DeadlineExceeded {
+				return "context_deadline_exceeded"
+			}
+			return "request_canceled"
+		}
+	}
+	if timeoutErr, ok := err.(net.Error); ok && timeoutErr.Timeout() {
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "response headers") {
+			return "response_header_timeout"
+		}
+		return "network_timeout"
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "timeout awaiting response headers") {
+		return "response_header_timeout"
+	}
+	return "network_error"
 }
 
 func selectedResponseHeaders(headers http.Header) map[string]string {

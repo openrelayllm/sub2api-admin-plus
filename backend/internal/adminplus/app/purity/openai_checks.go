@@ -204,10 +204,27 @@ func buildTokenAuditCheck(audit *TokenAuditReport) CheckResult {
 		details["multiplier"] = audit.Multiplier
 		details["overall_ratio"] = audit.OverallRatio
 		details["cache_hit_rate"] = audit.CacheHitRate
+		details["cached_tokens_field_observed"] = audit.CachedTokensFieldObserved
+		details["cache_creation_field_observed"] = audit.CacheCreationFieldObserved
+		details["cache_read_field_observed"] = audit.CacheReadFieldObserved
+		details["cache_probe_rounds"] = audit.CacheProbeRounds
+		details["cache_probe_hits"] = audit.CacheProbeHits
+		details["context_replay_rounds"] = audit.ContextReplayRounds
+		details["context_replay_links"] = audit.ContextReplayLinks
+		details["context_replay_links_expected"] = audit.ContextReplayLinksExpected
+		details["context_replay_ok"] = audit.ContextReplayOK
+		details["history_replay_rounds"] = audit.HistoryReplayRounds
+		details["history_replay_links"] = audit.HistoryReplayLinks
+		details["history_replay_links_expected"] = audit.HistoryReplayLinksExpected
+		details["history_replay_ok"] = audit.HistoryReplayOK
 		details["official_baseline_usd"] = audit.OfficialBaselineUSD
 		details["uncached_baseline_usd"] = audit.UncachedBaselineUSD
 		details["actual_cost_usd"] = audit.ActualCostUSD
 		details["total_cost"] = audit.TotalCostUSD
+		if audit.BillingMultiplier != nil {
+			details["billing_multiplier"] = *audit.BillingMultiplier
+			details["billing_multiplier_source"] = audit.BillingMultiplierSource
+		}
 		if audit.PromptCacheKey != "" {
 			details["prompt_cache_key"] = audit.PromptCacheKey
 		}

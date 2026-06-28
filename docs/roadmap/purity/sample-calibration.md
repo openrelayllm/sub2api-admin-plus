@@ -115,7 +115,7 @@
 
 ### 7.1 Token audit 回归样本
 
-`calibration_samples.json` 额外支持 `token_audit_cases`，用于校准 usage/cache/state chain 和失败诊断，不保存原始 prompt、completion 或完整响应体。
+`calibration_samples.json` 额外支持 `token_audit_cases`，用于校准 usage/cache/context replay/history replay 和失败诊断，不保存原始 prompt、completion 或完整响应体。
 
 ```json
 {
@@ -144,9 +144,12 @@
 Token audit 样本约束：
 
 - `error_message` 必须脱敏，不得包含 API Key、Bearer token、账号、邮箱或完整上游响应体。
-- fallback 场景必须区分“拿到 usage 但状态链/缓存不完整”和“完全没有 usage”。
+- fallback 场景必须区分“拿到 usage 但上下文重放/缓存不完整”和“完全没有 usage”。
 - 失败样本必须能证明前端可展示失败原因，即至少有 `status_code`、`error_class`、`error_message` 之一。
-- 0 usage 样本不进入图表/表格，但必须计入 `want_missing_samples`。
+- 0 usage 样本不进入图表，但必须进入明细表并计入 `want_missing_samples`，前端需显示 0 值和失败诊断。
+- 展示倍率优先级为报告级 `overall_ratio/overallRatio` -> `multiplier`，样本级 `ratio` -> `multiplier`。
+- OpenAI Responses audit 必须区分 `request_mode=cache_probe` 与 `request_mode=context_replay`：cache probe 使用稳定长前缀观察 `cached_tokens` 字段和命中轮数，context replay 按 Codex HTTP 形态发送完整 input 历史。官方 OpenAI 返回 `cached_tokens: 0` 且字段存在时不应记录 `cached_tokens_missing`；只有字段完全缺失才记录该 anomaly。Claude audit 使用独立的 `request_mode=history_replay`，按 Messages 历史与 `cache_control` 统计 `cache_creation_input_tokens` / `cache_read_input_tokens`，不得套用 OpenAI `previous_response_id` 语义。Gemini audit 使用独立的 `request_mode=gemini_history_replay`，按 GenerateContent `contents` 历史、`systemInstruction`、`tools.functionDeclarations` 形态发送，读取 `usageMetadata.promptTokenCount` / `candidatesTokenCount` / `totalTokenCount` / `cachedContentTokenCount`，不得套用 OpenAI cache probe 或 Claude cache_control 语义。
+- Chat Completions 回退审计样本必须携带 `chat_completions_audit_fallback` anomaly，并明确 `sample_count=3`。该样本只能证明 Chat Completions usage 可读，不能作为 Responses 上下文重放、`prompt_cache_key` 或 cached_tokens 纯度证据。
 
 ## 8. 证据来源标记
 
@@ -159,7 +162,7 @@ Token audit 样本约束：
 | HTTP header | `header` | `x-cpa-version`、`x-new-api-version`、`x-client-request-id` |
 | 错误体 | `error_body` | `API_KEY_REQUIRED`、`requested_model`、`upstream_model` |
 | 模型列表 | `model_list` | `display_name`、fallback model ids |
-| Token audit | `token_audit` | multiplier、cache hit、state chain |
+| Token audit | `token_audit` | multiplier、cache hit、context/history replay |
 | 路由组合 | `route_probe` | `/v1/messages` 与 `/v1/responses` 同时存在 |
 
 如果某个源码能力无法通过上述来源观察到，样本不能直接把它作为混淆结论，只能记录为 `not_observable`。

@@ -26,10 +26,17 @@ func (s *Service) probeResponsesStoreInclude(ctx context.Context, client *http.C
 }
 
 func (s *Service) probeChatCompletions(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string) httpProbe {
+	return s.probeChatCompletionsWithPrompt(ctx, client, baseURL, apiKey, model, "Return exactly: ok")
+}
+
+func (s *Service) probeChatCompletionsWithPrompt(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, prompt string) httpProbe {
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "Return exactly: ok"
+	}
 	body, _ := json.Marshal(map[string]any{
 		"model": model,
 		"messages": []map[string]string{
-			{"role": "user", "content": "Return exactly: ok"},
+			{"role": "user", "content": prompt},
 		},
 		"stream": false,
 	})
@@ -230,12 +237,37 @@ func parseResponsesUsage(body []byte) *TokenUsage {
 		return nil
 	}
 	return &TokenUsage{
-		InputTokens:         usage.Get("input_tokens").Int(),
-		OutputTokens:        usage.Get("output_tokens").Int(),
-		TotalTokens:         usage.Get("total_tokens").Int(),
-		CacheCreationTokens: firstUsageInt(usage, "input_tokens_details.cache_creation_tokens", "input_tokens_details.cache_creation_input_tokens", "prompt_tokens_details.cache_creation_tokens"),
-		CachedTokens:        firstUsageInt(usage, "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens"),
-		ReasoningTokens:     usage.Get("output_tokens_details.reasoning_tokens").Int(),
+		InputTokens:               usage.Get("input_tokens").Int(),
+		OutputTokens:              usage.Get("output_tokens").Int(),
+		TotalTokens:               usage.Get("total_tokens").Int(),
+		CacheCreationTokens:       firstUsageInt(usage, "input_tokens_details.cache_creation_tokens", "input_tokens_details.cache_creation_input_tokens", "prompt_tokens_details.cache_creation_tokens", "cache_creation_input_tokens", "cache_creation_tokens"),
+		CachedTokens:              firstUsageInt(usage, "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens"),
+		CachedTokensFieldPresent:  usagePathExists(usage, "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens"),
+		CacheCreationFieldPresent: usagePathExists(usage, "input_tokens_details.cache_creation_tokens", "input_tokens_details.cache_creation_input_tokens", "prompt_tokens_details.cache_creation_tokens", "cache_creation_input_tokens", "cache_creation_tokens"),
+		ReasoningTokens:           usage.Get("output_tokens_details.reasoning_tokens").Int(),
+	}
+}
+
+func parseChatCompletionsUsage(body []byte) *TokenUsage {
+	usage := gjson.GetBytes(body, "usage")
+	if !usage.Exists() || !usage.IsObject() {
+		return nil
+	}
+	promptTokens := usage.Get("prompt_tokens").Int()
+	completionTokens := usage.Get("completion_tokens").Int()
+	totalTokens := usage.Get("total_tokens").Int()
+	if totalTokens == 0 {
+		totalTokens = promptTokens + completionTokens
+	}
+	return &TokenUsage{
+		InputTokens:               promptTokens,
+		OutputTokens:              completionTokens,
+		TotalTokens:               totalTokens,
+		CacheCreationTokens:       firstUsageInt(usage, "prompt_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_input_tokens", "cache_creation_input_tokens", "cache_creation_tokens"),
+		CachedTokens:              firstUsageInt(usage, "prompt_tokens_details.cached_tokens"),
+		CachedTokensFieldPresent:  usagePathExists(usage, "prompt_tokens_details.cached_tokens"),
+		CacheCreationFieldPresent: usagePathExists(usage, "prompt_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_input_tokens", "cache_creation_input_tokens", "cache_creation_tokens"),
+		ReasoningTokens:           firstUsageInt(usage, "completion_tokens_details.reasoning_tokens"),
 	}
 }
 
@@ -261,6 +293,24 @@ func firstUsageInt(usage gjson.Result, paths ...string) int64 {
 		}
 	}
 	return 0
+}
+
+func firstPositiveUsageInt(usage gjson.Result, paths ...string) int64 {
+	for _, path := range paths {
+		if value := usage.Get(path); value.Exists() && value.Int() > 0 {
+			return value.Int()
+		}
+	}
+	return firstUsageInt(usage, paths...)
+}
+
+func usagePathExists(usage gjson.Result, paths ...string) bool {
+	for _, path := range paths {
+		if usage.Get(path).Exists() {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldStopAfterProbe(probe httpProbe) bool {

@@ -58,6 +58,28 @@ func buildGatewayRootURL(base string) string {
 	return parsed.String()
 }
 
+func buildGatewayUsageURL(base string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(base), "/")
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(strings.TrimSuffix(trimmed, "/v1"), "/") + "/v1/usage"
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.RawPath = ""
+	path := strings.TrimRight(parsed.Path, "/")
+	segments := strings.Split(path, "/")
+	if len(segments) > 0 && isOpenAIAPIVersionSegment(segments[len(segments)-1]) {
+		segments = segments[:len(segments)-1]
+	}
+	prefix := strings.TrimRight(strings.Join(segments, "/"), "/")
+	parsed.Path = prefix + "/v1/usage"
+	return parsed.String()
+}
+
 func shouldProbeGatewayRoot(host string) bool {
 	value := strings.ToLower(strings.TrimSpace(host))
 	if value == "" {

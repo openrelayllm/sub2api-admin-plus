@@ -147,51 +147,90 @@
             </div>
             <span class="badge" :class="tokenAuditBadgeClass">{{ tokenAuditStatusLabel }}</span>
           </div>
+          <div class="mb-3 rounded-md border px-3 py-2 text-xs font-medium leading-5" :class="tokenAuditNoticeClass">
+            {{ tokenAuditNoticeText }}
+          </div>
           <div class="mb-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <div v-for="item in tokenAuditMetricCards" :key="item.label" class="rounded-md bg-gray-50 p-2 dark:bg-dark-600">
               <div class="text-[10px] text-gray-500 dark:text-dark-400">{{ item.label }}</div>
-              <div class="mt-0.5 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ item.value }}</div>
+              <div class="mt-0.5 text-sm font-semibold" :class="auditValueTextClass(item.tone)">{{ item.value }}</div>
             </div>
           </div>
           <div class="h-36 overflow-x-auto">
             <div class="flex h-full min-w-[520px] items-end gap-2">
               <div v-for="sample in auditSamplesForChart" :key="sample.index" class="flex h-full flex-1 flex-col justify-end gap-1">
-                <div class="flex flex-1 items-end rounded bg-gray-100 px-1 dark:bg-dark-600">
+                <div class="flex flex-1 items-end justify-center gap-1 rounded bg-gray-100 px-1 dark:bg-dark-600">
                   <div
-                    class="w-full rounded-t bg-primary-500 transition-all"
-                    :class="{ 'bg-red-400': sample.status === 'fail', 'bg-amber-400': sample.status === 'warn' }"
-                    :style="{ height: `${sampleBarHeight(sample)}%` }"
+                    class="w-2 rounded-t bg-gray-400 transition-all dark:bg-dark-400"
+                    :style="{ height: `${sampleBaselineBarHeight(sample)}%` }"
+                  />
+                  <div
+                    class="w-2 rounded-t transition-all"
+                    :class="auditBarClass(tokenAuditSampleRow(sample).multiplier.tone)"
+                    :style="{ height: `${sampleActualBarHeight(sample)}%` }"
                   />
                 </div>
                 <div class="text-center text-[10px] text-gray-500 dark:text-dark-400">R{{ sample.index }}</div>
+                <div class="text-center text-[10px] font-semibold" :class="auditToneTextClass(tokenAuditSampleRow(sample).multiplier.tone)">
+                  {{ formatMultiplier(tokenAuditSampleRow(sample).multiplier.value) }}
+                </div>
               </div>
             </div>
           </div>
-          <div class="mt-3 overflow-x-auto">
-            <table class="min-w-full text-left text-xs">
-              <thead class="text-gray-500 dark:text-dark-400">
+          <div class="mt-2 flex justify-end gap-3 text-[10px] text-gray-500 dark:text-dark-400">
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-gray-400 dark:bg-dark-400" />官方基线</span>
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-emerald-400" />Usage 估算</span>
+          </div>
+          <div class="mt-3 overflow-x-auto rounded-md border border-gray-200 bg-white dark:border-dark-500 dark:bg-dark-800">
+            <table class="min-w-[780px] table-fixed text-left text-xs text-gray-950 dark:text-gray-100">
+              <thead class="text-gray-700 dark:text-dark-300">
                 <tr>
-                  <th class="py-1 pr-3 font-medium">轮次</th>
-                  <th class="py-1 pr-3 font-medium">输入</th>
-                  <th class="py-1 pr-3 font-medium">输出</th>
-                  <th class="py-1 pr-3 font-medium">缓存创建</th>
-                  <th class="py-1 pr-3 font-medium">缓存读取</th>
-                  <th class="py-1 pr-3 font-medium">Usage 估算</th>
-                  <th class="py-1 pr-3 font-medium">估算倍率</th>
+                  <th class="w-12 py-1 pr-2 font-medium">轮次</th>
+                  <th class="w-24 py-1 pr-2 font-medium">模式</th>
+                  <th class="w-16 py-1 pr-2 font-medium text-right">耗时</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">输入</th>
+                  <th class="w-20 py-1 pr-2 font-medium text-right">输出</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">缓存创建</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">缓存读取</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">Usage 估算</th>
+                  <th class="w-20 py-1 pr-2 font-medium text-right">估算倍率</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-dark-600">
                 <tr v-for="sample in auditSamplesForTable" :key="sample.index">
-                  <td class="py-1.5 pr-3 font-mono">R{{ sample.index }}</td>
-                  <td class="py-1.5 pr-3">{{ formatInteger(sample.input_tokens) }}</td>
-                  <td class="py-1.5 pr-3">{{ formatInteger(sample.output_tokens) }}</td>
-                  <td class="py-1.5 pr-3">{{ formatInteger(auditCacheCreationTokens(sample)) }}</td>
-                  <td class="py-1.5 pr-3">{{ formatInteger(auditCachedTokens(sample)) }}</td>
-                  <td class="py-1.5 pr-3">{{ formatUSD(sample.actual_cost_usd || sample.cost || 0) }}</td>
-                  <td class="py-1.5 pr-3">{{ formatMultiplier(auditRatio(sample)) }}</td>
+                  <td class="py-1.5 pr-2 font-mono">R{{ sample.index }}</td>
+                  <td class="py-1.5 pr-2">
+                    <div class="text-gray-700 dark:text-dark-300">{{ auditRequestModeLabel(sample.request_mode) }}</div>
+                    <div v-if="auditSampleFailureSummary(sample)" class="mt-0.5 max-w-[88px] truncate text-[10px] font-semibold text-red-600 dark:text-red-300" :title="auditSampleFailureTitle(sample)">
+                      {{ auditSampleFailureSummary(sample) }}
+                    </div>
+                  </td>
+                  <td class="py-1.5 pr-2 text-right">
+                    <span class="inline-flex min-w-[54px] justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold" :class="auditToneBadgeClass(tokenAuditSampleRow(sample).latency.tone)">
+                      {{ formatTokenAuditLatencyMS(tokenAuditSampleRow(sample).latency.value) }}
+                    </span>
+                  </td>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).input.tone)">
+                    {{ formatInteger(tokenAuditSampleRow(sample).input.value) }}<span v-if="sample.input_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.input_delta_pct)">{{ deltaLabel(sample.input_delta_pct) }}</span>
+                  </td>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).output.tone)">
+                    {{ formatInteger(tokenAuditSampleRow(sample).output.value) }}<span v-if="sample.output_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.output_delta_pct)">{{ deltaLabel(sample.output_delta_pct) }}</span>
+                  </td>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cacheCreation.tone)">
+                    {{ formatInteger(tokenAuditSampleRow(sample).cacheCreation.value) }}<span v-if="sample.cache_creation_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.cache_creation_delta_pct)">{{ deltaLabel(sample.cache_creation_delta_pct) }}</span>
+                  </td>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cacheRead.tone)">
+                    {{ formatInteger(tokenAuditSampleRow(sample).cacheRead.value) }}<span v-if="sample.cache_read_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.cache_read_delta_pct)">{{ deltaLabel(sample.cache_read_delta_pct) }}</span>
+                  </td>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cost.tone)">
+                    {{ formatUSD(tokenAuditSampleRow(sample).cost.value) }}
+                  </td>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).multiplier.tone)">
+                    {{ formatMultiplier(tokenAuditSampleRow(sample).multiplier.value) }}
+                  </td>
                 </tr>
                 <tr v-if="auditSamplesForTable.length === 0">
-                  <td colspan="7" class="py-4 text-center text-gray-400 dark:text-dark-400">{{ emptyAuditTableText }}</td>
+                  <td colspan="9" class="py-4 text-center text-gray-700 dark:text-dark-300">{{ emptyAuditTableText }}</td>
                 </tr>
               </tbody>
             </table>
@@ -261,6 +300,15 @@ import {
   type PurityValidationResult
 } from '@/api/admin/adminPlus'
 import { downloadPurityReportPDF } from '@/utils/purityPdf'
+import {
+  formatTokenAuditLatencyMS,
+  hasTokenAuditSampleData,
+  multiplierTone,
+  tokenAuditCostTotals,
+  tokenAuditDisplayRatio,
+  tokenAuditSampleDisplayRow,
+  type TokenAuditTone
+} from '@/utils/purityAuditDisplay'
 import { formatInteger } from '@/views/admin/operations/SupplierAccountsUtils'
 
 type RunStatus = 'idle' | 'running' | 'success' | 'error'
@@ -403,7 +451,10 @@ const dialogTitle = computed(() => `${providerLabel.value} API 纯度检测`)
 const displayScore = computed(() => report.value?.score ?? (started.value ? 0 : '-'))
 const scoreRingStyle = computed(() => {
   const score = typeof displayScore.value === 'number' ? displayScore.value : 0
-  return { '--score-angle': `${Math.max(0, Math.min(100, score))}%` }
+  return {
+    '--score-angle': `${Math.max(0, Math.min(100, score))}%`,
+    '--score-color': scoreRingColor(score)
+  }
 })
 const verdictLabel = computed(() => {
   const verdict = report.value?.verdict || ''
@@ -467,22 +518,47 @@ const scoreBreakdownItems = computed(() => {
 const validAuditSamples = computed(() => normalizedAuditSamples().filter(hasAuditSampleData))
 const failedAuditSampleCount = computed(() => normalizedAuditSamples().filter((sample) => !hasAuditSampleData(sample)).length)
 const auditSamplesForChart = computed(() => validAuditSamples.value)
-const auditSamplesForTable = computed(() => validAuditSamples.value)
+const auditSamplesForTable = computed(() => normalizedAuditSamples())
 const reportChecks = computed<PurityCheckResult[]>(() => (report.value?.checks?.length ? report.value.checks : checks.value))
 const tokenAuditSummary = computed(() => {
-  if (tokenAudit.value) return `${tokenAudit.value.summary} · ${validAuditSamples.value.length}/${tokenAudit.value.sample_count || 11}${failedAuditSampleCount.value > 0 ? ` · ${failedAuditSampleCount.value} 轮未返回 usage` : ''}`
+  if (tokenAudit.value) return `${tokenAudit.value.summary} · ${auditSamplesForTable.value.length}/${tokenAudit.value.sample_count || 11}${failedAuditSampleCount.value > 0 ? ` · ${failedAuditSampleCount.value} 轮仅返回诊断` : ''}`
   if (auditSamples.value.length > 0) return `采集中 · ${tokenAuditProgress.value || `${auditSamples.value.length}/11`}`
   return started.value ? '等待样本' : '尚未开始'
 })
-const emptyAuditTableText = computed(() => failedAuditSampleCount.value > 0 ? '未获取到可展示 usage 样本' : '等待审计样本')
+const emptyAuditTableText = computed(() => failedAuditSampleCount.value > 0 ? '等待失败诊断样本' : '等待审计样本')
 const tokenAuditMetricCards = computed(() => {
   const audit = tokenAudit.value
-  return [
-    { label: '官方基线', value: formatUSD(audit?.official_baseline_usd || audit?.baseline_total_cost_usd || 0) },
-    { label: 'Usage 估算', value: formatUSD(audit?.actual_cost_usd || audit?.total_cost || 0) },
-    { label: '估算倍率', value: formatMultiplier(audit?.multiplier || audit?.overall_ratio || 0) },
-    { label: '缓存命中率', value: formatPercent(audit?.cache_hit_rate || 0) }
+  const totals = tokenAuditCostTotals(audit)
+  const ratio = tokenAuditDisplayRatio(audit)
+  const cards = [
+    { label: '官方基线', value: formatUSD(totals.officialBaselineUSD), tone: 'neutral' as TokenAuditTone },
+    { label: 'Usage 估算', value: formatUSD(totals.actualCostUSD), tone: ratio > 0 ? multiplierTone(ratio) : 'neutral' as TokenAuditTone },
+    { label: '估算倍率', value: formatMultiplier(ratio), tone: multiplierTone(ratio) },
+    { label: '缓存命中率', value: formatPercent(audit?.cacheHitRate ?? audit?.cache_hit_rate), tone: audit?.cacheHitRate || audit?.cache_hit_rate ? 'good' as TokenAuditTone : 'neutral' as TokenAuditTone }
   ]
+  const billingMultiplier = audit?.billing_multiplier ?? audit?.billingMultiplier
+  if (typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)) {
+    cards.splice(3, 0, { label: '平台计费倍率', value: formatMultiplier(billingMultiplier), tone: 'neutral' as TokenAuditTone })
+  }
+  return cards
+})
+const tokenAuditRatio = computed(() => tokenAuditDisplayRatio(tokenAudit.value))
+const tokenAuditRatioTone = computed(() => multiplierTone(tokenAuditRatio.value))
+const tokenAuditNoticeText = computed(() => {
+  const ratio = tokenAuditRatio.value
+  if (!ratio) return '用量倍率暂无法确认，需结合每轮 usage 字段和平台账单复核。'
+  if (tokenAuditRatioTone.value === 'bad') return `用量倍率 ${formatMultiplier(ratio)}，明显高于常见范围，可能存在异常扣费或 Token 统计混淆。`
+  if (tokenAuditRatioTone.value === 'warn') return `用量倍率 ${formatMultiplier(ratio)}，高于常见范围，建议结合平台单价/倍率复核。`
+  const billingMultiplier = tokenAudit.value?.billing_multiplier ?? tokenAudit.value?.billingMultiplier
+  if (typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)) {
+    return `Usage 倍率 ${formatMultiplier(ratio)}；平台计费倍率 ${formatMultiplier(billingMultiplier)}。两者口径不同，后者来自账号配置。`
+  }
+  return `Usage 倍率 ${formatMultiplier(ratio)}，当前未发现明显超额消耗；平台计费倍率需结合账号配置或账单复核。`
+})
+const tokenAuditNoticeClass = computed(() => {
+  if (tokenAudit.value?.status === 'fail') return auditToneNoticeClass('bad')
+  if (tokenAudit.value?.status === 'warn') return auditToneNoticeClass(tokenAuditRatioTone.value === 'neutral' ? 'warn' : tokenAuditRatioTone.value)
+  return auditToneNoticeClass(tokenAuditRatioTone.value)
 })
 const tokenAuditStatusLabel = computed(() => validationStatusLabel((tokenAudit.value?.status || (auditSamples.value.length > 0 ? 'running' : 'idle')) as DisplayStatus))
 const tokenAuditBadgeClass = computed(() => validationBadgeClass((tokenAudit.value?.status || (auditSamples.value.length > 0 ? 'running' : 'idle')) as DisplayStatus))
@@ -766,9 +842,20 @@ function normalizedAuditSamples(): PurityTokenAuditSample[] {
   return sortAuditSamples(source)
 }
 
-function sampleBarHeight(sample: PurityTokenAuditSample): number {
-  const maxTokens = Math.max(1, ...validAuditSamples.value.map((item) => item.total_tokens || 0))
-  return Math.max(8, Math.round(((sample.total_tokens || 0) / maxTokens) * 100))
+function sampleBaselineBarHeight(sample: PurityTokenAuditSample): number {
+  const maxCost = maxAuditCost()
+  const cost = sample.official_baseline_usd || sample.baseline_cost || 0
+  return Math.max(8, Math.round((cost / maxCost) * 100))
+}
+
+function sampleActualBarHeight(sample: PurityTokenAuditSample): number {
+  const maxCost = maxAuditCost()
+  const cost = sample.actual_cost_usd || sample.cost || 0
+  return Math.max(8, Math.round((cost / maxCost) * 100))
+}
+
+function maxAuditCost(): number {
+  return Math.max(0.000001, ...validAuditSamples.value.map((item) => Math.max(item.official_baseline_usd || item.baseline_cost || 0, item.actual_cost_usd || item.cost || 0)))
 }
 
 function validationStatusLabel(status: DisplayStatus): string {
@@ -777,6 +864,12 @@ function validationStatusLabel(status: DisplayStatus): string {
   if (status === 'fail') return '失败'
   if (status === 'running') return '检测中'
   return '等待'
+}
+
+function scoreRingColor(score: number): string {
+  if (score >= 85) return '#10b981'
+  if (score >= 60) return '#f59e0b'
+  return '#ef4444'
 }
 
 function validationIcon(status: DisplayStatus): IconName {
@@ -817,6 +910,41 @@ function checkStatusClass(status: PurityCheckStatus): string {
   return 'text-red-600 dark:text-red-300'
 }
 
+function auditToneTextClass(tone: TokenAuditTone): string {
+  if (tone === 'good') return 'text-emerald-600 dark:text-emerald-300'
+  if (tone === 'warn') return 'text-amber-600 dark:text-amber-300'
+  if (tone === 'bad') return 'text-red-600 dark:text-red-300'
+  return 'text-gray-900 dark:text-gray-100'
+}
+
+function auditValueTextClass(tone: TokenAuditTone): string {
+  if (tone === 'good') return 'text-emerald-600 dark:text-emerald-300'
+  if (tone === 'warn') return 'text-amber-600 dark:text-amber-300'
+  if (tone === 'bad') return 'text-red-600 dark:text-red-300'
+  return 'text-gray-950 dark:text-gray-100'
+}
+
+function auditToneBadgeClass(tone: TokenAuditTone): string {
+  if (tone === 'good') return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-900/25 dark:text-emerald-300'
+  if (tone === 'warn') return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-900/25 dark:text-amber-300'
+  if (tone === 'bad') return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/40 dark:bg-red-900/25 dark:text-red-300'
+  return 'border-gray-200 bg-gray-50 text-gray-600 dark:border-dark-500 dark:bg-dark-600 dark:text-dark-300'
+}
+
+function auditToneNoticeClass(tone: TokenAuditTone): string {
+  if (tone === 'good') return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-900/20 dark:text-emerald-200'
+  if (tone === 'warn') return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-200'
+  if (tone === 'bad') return 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-900/20 dark:text-red-200'
+  return 'border-gray-200 bg-gray-50 text-gray-700 dark:border-dark-500 dark:bg-dark-600 dark:text-dark-300'
+}
+
+function auditBarClass(tone: TokenAuditTone): string {
+  if (tone === 'good') return 'bg-emerald-400'
+  if (tone === 'warn') return 'bg-amber-400'
+  if (tone === 'bad') return 'bg-red-400'
+  return 'bg-primary-500'
+}
+
 function latencyLabel(value?: number): string {
   if (!value || value < 0) return '-'
   return `${Math.round(value)} ms`
@@ -835,6 +963,17 @@ function formatUSD(value?: number): string {
 function formatPercent(value?: number): string {
   if (!value) return '-'
   return `${Math.round(value > 1 ? value : value * 100)}%`
+}
+
+function deltaLabel(value?: number): string {
+  if (!value) return ''
+  const abs = Math.abs(Math.round(value))
+  return `${value > 0 ? '↑' : '↓'}${abs > 999 ? '>999' : abs}%`
+}
+
+function deltaTextClass(value?: number): string {
+  if (!value) return ''
+  return value > 0 ? 'text-red-600 dark:text-red-300' : 'text-emerald-600 dark:text-emerald-300'
 }
 
 function normalizeAccountProvider(platform?: string): PurityProvider | null {
@@ -923,27 +1062,51 @@ function sortAuditSamples(samples: PurityTokenAuditSample[]): PurityTokenAuditSa
 }
 
 function hasAuditSampleData(sample: PurityTokenAuditSample): boolean {
-  return Boolean(
-    (sample.total_tokens || 0) > 0 ||
-    (sample.input_tokens || 0) > 0 ||
-    (sample.output_tokens || 0) > 0 ||
-    auditCachedTokens(sample) > 0 ||
-    auditCacheCreationTokens(sample) > 0 ||
-    (sample.actual_cost_usd || sample.cost || 0) > 0 ||
-    (sample.official_baseline_usd || sample.baseline_cost || 0) > 0
-  )
+  return hasTokenAuditSampleData(sample)
 }
 
-function auditCachedTokens(sample: PurityTokenAuditSample): number {
-  return sample.cached_tokens || sample.cache_read_input_tokens || 0
+function tokenAuditSampleRow(sample: PurityTokenAuditSample) {
+  return tokenAuditSampleDisplayRow(sample, currentProvider.value || 'openai')
 }
 
-function auditCacheCreationTokens(sample: PurityTokenAuditSample): number {
-  return sample.cache_creation_tokens || sample.cache_creation_input_tokens || 0
+function auditRequestModeLabel(mode?: string): string {
+  if (mode === 'cache_probe') return '缓存'
+  if (mode === 'stateful') return '状态'
+  if (mode === 'context_replay') return '上下文'
+  if (mode === 'minimal_retry') return '重试'
+  if (mode === 'history_replay') return '历史'
+  if (mode === 'gemini_history_replay') return 'Gemini 历史'
+  if (mode === 'chat_completions') return 'Chat'
+  return '-'
 }
 
-function auditRatio(sample: PurityTokenAuditSample): number | undefined {
-  return sample.multiplier || sample.ratio
+function auditSampleFailureReason(sample: PurityTokenAuditSample): string {
+  if (sample.status === 'pass' && !sample.error_class && !sample.error_message) return ''
+  const parts: string[] = []
+  if (sample.status_code && (sample.status_code < 200 || sample.status_code >= 300)) parts.push(`HTTP ${sample.status_code}`)
+  if (sample.error_class) parts.push(sample.error_class)
+  if (sample.error_message) parts.push(shortAuditFailureText(sample.error_message))
+  if (!parts.length && sample.status && sample.status !== 'pass') parts.push(sample.status)
+  return parts.join(' · ')
+}
+
+function auditSampleFailureSummary(sample: PurityTokenAuditSample): string {
+  const reason = auditSampleFailureReason(sample)
+  return reason ? shortAuditFailureText(reason) : ''
+}
+
+function auditSampleFailureTitle(sample: PurityTokenAuditSample): string {
+  const parts: string[] = []
+  if (sample.status_code && (sample.status_code < 200 || sample.status_code >= 300)) parts.push(`HTTP ${sample.status_code}`)
+  if (sample.error_class) parts.push(sample.error_class)
+  if (sample.error_message) parts.push(sample.error_message.trim())
+  if (!parts.length && sample.status && sample.status !== 'pass') parts.push(sample.status)
+  return parts.join(' · ')
+}
+
+function shortAuditFailureText(value: string): string {
+  const text = value.trim()
+  return text.length <= 120 ? text : `${text.slice(0, 120)}...`
 }
 
 function buildPDFReportSnapshot(): PurityReport | null {
@@ -998,7 +1161,7 @@ function buildPDFReportSnapshot(): PurityReport | null {
   height: 128px;
   place-items: center;
   border-radius: 9999px;
-  background: conic-gradient(#14b8a6 var(--score-angle), #e5e7eb 0);
+  background: conic-gradient(var(--score-color, #14b8a6) var(--score-angle), #e5e7eb 0);
 }
 
 .score-ring-inner {
@@ -1011,7 +1174,7 @@ function buildPDFReportSnapshot(): PurityReport | null {
 }
 
 :global(.dark) .score-ring {
-  background: conic-gradient(#2dd4bf var(--score-angle), #374151 0);
+  background: conic-gradient(var(--score-color, #2dd4bf) var(--score-angle), #374151 0);
 }
 
 :global(.dark) .score-ring-inner {

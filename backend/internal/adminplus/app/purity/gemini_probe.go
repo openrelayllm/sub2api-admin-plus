@@ -195,9 +195,15 @@ func parseGeminiUsage(body []byte) *TokenUsage {
 	input := usage.Get("promptTokenCount").Int()
 	output := usage.Get("candidatesTokenCount").Int()
 	total := usage.Get("totalTokenCount").Int()
+	cached := usage.Get("cachedContentTokenCount").Int()
+	thoughts := usage.Get("thoughtsTokenCount").Int()
+	toolUse := usage.Get("toolUsePromptTokenCount").Int()
 	return &TokenUsage{
-		InputTokens:  input,
-		OutputTokens: output,
-		TotalTokens:  total,
+		InputTokens:              input,
+		OutputTokens:             output,
+		TotalTokens:              total,
+		CachedTokens:             cached,
+		CachedTokensFieldPresent: usagePathExists(usage, "cachedContentTokenCount"),
+		ReasoningTokens:          thoughts + toolUse,
 	}
 }

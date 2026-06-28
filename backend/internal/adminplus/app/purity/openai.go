@@ -135,12 +135,30 @@ func (s *Service) runOpenAICheck(ctx context.Context, in PublicCheckInput, emit 
 	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("multimodal", "多模态能力", []CheckResult{multimodalCheck}))
 	emitMetrics(report, emit)
 
+	chatProbe := httpProbe{}
+	chatFallbackUsable := false
+	if needsChatFallback(report.Checks) {
+		chatProbe = s.probeChatCompletions(checkCtx, client, baseURL, apiKey, model)
+		report.Metrics.ChatCompletionsLatencyMS = chatProbe.LatencyMS
+		chatFallbackCheck := buildChatFallbackCheck(chatProbe, apiKey)
+		chatFallbackUsable = chatFallbackCheck.Status == CheckStatusPass
+		appendAndEmitChecks(report, emit, chatFallbackCheck)
+		emitMetrics(report, emit)
+	}
+
+	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers)
+	report.IsKiro = hasKiroFingerprint(report.APIBaseHost, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers)
+	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, modelsProbe, responsesProbe, storeIncludeProbe, multimodalProbe, chatProbe), gatewayProbe.Headers, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers, storeIncludeProbe.Headers, multimodalProbe.Headers, chatProbe.Headers)
+	appendAndEmitModelIdentity(report, emit)
+	appendAndEmitWrapperFingerprint(report, emit)
+
 	if in.SkipTokenAudit {
 		tokenAuditCheck := CheckResult{ID: "token_audit", Name: "Token 用量审计", Status: CheckStatusWarn, Score: 0, MaxScore: 15, Message: "本次请求已关闭 Token 用量审计。", Details: map[string]any{"skipped": true}}
 		appendAndEmitChecks(report, emit, tokenAuditCheck)
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
 	} else if responsesProbe.StatusCode >= 200 && responsesProbe.StatusCode < 300 {
 		emitProgress(report, emit, 6, "token_audit")
+		billingSnapshot := s.captureBillingUsageSnapshotForAudit(checkCtx, client, ProviderOpenAI, baseURL, apiKey, options)
 		report.TokenAudit = s.runTokenAudit(checkCtx, client, baseURL, apiKey, model, func(sample TokenAuditSample) {
 			report.TokenAuditPartial = upsertTokenAuditPartial(report.TokenAuditPartial, sample)
 			report.TokenAuditProgress = fmt.Sprintf("%d/%d", len(report.TokenAuditPartial), tokenAuditSamples)
@@ -157,6 +175,35 @@ func (s *Service) runOpenAICheck(ctx context.Context, in PublicCheckInput, emit 
 				TokenAuditPartial:  append([]TokenAuditSample(nil), report.TokenAuditPartial...),
 			})
 		})
+		s.applyTokenAuditBillingMultiplierForAudit(checkCtx, client, ProviderOpenAI, baseURL, apiKey, report.TokenAudit, billingSnapshot, options)
+		tokenAuditCheck := buildTokenAuditCheck(report.TokenAudit)
+		appendAndEmitChecks(report, emit, tokenAuditCheck)
+		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
+		emitPublicCheckEvent(emit, PublicCheckEvent{
+			Type:       PublicCheckEventTokenAudit,
+			ReportID:   report.ReportID,
+			TokenAudit: report.TokenAudit,
+		})
+	} else if chatFallbackUsable {
+		emitProgress(report, emit, 6, "token_audit")
+		billingSnapshot := s.captureBillingUsageSnapshotForAudit(checkCtx, client, ProviderOpenAI, baseURL, apiKey, options)
+		report.TokenAudit = s.runChatCompletionsTokenAudit(checkCtx, client, baseURL, apiKey, model, func(sample TokenAuditSample) {
+			report.TokenAuditPartial = upsertTokenAuditPartial(report.TokenAuditPartial, sample)
+			report.TokenAuditProgress = fmt.Sprintf("%d/%d", len(report.TokenAuditPartial), chatTokenAuditSamples)
+			emitPublicCheckEvent(emit, PublicCheckEvent{
+				Type:               PublicCheckEventTokenAuditSample,
+				ReportID:           report.ReportID,
+				Status:             report.Status,
+				Step:               report.Step,
+				StepName:           report.StepName,
+				Progress:           report.Progress,
+				Scores:             cloneScores(report.Scores),
+				Sample:             &sample,
+				TokenAuditProgress: report.TokenAuditProgress,
+				TokenAuditPartial:  append([]TokenAuditSample(nil), report.TokenAuditPartial...),
+			})
+		})
+		s.applyTokenAuditBillingMultiplierForAudit(checkCtx, client, ProviderOpenAI, baseURL, apiKey, report.TokenAudit, billingSnapshot, options)
 		tokenAuditCheck := buildTokenAuditCheck(report.TokenAudit)
 		appendAndEmitChecks(report, emit, tokenAuditCheck)
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
@@ -171,18 +218,6 @@ func (s *Service) runOpenAICheck(ctx context.Context, in PublicCheckInput, emit 
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
 	}
 
-	chatProbe := httpProbe{}
-	if needsChatFallback(report.Checks) {
-		chatProbe = s.probeChatCompletions(checkCtx, client, baseURL, apiKey, model)
-		report.Metrics.ChatCompletionsLatencyMS = chatProbe.LatencyMS
-		appendAndEmitChecks(report, emit, buildChatFallbackCheck(chatProbe, apiKey))
-	}
-
-	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers)
-	report.IsKiro = hasKiroFingerprint(report.APIBaseHost, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers)
-	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, modelsProbe, responsesProbe, storeIncludeProbe, multimodalProbe, chatProbe), gatewayProbe.Headers, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers, storeIncludeProbe.Headers, multimodalProbe.Headers, chatProbe.Headers)
-	appendAndEmitModelIdentity(report, emit)
-	appendAndEmitWrapperFingerprint(report, emit)
 	emitProgress(report, emit, 7, "evaluate")
 	report.Metrics.LatencyMS = int64(s.currentTime().Sub(startedAt) / time.Millisecond)
 	s.finalizeAndSave(ctx, report, baseURL)

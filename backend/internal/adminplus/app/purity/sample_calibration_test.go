@@ -69,18 +69,24 @@ type tokenAuditCalibrationCase struct {
 }
 
 type tokenAuditCalibrationSample struct {
-	Round               int     `json:"round"`
-	Status              string  `json:"status"`
-	StatusCode          int     `json:"status_code,omitempty"`
-	ErrorClass          string  `json:"error_class,omitempty"`
-	ErrorMessage        string  `json:"error_message,omitempty"`
-	InputTokens         int64   `json:"input_tokens,omitempty"`
-	OutputTokens        int64   `json:"output_tokens,omitempty"`
-	TotalTokens         int64   `json:"total_tokens,omitempty"`
-	OfficialBaselineUSD float64 `json:"official_baseline_usd,omitempty"`
-	ActualCostUSD       float64 `json:"actual_cost_usd,omitempty"`
-	PromptCacheKey      string  `json:"prompt_cache_key,omitempty"`
-	Store               bool    `json:"store,omitempty"`
+	Round                    int     `json:"round"`
+	Status                   string  `json:"status"`
+	StatusCode               int     `json:"status_code,omitempty"`
+	ErrorClass               string  `json:"error_class,omitempty"`
+	ErrorMessage             string  `json:"error_message,omitempty"`
+	InputTokens              int64   `json:"input_tokens,omitempty"`
+	OutputTokens             int64   `json:"output_tokens,omitempty"`
+	TotalTokens              int64   `json:"total_tokens,omitempty"`
+	OfficialBaselineUSD      float64 `json:"official_baseline_usd,omitempty"`
+	ActualCostUSD            float64 `json:"actual_cost_usd,omitempty"`
+	CachedTokens             int64   `json:"cached_tokens,omitempty"`
+	CachedTokensFieldPresent bool    `json:"cached_tokens_present,omitempty"`
+	PromptCacheKey           string  `json:"prompt_cache_key,omitempty"`
+	Store                    bool    `json:"store,omitempty"`
+	ResponseID               string  `json:"response_id,omitempty"`
+	PreviousResponseID       string  `json:"previous_response_id,omitempty"`
+	StateLinked              bool    `json:"state_linked,omitempty"`
+	RequestMode              string  `json:"request_mode,omitempty"`
 }
 
 func TestCalibrationSamples_ContractAndRedaction(t *testing.T) {
@@ -203,21 +209,31 @@ func TestCalibrationSamples_TokenAudit(t *testing.T) {
 			}
 			for _, raw := range tc.Samples {
 				sample := TokenAuditSample{
-					Index:               raw.Round,
-					Round:               raw.Round,
-					Status:              firstNonEmptyString(raw.Status, CheckStatusFail),
-					StatusCode:          raw.StatusCode,
-					ErrorClass:          raw.ErrorClass,
-					ErrorMessage:        raw.ErrorMessage,
-					InputTokens:         raw.InputTokens,
-					OutputTokens:        raw.OutputTokens,
-					TotalTokens:         raw.TotalTokens,
-					OfficialBaselineUSD: raw.OfficialBaselineUSD,
-					ActualCostUSD:       raw.ActualCostUSD,
-					BaselineCostUSD:     raw.OfficialBaselineUSD,
-					CostUSD:             raw.ActualCostUSD,
-					PromptCacheKey:      raw.PromptCacheKey,
-					Store:               raw.Store,
+					Index:                    raw.Round,
+					Round:                    raw.Round,
+					Status:                   firstNonEmptyString(raw.Status, CheckStatusFail),
+					StatusCode:               raw.StatusCode,
+					ErrorClass:               raw.ErrorClass,
+					ErrorMessage:             raw.ErrorMessage,
+					InputTokens:              raw.InputTokens,
+					OutputTokens:             raw.OutputTokens,
+					TotalTokens:              raw.TotalTokens,
+					CachedTokens:             raw.CachedTokens,
+					CacheReadInputTokens:     raw.CachedTokens,
+					CachedTokensFieldPresent: raw.CachedTokensFieldPresent,
+					OfficialBaselineUSD:      raw.OfficialBaselineUSD,
+					ActualCostUSD:            raw.ActualCostUSD,
+					BaselineCostUSD:          raw.OfficialBaselineUSD,
+					CostUSD:                  raw.ActualCostUSD,
+					PromptCacheKey:           raw.PromptCacheKey,
+					Store:                    raw.Store,
+					ResponseID:               raw.ResponseID,
+					PreviousResponseID:       raw.PreviousResponseID,
+					StateLinked:              raw.StateLinked,
+					RequestMode:              raw.RequestMode,
+				}
+				if tc.Provider == ProviderOpenAI && sample.RequestMode == "" {
+					sample.RequestMode = openAITokenAuditRequestMode(raw.Round)
 				}
 				if sample.Status == CheckStatusPass && sample.OfficialBaselineUSD > 0 {
 					sample.Multiplier = roundRatio(sample.ActualCostUSD / sample.OfficialBaselineUSD)

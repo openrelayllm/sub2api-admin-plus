@@ -116,6 +116,9 @@ func buildGeminiUsageCheck(usage *TokenUsage, probe httpProbe) CheckResult {
 	details["input_tokens"] = usage.InputTokens
 	details["output_tokens"] = usage.OutputTokens
 	details["total_tokens"] = usage.TotalTokens
+	details["cached_tokens"] = usage.CachedTokens
+	details["cached_tokens_present"] = usage.CachedTokensFieldPresent
+	details["reasoning_tokens"] = usage.ReasoningTokens
 	if usage.TotalTokens >= usage.InputTokens+usage.OutputTokens && usage.TotalTokens > 0 {
 		return passCheck("usage", "Usage 计量", 10, "usageMetadata token 计量字段完整。", details)
 	}
@@ -181,8 +184,8 @@ func buildGeminiTokenAuditUnsupportedCheck() CheckResult {
 		Status:   CheckStatusWarn,
 		Score:    0,
 		MaxScore: 0,
-		Message:  "Gemini 原生检测当前读取 usageMetadata，但尚未执行多轮成本倍率审计。",
-		Details:  map[string]any{"skipped": true, "reason": "gemini_token_audit_not_implemented"},
+		Message:  "Gemini Token 用量审计未执行。",
+		Details:  map[string]any{"skipped": true, "reason": "gemini_token_audit_skipped"},
 	}
 }
 

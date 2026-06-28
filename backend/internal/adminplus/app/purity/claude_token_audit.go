@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const claudeTokenAuditModeHistoryReplay = "history_replay"
+
 type claudeModelPricing struct {
 	InputPerToken      float64
 	OutputPerToken     float64
@@ -56,9 +58,10 @@ func (s *Service) runClaudeTokenAudit(ctx context.Context, client *http.Client, 
 		default:
 		}
 		roundCtx, cancelRound := context.WithTimeout(auditCtx, tokenAuditRoundTimeout)
+		historyMessages := len(history) * 2
 		probe := s.probeClaudeAudit(roundCtx, client, baseURL, apiKey, model, i, auditNonce, probeCtx, history)
 		cancelRound()
-		sample := claudeTokenAuditSampleFromProbe(i, probe, pricing)
+		sample := claudeTokenAuditSampleFromProbe(i, probe, pricing, historyMessages)
 		report.Samples = append(report.Samples, sample)
 		if emitSample != nil {
 			emitSample(sample)
@@ -70,6 +73,13 @@ func (s *Service) runClaudeTokenAudit(ctx context.Context, client *http.Client, 
 		report.OutputTokens += sample.OutputTokens
 		report.CacheCreationTokens += sample.CacheCreationTokens
 		report.CachedTokens += sample.CachedTokens
+		if sample.CacheCreationFieldPresent {
+			report.CacheCreationFieldObserved = true
+		}
+		if sample.CachedTokensFieldPresent {
+			report.CacheReadFieldObserved = true
+			report.CachedTokensFieldObserved = true
+		}
 		totalOfficial += sample.OfficialBaselineUSD
 		totalActual += sample.ActualCostUSD
 		if assistantText := claudeAssistantTextFromBody(probe.Body); assistantText != "" {
@@ -88,8 +98,50 @@ func (s *Service) runClaudeTokenAudit(ctx context.Context, client *http.Client, 
 
 func finalizeClaudeTokenAudit(report *TokenAuditReport) {
 	finalizeTokenAudit(report)
+	applyClaudeHistoryReplayStats(report)
 	applyClaudeWarmCacheHitRate(report)
 	applyClaudeTokenAuditAnomalies(report)
+}
+
+func applyClaudeHistoryReplayStats(report *TokenAuditReport) {
+	if report == nil || len(report.Samples) == 0 {
+		return
+	}
+	attempted := 0
+	passed := 0
+	linked := 0
+	for _, sample := range report.Samples {
+		if sample.RequestMode != claudeTokenAuditModeHistoryReplay {
+			continue
+		}
+		if sample.Round > 1 {
+			attempted++
+		}
+		if sample.Status != CheckStatusPass {
+			continue
+		}
+		if sample.Round > 1 {
+			passed++
+		}
+		if sample.StateLinked {
+			linked++
+		}
+	}
+	report.HistoryReplayRounds = passed
+	report.HistoryReplayLinks = linked
+	report.HistoryReplayLinksExpected = attempted
+	report.HistoryReplayOK = report.HistoryReplayLinksExpected == 0 || report.HistoryReplayLinks >= report.HistoryReplayLinksExpected
+	report.ContextReplayRounds = report.HistoryReplayRounds
+	report.ContextReplayLinks = report.HistoryReplayLinks
+	report.ContextReplayLinksExpected = report.HistoryReplayLinksExpected
+	report.ContextReplayOK = report.HistoryReplayOK
+	report.StatefulRounds = report.HistoryReplayLinks
+	report.PreviousChainOK = report.HistoryReplayOK
+	if !report.HistoryReplayOK {
+		report.Status = CheckStatusWarn
+		report.Summary = "Claude 历史消息重放不完整"
+		report.Anomalies = appendUniqueString(report.Anomalies, "claude_history_replay_incomplete")
+	}
 }
 
 func applyClaudeWarmCacheHitRate(report *TokenAuditReport) {
@@ -121,12 +173,19 @@ func applyClaudeTokenAuditAnomalies(report *TokenAuditReport) {
 	}
 	passed := 0
 	cacheShapeBad := false
+	fieldShapeBad := false
 	costShapeBad := false
 	for _, sample := range report.Samples {
 		if sample.Status != CheckStatusPass {
 			continue
 		}
 		passed++
+		if sample.BaselineCacheCreation > 0 && !sample.CacheCreationFieldPresent {
+			fieldShapeBad = true
+		}
+		if sample.BaselineCacheRead > 0 && !sample.CachedTokensFieldPresent {
+			fieldShapeBad = true
+		}
 		if sample.BaselineCacheCreation > 0 && sample.CacheCreationInputTokens == 0 {
 			cacheShapeBad = true
 		}
@@ -140,30 +199,43 @@ func applyClaudeTokenAuditAnomalies(report *TokenAuditReport) {
 	if passed == 0 {
 		return
 	}
+	if fieldShapeBad {
+		report.Status = CheckStatusWarn
+		report.Summary = "Claude usage 未返回 cache_creation/cache_read 字段"
+		report.Anomalies = appendUniqueString(report.Anomalies, "claude_cache_usage_fields_missing")
+	}
 	if cacheShapeBad {
 		report.Status = CheckStatusWarn
-		report.Summary = "Claude 缓存计量形态异常"
+		if !fieldShapeBad {
+			report.Summary = "Claude 缓存计量形态异常"
+		}
 		report.Anomalies = appendUniqueString(report.Anomalies, "claude_cache_accounting_missing")
 	}
 	if costShapeBad {
 		report.Status = CheckStatusWarn
-		if !cacheShapeBad {
+		if !cacheShapeBad && !fieldShapeBad {
 			report.Summary = "Claude Token 成本倍率异常"
 		}
 		report.Anomalies = appendUniqueString(report.Anomalies, "cost_multiplier_anomaly")
 	}
 }
 
-func claudeTokenAuditSampleFromProbe(index int, probe httpProbe, pricing claudeModelPricing) TokenAuditSample {
+func claudeTokenAuditSampleFromProbe(index int, probe httpProbe, pricing claudeModelPricing, historyMessages int) TokenAuditSample {
 	sample := TokenAuditSample{
-		Index:        index,
-		Round:        index,
-		LatencyMS:    probe.LatencyMS,
-		Status:       CheckStatusFail,
-		StatusCode:   probe.StatusCode,
-		ErrorClass:   strings.TrimSpace(probe.ErrorClass),
-		ErrorMessage: strings.TrimSpace(probe.ErrorMessage),
+		Index:                     index,
+		Round:                     index,
+		LatencyMS:                 probe.LatencyMS,
+		Status:                    CheckStatusFail,
+		StatusCode:                probe.StatusCode,
+		ErrorClass:                strings.TrimSpace(probe.ErrorClass),
+		ErrorMessage:              strings.TrimSpace(probe.ErrorMessage),
+		RequestMode:               claudeTokenAuditModeHistoryReplay,
+		HistoryMessages:           historyMessages,
+		SystemCacheControlBlocks:  2,
+		MessageCacheControlBlocks: 1,
 	}
+	expectedHistoryMessages := maxInt(0, (index-1)*2)
+	sample.StateLinked = expectedHistoryMessages > 0 && historyMessages >= expectedHistoryMessages
 	applyClaudeTokenAuditBaseline(&sample, pricing)
 	if probe.StatusCode < 200 || probe.StatusCode >= 300 {
 		applyTokenAuditProbeFailure(&sample, probe, "Claude 用量审计请求未成功")
@@ -180,6 +252,8 @@ func claudeTokenAuditSampleFromProbe(index int, probe httpProbe, pricing claudeM
 	sample.CacheReadInputTokens = usage.CachedTokens
 	sample.CacheCreationTokens = usage.CacheCreationTokens
 	sample.CacheCreationInputTokens = usage.CacheCreationTokens
+	sample.CacheCreationFieldPresent = usage.CacheCreationFieldPresent
+	sample.CachedTokensFieldPresent = usage.CachedTokensFieldPresent
 	sample.UncachedInputTokens = usage.InputTokens
 	sample.TotalTokens = usage.TotalTokens
 	sample.ActualCostUSD = roundMoney(claudeTokenCost(usage, pricing, true))

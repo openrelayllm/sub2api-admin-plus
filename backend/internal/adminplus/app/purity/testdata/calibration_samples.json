@@ -128,7 +128,7 @@
     {
       "sample_id": "synthetic-openai-token-audit-fallback-001",
       "sample_kind": "synthetic",
-      "name": "openai_stateful_params_unsupported_fallback",
+      "name": "openai_extended_params_unsupported_minimal_retry",
       "provider": "openai",
       "model_id": "gpt-5.5",
       "samples": [
@@ -139,7 +139,8 @@
           "output_tokens": 21,
           "total_tokens": 222,
           "official_baseline_usd": 0.001635,
-          "actual_cost_usd": 0.001635
+          "actual_cost_usd": 0.001635,
+          "request_mode": "minimal_retry"
         },
         {
           "round": 2,
@@ -148,13 +149,104 @@
           "output_tokens": 22,
           "total_tokens": 224,
           "official_baseline_usd": 0.00167,
-          "actual_cost_usd": 0.00167
+          "actual_cost_usd": 0.00167,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 3,
+          "status": "pass",
+          "input_tokens": 203,
+          "output_tokens": 23,
+          "total_tokens": 226,
+          "official_baseline_usd": 0.001705,
+          "actual_cost_usd": 0.001705,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 4,
+          "status": "pass",
+          "input_tokens": 204,
+          "output_tokens": 24,
+          "total_tokens": 228,
+          "official_baseline_usd": 0.00174,
+          "actual_cost_usd": 0.00174,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 5,
+          "status": "pass",
+          "input_tokens": 205,
+          "output_tokens": 25,
+          "total_tokens": 230,
+          "official_baseline_usd": 0.001775,
+          "actual_cost_usd": 0.001775,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 6,
+          "status": "pass",
+          "input_tokens": 206,
+          "output_tokens": 26,
+          "total_tokens": 232,
+          "official_baseline_usd": 0.00181,
+          "actual_cost_usd": 0.00181,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 7,
+          "status": "pass",
+          "input_tokens": 207,
+          "output_tokens": 27,
+          "total_tokens": 234,
+          "official_baseline_usd": 0.001845,
+          "actual_cost_usd": 0.001845,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 8,
+          "status": "pass",
+          "input_tokens": 208,
+          "output_tokens": 28,
+          "total_tokens": 236,
+          "official_baseline_usd": 0.00188,
+          "actual_cost_usd": 0.00188,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 9,
+          "status": "pass",
+          "input_tokens": 209,
+          "output_tokens": 29,
+          "total_tokens": 238,
+          "official_baseline_usd": 0.001915,
+          "actual_cost_usd": 0.001915,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 10,
+          "status": "pass",
+          "input_tokens": 210,
+          "output_tokens": 30,
+          "total_tokens": 240,
+          "official_baseline_usd": 0.00195,
+          "actual_cost_usd": 0.00195,
+          "request_mode": "minimal_retry"
+        },
+        {
+          "round": 11,
+          "status": "pass",
+          "input_tokens": 211,
+          "output_tokens": 31,
+          "total_tokens": 242,
+          "official_baseline_usd": 0.001985,
+          "actual_cost_usd": 0.001985,
+          "request_mode": "minimal_retry"
         }
       ],
       "want_status": "warn",
-      "want_summary_contains": "Responses 状态链路不完整",
-      "want_anomalies": ["previous_response_chain_incomplete", "cached_tokens_missing"],
-      "want_usable_samples": 2,
+      "want_summary_contains": "Responses 扩展参数不兼容",
+      "want_anomalies": ["responses_audit_minimal_retry"],
+      "want_usable_samples": 11,
       "want_missing_samples": 0
     },
     {

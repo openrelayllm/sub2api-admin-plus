@@ -15,8 +15,9 @@ func validationSpecs() []validationSpec {
 		{ID: "behavior", Name: "行为验证", CheckIDs: []string{"tool_call", "streaming"}},
 		{ID: "signature", Name: "签名校验", CheckIDs: []string{"usage"}},
 		{ID: "multimodal", Name: "多模态能力", CheckIDs: []string{"multimodal"}},
-		{ID: "token_audit", Name: "Token 用量审计", CheckIDs: []string{"token_audit"}},
+		{ID: "model_identity", Name: "模型身份验证", CheckIDs: []string{"model_identity"}},
 		{ID: "wrapper_fingerprint", Name: "包装指纹验证", CheckIDs: []string{"wrapper_fingerprint"}},
+		{ID: "token_audit", Name: "Token 用量审计", CheckIDs: []string{"token_audit"}},
 	}
 }
 

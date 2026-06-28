@@ -41,9 +41,13 @@
 - 已新增 `model_identity` 和 `wrapper_fingerprint` 检查项，并在报告中输出 `expected_model`、`response_model`、`wrapper_signals`、`model_identity` 及 camelCase 兼容字段。
 - Admin Plus Vue 前端已在纯度检测弹窗首屏展示请求模型、响应模型、模型身份、疑似上游厂商、包装信号，并补充 `model_identity` / `wrapper_fingerprint` 验证项，PDF 导出已包含模型身份、疑似上游厂商和包装证据。
 - 独立站 `proxyaiweb` React 前端已同步 schema、验证项、运行中/失败报告字段；结果页保留 verdict、核心指标、验证进度和 Token audit 报告，已移除重复的分数卡、证据卡和后端探针明细块；新增文案走 i18n，`src/lib/i18n.tsx` 仅保留运行时入口，翻译字典已拆到 `src/lib/i18n/`，PDF 导出已包含模型身份、疑似上游厂商和包装证据；模型控件支持 OpenAI/Claude/Gemini 官方预设、主流国产兼容模型预设和可编辑目标模型 ID。
-- OpenAI/Claude Token audit 已增加独立总超时与单轮超时；OpenAI state/cache 参数不兼容时会自动降级为最小 Responses usage 请求，并在 `TokenAuditSample` 中透出 `status_code`、`error_class`、`error_message`。前端会隐藏无 usage 的 0 数据样本，同时在 Token audit 面板显示失败轮次原因。
+- OpenAI/Claude/Gemini Token audit 已增加独立总超时与单轮超时；OpenAI audit 已拆分为 `cache_probe` 与 `context_replay` 两类样本，前 8 轮使用稳定长前缀与同一 `prompt_cache_key` 观察 `cached_tokens` 字段，后 3 轮按 Codex HTTP 形态重放完整 input 历史，不再把普通 HTTP `previous_response_id` 作为主判定；Claude audit 独立走 Messages 历史重放、Claude Code 形态 system 分段和 `cache_control`，统计 `cache_creation_input_tokens` / `cache_read_input_tokens` 字段存在性、缓存读写和历史链完整性；Gemini audit 独立走 GenerateContent `contents` 历史重放、`systemInstruction` 和 `tools.functionDeclarations` 形态，统计 `usageMetadata.promptTokenCount` / `candidatesTokenCount` / `totalTokenCount` / `cachedContentTokenCount` 字段。参数不兼容时 OpenAI 会按规则降级为最小 Responses usage 请求，并在 `TokenAuditSample` 中透出 `status_code`、`error_class`、`error_message`。前端图表只绘制有 usage/成本的样本，明细表必须保留所有轮次的 0 值和失败诊断；倍率展示优先使用报告级 `overall_ratio/overallRatio`，再回退旧 `multiplier`；平台计费倍率单独展示为 `billing_multiplier/billingMultiplier`，来源可能是后台账号配置 `account_config`，也可能是在兼容站支持 `/v1/usage` 时由审计前后 `usage.total.actual_cost / usage.total.cost` 增量推导出的 `usage_delta`，不覆盖 usage 推导倍率。
+- OpenAI 兼容接口如果不支持 `/v1/responses` 但 `/v1/chat/completions` 可用，会执行 3 轮轻量 Chat Completions usage 回退审计，输出可展示的 `token_audit.samples/rows` 和 `chat_completions_audit_fallback` anomaly；该回退只验证 usage 是否可读，不等价于完整 Responses 上下文重放、缓存和成本倍率审计。
+- 网页/公开 API 默认仍阻断私网 Base URL，避免 SSRF；当请求真实 `RemoteAddr` 和 HTTP `Host` 都是本机回环地址时，允许 Claude Code / Codex 等本地客户端测试 `localhost` / `127.0.0.1` 上的本地反代。公网域名经本机反向代理进入时不因 `RemoteAddr=127.0.0.1` 自动放行。
+- `proxyaiweb` 失败报告会按后端 `reason` 做 i18n 映射，`PURITY_BASE_URL_INVALID`、API Key 缺失、Key 过长、provider 不支持等入口失败会在页面和生成的失败报告中显示可行动原因。
 - 已建立 `backend/internal/adminplus/app/purity/testdata/calibration_samples.json` 样本回归框架，并补充 [样本校准契约](sample-calibration.md) 和契约测试，覆盖 sub2api 组合证据、CLIProxyAPI 混淆、国产模型信号、模型身份降级、Token audit fallback 和失败原因透传；P5 仍需引入真实授权供应商样本做持续校准。
-- 已通过后端 purity 相关 Go 测试、Admin Plus 前端 typecheck、proxyaiweb typecheck 和 proxyaiweb test。
+- `backend/internal/adminplus/app/purity/service_test.go` 已按职责拆分为 provider、stream/account、wrapper fingerprint、model identity、token audit 和 helper 测试文件，避免继续堆叠到单个大测试文件。
+- 已通过后端 `go test ./internal/adminplus/app/purity`、`go test ./internal/handler/adminplus`、proxyaiweb `pnpm typecheck`。
 
 ## 1. 背景
 
@@ -62,7 +66,7 @@ Admin Plus 已经具备本地账号、供应商、渠道和检测能力。随着
 - 过去过度依赖 API Base URL 官方域名，导致真实中转链路的上游纯度无法被客观评估。
 - Kiro、Antigravity、CLIProxyAPI、new-api、sub2api、OpenAI compatible 聚合网关等包装信号不完整。
 - Claude 兼容接口可以通过基本 Messages 探测，但不能通过官方签名、缓存计量和严格协议行为。
-- OpenAI 兼容接口可以返回合法 JSON，但可能不支持 Responses 状态链、`store:false/include`、工具调用、流式事件细节或真实 usage。
+- OpenAI 兼容接口可以返回合法 JSON，但可能不支持 Responses 上下文重放、`store:false/include`、工具调用、流式事件细节或真实 usage。
 - 响应中的模型名可能被反代重写，模型列表可能显示别名而非真实上游。
 - 国产主流模型厂商普遍支持 OpenAI 兼容协议，不能只按协议判断“OpenAI 纯度”。
 
@@ -262,7 +266,7 @@ Admin Plus 已经具备本地账号、供应商、渠道和检测能力。随着
 |------|------|
 | `wrapper_signals` | 包装、反代、聚合、兼容厂商信号 |
 | `model_identity` | 请求模型与响应模型、模型列表、厂商家族是否一致 |
-| `token_audit.anomalies` | usage、成本倍率、缓存读写、状态链异常 |
+| `token_audit.anomalies` | usage、成本倍率、缓存读写、重放链异常 |
 | `stream_channel` | 流式响应推断出的通道 |
 | `non_stream_channel` | 非流式响应推断出的通道 |
 
@@ -270,18 +274,18 @@ Admin Plus 已经具备本地账号、供应商、渠道和检测能力。随着
 
 ### 9.1 检测维度
 
-| 维度 | OpenAI | Claude | 说明 |
-|------|--------|--------|------|
-| Base URL | 记录 host 与是否官方域名 | 记录 host 与是否官方域名 | 仅作链路信息，不单独扣分或封顶 |
-| 模型列表 | `/v1/models` schema 和模型存在性 | 后续可补 Anthropic models | 用于发现别名、缺失和厂商模型 |
-| 非流式结构 | `/v1/responses` | `/v1/messages` | 检查 schema、content、id、usage |
-| 工具调用 | Responses tool call | Claude tool_use | 检查函数调用结构 |
-| 流式事件 | SSE event/data、completed | message_start/content/tool/stop | 检查流式协议细节 |
-| usage | input/output/cache/reasoning | input/output/cache_creation/cache_read | 计量字段完整性 |
-| 签名 | usage 和状态链 | thinking.signature 负向探针 | Claude 重点检查签名约束 |
-| 多模态 | input_image | image block | 检查图片输入兼容性 |
-| Token audit | prompt_cache_key、previous_response_id | cache_control、cache read/write | 发现 usage 和成本异常 |
-| 模型身份 | request/response/list/header/error | request/response/header/error | 发现别名和伪装 |
+| 维度 | OpenAI | Claude | Gemini | 说明 |
+|------|--------|--------|--------|------|
+| Base URL | 记录 host 与是否官方域名 | 记录 host 与是否官方域名 | 记录 host 与是否官方域名 | 仅作链路信息，不单独扣分或封顶 |
+| 模型列表 | `/v1/models` schema 和模型存在性 | 后续可补 Anthropic models | `/v1beta/models` / `/models` | 用于发现别名、缺失和厂商模型 |
+| 非流式结构 | `/v1/responses` | `/v1/messages` | `:generateContent` | 检查 schema、content、id/modelVersion、usage |
+| 工具调用 | Responses tool call | Claude tool_use | `functionDeclarations` + `functionCallingConfig=ANY` | 检查函数调用结构 |
+| 流式事件 | SSE event/data、completed | message_start/content/tool/stop | `:streamGenerateContent?alt=sse` | 检查流式协议细节 |
+| usage | input/output/cache/reasoning | input/output/cache_creation/cache_read | `usageMetadata` prompt/candidates/total/cachedContent | 计量字段完整性 |
+| 签名 | usage、缓存字段和上下文重放 | thinking.signature 负向探针 | usageMetadata 与 contents 重放 | Claude 重点检查签名约束；Gemini 重点检查 SDK/CLI 请求形态 |
+| 多模态 | input_image | image block | inlineData image/png | 检查图片输入兼容性 |
+| Token audit | cache_probe: prompt_cache_key + 稳定前缀；context_replay: Codex input 历史重放 | history_replay: Messages 历史 + cache_control；cache read/write | gemini_history_replay: GenerateContent contents 历史 + systemInstruction/tools | 发现 usage、缓存字段、重放链和成本异常 |
+| 模型身份 | request/response/list/header/error | request/response/header/error | request/modelVersion/list/error | 发现别名和伪装 |
 
 ### 9.2 中转与混淆检测信号
 
@@ -506,9 +510,9 @@ Admin Plus 已经具备本地账号、供应商、渠道和检测能力。随着
 | tag_check | 10 | Base URL 链路信息、模型列表、基础 LLM 指纹 |
 | structure | 20 | 非流式结构完整性 |
 | behavior | 30 | 工具调用和流式行为 |
-| signature_proto | 30 | usage、签名、状态链、缓存协议 |
+| signature_proto | 30 | usage、签名、重放链、缓存协议 |
 | multimodal | 10 | 多模态输入能力 |
-| token_audit | 10 | token usage、缓存、成本倍率、状态链审计 |
+| token_audit | 10 | token usage、缓存、成本倍率、重放链审计 |
 | model_identity | 20 | 模型身份一致性，作为扣分项或独立校正项 |
 
 说明：
@@ -908,14 +912,24 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 | `token_audit.summary` | 汇总结论；失败或部分失败时必须包含可读原因 |
 | `token_audit.official_baseline_usd` | 基于官方计价的估算基线 |
 | `token_audit.actual_cost_usd` | 基于目标 API usage 的 Usage 估算 |
-| `token_audit.multiplier` | Usage 估算倍率 |
+| `token_audit.multiplier` | 旧版 Usage 估算倍率；仅在 `overall_ratio/overallRatio` 缺失时作为展示回退 |
+| `token_audit.overall_ratio` / `overallRatio` | 首选展示倍率，按 provider-specific usage/cache 语义计算 |
+| `token_audit.billing_multiplier` / `billingMultiplier` | 可选平台计费倍率；账号检测从本系统账号配置读取，公开/Developer API 黑盒检测仅在兼容站 `/v1/usage` 返回审计前后有效标准费用与实际扣费增量时推导；例如 sub2api 后台 0.07x 属于该口径，不等同于 usage 推导倍率 |
+| `token_audit.billing_multiplier_source` / `billingMultiplierSource` | 平台计费倍率来源，当前为 `account_config` 或 `usage_delta` |
 | `token_audit.cache_hit_rate` | 缓存命中率 |
+| `token_audit.cached_tokens_field_observed` | OpenAI 是否返回过 `cached_tokens` 字段，Gemini 是否返回过 `cachedContentTokenCount` 字段；官方 OpenAI 返回 `cached_tokens: 0` 仍算字段已观察 |
+| `token_audit.cache_probe_rounds` | OpenAI cache probe 成功样本数，不包含 context_replay/minimal_retry 样本 |
+| `token_audit.cache_probe_hits` | OpenAI cache probe 中 `cached_tokens > 0` 的轮数 |
 | `token_audit.sample_count` | 已执行样本数 |
 | `token_audit.prompt_cache_key` | OpenAI Responses cache key，脱敏/截断展示 |
-| `token_audit.stateful_rounds` | previous_response_id 状态链成功轮数 |
-| `token_audit.previous_response_chain_ok` | 状态链是否完整 |
-| `token_audit.anomalies` | `usage_missing`、`cached_tokens_missing`、`previous_response_chain_incomplete` 等 |
-| `token_audit.samples[]/rows[]` | 单轮样本；前端图表只展示有 usage/成本数据的样本 |
+| `token_audit.context_replay_*` | OpenAI Codex 形态 input 历史重放统计；Gemini 兼容展示为 contents 历史重放；兼容旧字段 `stateful_rounds` / `previous_response_chain_ok` |
+| `token_audit.history_replay_*` | Claude Messages 历史重放统计；Gemini GenerateContent contents 历史重放统计 |
+| `token_audit.cache_creation_field_observed` / `cache_read_field_observed` | Claude usage 是否出现 `cache_creation_input_tokens` / `cache_read_input_tokens` |
+| `token_audit.anomalies` | `usage_missing`、`cached_tokens_missing`、`context_replay_incomplete`、`claude_history_replay_incomplete`、`gemini_history_replay_incomplete`、`gemini_usage_metadata_shape_anomaly`、`claude_cache_usage_fields_missing` 等；OpenAI 仅当 `cached_tokens` 字段完全缺失时记录 `cached_tokens_missing` |
+| `token_audit.samples[]/rows[]` | 单轮样本；前端图表只展示有 usage/成本数据的样本，明细表必须展示全部轮次、0 值和失败诊断 |
+| `sample.ratio` | 单轮展示倍率；存在时前端优先于 `sample.multiplier` |
+| `sample.request_mode` | `cache_probe` / `context_replay` / `minimal_retry` / `chat_completions` / `history_replay` / `gemini_history_replay` |
+| `sample.cached_tokens_present` | 本轮 usage 是否出现 `cached_tokens` 或 Gemini `cachedContentTokenCount` 字段，用于区分字段缺失与官方自动缓存未命中 |
 | `sample.status_code` | 失败轮次的上游 HTTP 状态码，可为空 |
 | `sample.error_class` | 失败轮次错误分类，如 `request_error`、`context_deadline_exceeded` |
 | `sample.error_message` | 已脱敏的失败原因，不得包含 API Key、账号或完整上游响应体 |
@@ -924,7 +938,7 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 
 - 无 usage 的样本不能渲染为 0 成本柱状图，但必须保留在 `samples` / `rows` 中供失败诊断使用。
 - `token_audit_sample` SSE 事件和最终 `token_audit` 汇总必须使用同一 `TokenAuditSample` 字段契约。
-- 如果目标兼容层不支持 OpenAI state/cache 参数，后端可以 fallback 到最小 Responses usage 请求；此时应保留 usage 样本，同时通过状态链/缓存异常解释为什么不是完整官方行为。
+- 如果目标兼容层不支持 OpenAI cache/context 参数，后端可以 fallback 到最小 Responses usage 请求；此时应保留 usage 样本，同时通过上下文重放/缓存异常解释为什么不是完整官方行为。
 
 ### 17.2 ModelIdentityResult
 
@@ -1075,7 +1089,7 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 | 国产模型信号 | qwen、glm、doubao、minimax、hunyuan、kimi、mimo、deepseek |
 | 模型身份 | 同名 pass、latest warn、版本降级 fail、跨厂商 fail、低配替代 fail、协议厂商与模型厂商不一致 fail |
 | Claude signature | 官方拒绝 invalid thinking.signature，兼容错误接受时 fail |
-| Token audit | OpenAI previous_response_id、prompt_cache_key；Claude cache_creation/cache_read |
+| Token audit | OpenAI prompt_cache_key 与 Codex input 历史重放；Claude cache_control、Messages 历史重放、cache_creation/cache_read |
 | 评分 | 透明中转不封顶、混淆风险封顶、模型身份 fail 封顶 |
 | 报告兼容字段 | snake_case 与 camelCase 同步 |
 
@@ -1193,7 +1207,7 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 
 - 展示 wrapper signals 和模型身份检查。
 - 保留必要分数与 verdict，不重复堆叠分数卡、证据卡和探针明细。
-- Token audit 不展示无 usage 的 0 数据样本，失败轮次必须直接展示原因。
+- Token audit 图表不绘制无 usage/成本的样本，但明细表必须展示无 usage 的 0 数据样本，失败轮次必须直接展示原因。
 - 风险文案解释清楚。
 
 验收：
@@ -1208,6 +1222,7 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 
 - 支持 `provider=gemini`、`gemini-compatible`、`google ai studio` 进入 Gemini 原生检测流。
 - 探测 `/v1beta/models`、`:generateContent`、`:streamGenerateContent?alt=sse`、functionCall、usageMetadata 和 inlineData 多模态。
+- 按 `/Users/coso/Documents/dev/js/gemini-cli` 的 API Key/Gateway 请求形态执行 Token audit：GenerateContent `contents` 历史重放、`systemInstruction`、`tools.functionDeclarations`、`usageMetadata` 字段读取，且不复用 OpenAI `previous_response_id` 或 Claude `cache_control` 语义。
 - 报告输出 `official_gemini`、`gemini_compatible`、`generate_content_latency_ms`、模型身份和包装证据。
 - 公开页和 Admin Plus 本地 Gemini API Key 账号可以发起检测。
 
@@ -1215,8 +1230,8 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 
 - Gemini mock server 全量通过且无混淆证据 -> 可判 `official_gemini`。
 - Gemini compatible 自定义 Base 不因 Base URL 本身降级。
-- Gemini Token audit 当前只读取 usageMetadata，多轮成本倍率审计明确 warn，不影响协议兼容评分。
-- 当前实现：`gemini.go`、`gemini_url.go`、`gemini_probe.go`、`gemini_checks.go` 已落地；前端 provider、schema、i18n、PDF 已同步。
+- Gemini Token audit 能输出 11 轮 `gemini_history_replay` 样本、`history_replay_*` / `context_replay_*` 统计、`cachedContentTokenCount` 字段观测和失败原因。
+- 当前实现：`gemini.go`、`gemini_url.go`、`gemini_probe.go`、`gemini_checks.go`、`gemini_token_audit.go` 已落地；前端 provider、schema、i18n、PDF 已同步。
 
 ### P5：真实供应商样本校准（部分完成）
 
@@ -1242,6 +1257,8 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 | 官方 latest 映射变化 | latest 指针会随时间变化 | 建立可更新模型注册表，未知映射只 warn 不直接 fail |
 | 国产模型命名快速变化 | qwen/glm/doubao 等版本更新快 | detector 用 vendor 关键词和 host/header 组合，不只依赖完整模型名 |
 | 误杀合法兼容入口 | 兼容入口不是恶意 | verdict 区分 compatible 和 official，不把 compatible 当 invalid |
+| 私网 Base URL 与本地客户端冲突 | 公网检测私网 URL 有 SSRF 风险，但 Claude Code / Codex 本地客户端常需要测试本机反代 | 默认阻断私网 Base URL；仅真实 `RemoteAddr` 和 `Host` 都是回环地址时允许本机 `localhost` / `127.0.0.1` 检测 |
+| Chat-only 兼容反代 usage 审计失败 | 部分 OpenAI 兼容站只实现 Chat Completions，不支持 Responses 上下文重放和缓存参数 | Chat Completions 可用时执行 3 轮 usage 回退审计并标记 `chat_completions_audit_fallback`，不把它等同于完整官方纯度 |
 | token audit 成本较高 | 多轮样本会消耗额度 | 默认样本固定、支持 skip、前端提示 |
 | 代码拆分引入回归 | 大文件拆分容易漏函数 | 先移动后测试，保持行为不变，再加新规则 |
 

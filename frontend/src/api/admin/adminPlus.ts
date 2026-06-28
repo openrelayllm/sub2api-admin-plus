@@ -708,12 +708,20 @@ export interface PurityTokenAuditSample {
   index: number
   round?: number
   input_tokens: number
+  baseline_input_tokens?: number
+  input_delta_pct?: number
   output_tokens: number
+  baseline_output_tokens?: number
+  output_delta_pct?: number
   uncached_input_tokens: number
   cache_creation_tokens: number
   cache_creation_input_tokens?: number
+  baseline_cache_creation_input_tokens?: number
+  cache_creation_delta_pct?: number
   cached_tokens: number
   cache_read_input_tokens?: number
+  baseline_cache_read_input_tokens?: number
+  cache_read_delta_pct?: number
   reasoning_tokens?: number
   total_tokens: number
   official_baseline_usd: number
@@ -722,15 +730,24 @@ export interface PurityTokenAuditSample {
   baseline_cost?: number
   actual_cost_usd: number
   cost?: number
+  cost_delta_pct?: number
   multiplier: number
   ratio?: number
   latency_ms: number
   status: PurityCheckStatus
+  status_code?: number
+  error_class?: string
+  error_message?: string
   response_id?: string
   previous_response_id?: string
   prompt_cache_key?: string
   store?: boolean
   state_linked?: boolean
+  request_mode?: string
+  retried?: boolean
+  history_messages?: number
+  system_cache_control_blocks?: number
+  message_cache_control_blocks?: number
 }
 
 export interface PurityTokenAuditReport {
@@ -740,15 +757,36 @@ export interface PurityTokenAuditReport {
   official_baseline_usd: number
   uncached_baseline_usd?: number
   baseline_total_cost_usd?: number
+  baselineTotalCost?: number
   actual_cost_usd: number
   total_cost?: number
+  totalCost?: number
   multiplier: number
   overall_ratio?: number
+  overallRatio?: number
+  billing_multiplier?: number | null
+  billingMultiplier?: number | null
+  billing_multiplier_source?: string
+  billingMultiplierSource?: string
   cache_hit_rate: number
+  cacheHitRate?: number
   input_tokens: number
   output_tokens: number
   cache_creation_tokens: number
   cached_tokens: number
+  cached_tokens_field_observed?: boolean
+  cache_creation_field_observed?: boolean
+  cache_read_field_observed?: boolean
+  cache_probe_rounds?: number
+  cache_probe_hits?: number
+  context_replay_rounds?: number
+  context_replay_links?: number
+  context_replay_links_expected?: number
+  context_replay_ok?: boolean
+  history_replay_rounds?: number
+  history_replay_links?: number
+  history_replay_links_expected?: number
+  history_replay_ok?: boolean
   sample_count: number
   prompt_cache_key?: string
   store_enabled?: boolean

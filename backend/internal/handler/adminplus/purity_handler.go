@@ -3,6 +3,7 @@ package adminplus
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -78,12 +79,13 @@ func (h *PurityHandler) runPublicCheck(c *gin.Context, verifyTurnstile bool, dev
 		return
 	}
 	input := purityapp.PublicCheckInput{
-		Provider:       req.Provider,
-		APIBaseURL:     req.APIBaseURL,
-		APIKey:         req.APIKey,
-		ModelID:        req.ModelID,
-		ClientIP:       clientIP,
-		SkipTokenAudit: req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
+		Provider:            req.Provider,
+		APIBaseURL:          req.APIBaseURL,
+		APIKey:              req.APIKey,
+		ModelID:             req.ModelID,
+		ClientIP:            clientIP,
+		SkipTokenAudit:      req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
+		AllowPrivateBaseURL: allowPrivateBaseURLForRequest(c),
 	}
 	var report *purityapp.PublicReport
 	var err error
@@ -120,12 +122,13 @@ func (h *PurityHandler) runPublicCheckStream(c *gin.Context, verifyTurnstile boo
 	encoder := json.NewEncoder(c.Writer)
 	var writeErr error
 	input := purityapp.PublicCheckInput{
-		Provider:       req.Provider,
-		APIBaseURL:     req.APIBaseURL,
-		APIKey:         req.APIKey,
-		ModelID:        req.ModelID,
-		ClientIP:       clientIP,
-		SkipTokenAudit: req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
+		Provider:            req.Provider,
+		APIBaseURL:          req.APIBaseURL,
+		APIKey:              req.APIKey,
+		ModelID:             req.ModelID,
+		ClientIP:            clientIP,
+		SkipTokenAudit:      req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
+		AllowPrivateBaseURL: allowPrivateBaseURLForRequest(c),
 	}
 	emit := func(event purityapp.PublicCheckEvent) {
 		if writeErr != nil {
@@ -190,6 +193,29 @@ func (h *PurityHandler) verifyWebPurityTurnstile(c *gin.Context, token string, c
 		return true
 	}
 	return false
+}
+
+func allowPrivateBaseURLForRequest(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if !isLoopbackHost(c.Request.Host) {
+		return false
+	}
+	host := strings.TrimSpace(c.Request.RemoteAddr)
+	return isLoopbackHost(host)
+}
+
+func isLoopbackHost(value string) bool {
+	host := strings.TrimSpace(value)
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+	}
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	parsed := net.ParseIP(host)
+	return parsed != nil && parsed.IsLoopback()
 }
 
 func (h *PurityHandler) AccountCheckStream(c *gin.Context) {

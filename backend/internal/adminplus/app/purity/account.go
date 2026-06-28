@@ -8,39 +8,39 @@ import (
 	"strings"
 )
 
-func (s *Service) publicInputFromAccount(ctx context.Context, in AccountCheckInput) (PublicCheckInput, error) {
+func (s *Service) publicInputFromAccount(ctx context.Context, in AccountCheckInput) (*coreservice.Account, PublicCheckInput, error) {
 	if s == nil {
-		return PublicCheckInput{}, infraerrors.InternalServer("PURITY_SERVICE_NOT_CONFIGURED", "purity service is not configured")
+		return nil, PublicCheckInput{}, infraerrors.InternalServer("PURITY_SERVICE_NOT_CONFIGURED", "purity service is not configured")
 	}
 	if s.accountResolver == nil {
-		return PublicCheckInput{}, infraerrors.InternalServer("PURITY_ACCOUNT_RESOLVER_NOT_CONFIGURED", "account resolver is not configured")
+		return nil, PublicCheckInput{}, infraerrors.InternalServer("PURITY_ACCOUNT_RESOLVER_NOT_CONFIGURED", "account resolver is not configured")
 	}
 	if in.AccountID <= 0 {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_ID_INVALID", "invalid account id")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_ID_INVALID", "invalid account id")
 	}
 	requestedProvider := strings.TrimSpace(in.Provider)
 	provider := normalizeProvider(requestedProvider)
 	account, err := s.accountResolver.GetByID(ctx, in.AccountID)
 	if err != nil {
-		return PublicCheckInput{}, err
+		return nil, PublicCheckInput{}, err
 	}
 	if account == nil {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "unsupported account")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "unsupported account")
 	}
 	if requestedProvider == "" {
 		provider = normalizeProvider(account.Platform)
 	}
 	if provider == ProviderOpenAI && !account.IsOpenAIApiKey() {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "only OpenAI API key accounts can run purity checks")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "only OpenAI API key accounts can run purity checks")
 	}
 	if provider == ProviderAnthropic && (account.Platform != coreservice.PlatformAnthropic || account.Type != coreservice.AccountTypeAPIKey) {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "only Claude API key accounts can run purity checks")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "only Claude API key accounts can run purity checks")
 	}
 	if provider == ProviderGemini && (account.Platform != coreservice.PlatformGemini || account.Type != coreservice.AccountTypeAPIKey) {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "only Gemini API key accounts can run purity checks")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_UNSUPPORTED", "only Gemini API key accounts can run purity checks")
 	}
 	if provider != ProviderOpenAI && provider != ProviderAnthropic && provider != ProviderGemini {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_PROVIDER_UNSUPPORTED", "only OpenAI, Claude and Gemini API key purity checks are supported")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_PROVIDER_UNSUPPORTED", "only OpenAI, Claude and Gemini API key purity checks are supported")
 	}
 	apiKey := account.GetOpenAIApiKey()
 	baseURL := account.GetOpenAIBaseURL()
@@ -53,15 +53,47 @@ func (s *Service) publicInputFromAccount(ctx context.Context, in AccountCheckInp
 		baseURL = account.GetGeminiBaseURL(defaultGeminiBaseURL)
 	}
 	if strings.TrimSpace(apiKey) == "" {
-		return PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_API_KEY_MISSING", "account api key is missing")
+		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_API_KEY_MISSING", "account api key is missing")
 	}
-	return PublicCheckInput{
+	return account, PublicCheckInput{
 		Provider:   provider,
 		APIBaseURL: baseURL,
 		APIKey:     apiKey,
 		ModelID:    in.ModelID,
 		ClientIP:   fmt.Sprintf("account:%d", in.AccountID),
 	}, nil
+}
+
+func accountBillingMultiplier(account *coreservice.Account) *float64 {
+	if account == nil {
+		return nil
+	}
+	multiplier := account.BillingRateMultiplier()
+	return &multiplier
+}
+
+func applyTokenAuditBillingMultiplier(audit *TokenAuditReport, multiplier *float64) {
+	if audit == nil || multiplier == nil {
+		return
+	}
+	value := *multiplier
+	audit.BillingMultiplier = &value
+	audit.BillingMultiplierCompat = &value
+	audit.BillingMultiplierSource = "account_config"
+	audit.BillingMultiplierSourceCompat = "account_config"
+}
+
+func applyTokenAuditBillingMultiplierFromProbe(audit *TokenAuditReport, probe billingMultiplierProbe) {
+	if audit == nil {
+		return
+	}
+	if probe.Multiplier != nil {
+		applyTokenAuditBillingMultiplier(audit, probe.Multiplier)
+	}
+	if probe.Source != "" {
+		audit.BillingMultiplierSource = probe.Source
+		audit.BillingMultiplierSourceCompat = probe.Source
+	}
 }
 
 func normalizeProvider(provider string) string {

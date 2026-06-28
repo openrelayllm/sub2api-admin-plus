@@ -90,6 +90,35 @@ func TestPurityHandlerAccountCheckStreamUsesStoredAccountCredential(t *testing.T
 	require.NotContains(t, w.Body.String(), "sk-account-handler")
 }
 
+func TestAllowPrivateBaseURLForRequestOnlyTrustsLoopbackRemoteAddr(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	req := httptest.NewRequest(http.MethodPost, "/purity/checks/stream", strings.NewReader("{}"))
+	req.RemoteAddr = "127.0.0.1:5174"
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+
+	require.True(t, allowPrivateBaseURLForRequest(c))
+
+	req = httptest.NewRequest(http.MethodPost, "https://api.proxyai.best/purity/checks/stream", strings.NewReader("{}"))
+	req.RemoteAddr = "127.0.0.1:5174"
+	c, _ = gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+
+	require.False(t, allowPrivateBaseURLForRequest(c))
+
+	req = httptest.NewRequest(http.MethodPost, "/purity/checks/stream", strings.NewReader("{}"))
+	req.RemoteAddr = "203.0.113.10:443"
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	c, _ = gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+
+	require.False(t, allowPrivateBaseURLForRequest(c))
+}
+
 type purityHandlerAccountResolverStub struct {
 	account *coreservice.Account
 	err     error
@@ -110,15 +139,21 @@ func writePurityHandlerOpenAITokenAuditResponse(t *testing.T, w http.ResponseWri
 	require.NotNil(t, responseIndex)
 	*responseIndex++
 	index := *responseIndex
-	require.Equal(t, true, body["store"])
 	require.NotEmpty(t, body["prompt_cache_key"])
-	if index == 1 {
+
+	const cacheProbeRounds = 8
+	if index <= cacheProbeRounds {
+		require.NotContains(t, body, "store")
 		require.NotContains(t, body, "previous_response_id")
 	} else {
-		require.Equal(t, fmt.Sprintf("resp_audit_%d", index-1), body["previous_response_id"])
+		require.NotContains(t, body, "store")
+		require.NotContains(t, body, "previous_response_id")
+		input, ok := body["input"].([]any)
+		require.True(t, ok)
+		require.Len(t, input, (index-cacheProbeRounds)*2-1)
 	}
 	cachedTokens := 0
-	if index > 1 {
+	if index > 1 && index <= cacheProbeRounds {
 		cachedTokens = 640
 	}
 	inputTokens := 1600 + index*13

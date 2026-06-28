@@ -179,12 +179,19 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("multimodal", "多模态能力", []CheckResult{multimodalCheck}))
 	emitMetrics(report, emit)
 
+	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, messagesProbe.Headers, streamProbe.Headers)
+	report.IsKiro = hasKiroFingerprint(report.APIBaseHost, messagesProbe.Headers, streamProbe.Headers)
+	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, messagesProbe, signatureProbe, budgetProbe, cacheControlProbe, multimodalProbe), gatewayProbe.Headers, messagesProbe.Headers, streamProbe.Headers, signatureProbe.Headers, budgetProbe.Headers, cacheControlProbe.Headers, multimodalProbe.Headers)
+	appendAndEmitModelIdentity(report, emit)
+	appendAndEmitWrapperFingerprint(report, emit)
+
 	if in.SkipTokenAudit {
 		tokenAuditCheck := CheckResult{ID: "token_audit", Name: "Token 用量审计", Status: CheckStatusWarn, Score: 0, MaxScore: 15, Message: "本次请求已关闭 Token 用量审计。", Details: map[string]any{"skipped": true}}
 		appendAndEmitChecks(report, emit, tokenAuditCheck)
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
 	} else if messagesProbe.StatusCode >= 200 && messagesProbe.StatusCode < 300 {
 		emitProgress(report, emit, 6, "token_audit")
+		billingSnapshot := s.captureBillingUsageSnapshotForAudit(checkCtx, client, ProviderAnthropic, baseURL, apiKey, options)
 		report.TokenAudit = s.runClaudeTokenAudit(checkCtx, client, baseURL, apiKey, model, probeCtx, func(sample TokenAuditSample) {
 			report.TokenAuditPartial = upsertTokenAuditPartial(report.TokenAuditPartial, sample)
 			report.TokenAuditProgress = fmt.Sprintf("%d/%d", len(report.TokenAuditPartial), tokenAuditSamples)
@@ -201,6 +208,7 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 				TokenAuditPartial:  append([]TokenAuditSample(nil), report.TokenAuditPartial...),
 			})
 		})
+		s.applyTokenAuditBillingMultiplierForAudit(checkCtx, client, ProviderAnthropic, baseURL, apiKey, report.TokenAudit, billingSnapshot, options)
 		tokenAuditCheck := buildTokenAuditCheck(report.TokenAudit)
 		appendAndEmitChecks(report, emit, tokenAuditCheck)
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
@@ -222,11 +230,6 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
 	}
 
-	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, messagesProbe.Headers, streamProbe.Headers)
-	report.IsKiro = hasKiroFingerprint(report.APIBaseHost, messagesProbe.Headers, streamProbe.Headers)
-	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, messagesProbe, signatureProbe, budgetProbe, cacheControlProbe, multimodalProbe), gatewayProbe.Headers, messagesProbe.Headers, streamProbe.Headers, signatureProbe.Headers, budgetProbe.Headers, cacheControlProbe.Headers, multimodalProbe.Headers)
-	appendAndEmitModelIdentity(report, emit)
-	appendAndEmitWrapperFingerprint(report, emit)
 	emitProgress(report, emit, 7, "evaluate")
 	report.Metrics.LatencyMS = int64(s.currentTime().Sub(startedAt) / time.Millisecond)
 	s.finalizeAndSave(ctx, report, baseURL)

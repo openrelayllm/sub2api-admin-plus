@@ -89,12 +89,14 @@ func claudeMultimodalProbePayload(model string, probeCtx claudeProbeContext) []b
 }
 
 func claudeAuditProbePayload(model string, round int, auditNonce string, probeCtx claudeProbeContext, history []claudeAuditTurn) []byte {
+	system := claudeAuditSystemBlocks(round, auditNonce)
+	messages := claudeAuditMessages(round, auditNonce, history)
 	body, _ := json.Marshal(map[string]any{
 		"model":       firstNonEmptyString(model, defaultClaudeModel),
 		"max_tokens":  claudeTokenAuditOutputBudget(round),
 		"temperature": 1,
-		"system":      claudeAuditSystemBlocks(round, auditNonce),
-		"messages":    claudeAuditMessages(round, auditNonce, history),
+		"system":      system,
+		"messages":    messages,
 		"metadata":    probeCtx.metadata(),
 	})
 	return body
@@ -182,10 +184,8 @@ func claudeAuditSystemBlocks(round int, auditNonce string) []map[string]any {
 	round = clampAuditRound(round)
 	return []map[string]any{
 		claudeTextBlock(claudeBillingAttributionText(fmt.Sprintf("Purity token audit round %02d", round)), false),
-		claudeTextBlock(strings.Join([]string{
-			claudeCodeSystemPrompt,
-			auditStableCacheText(auditNonce),
-		}, "\n\n"), true),
+		claudeTextBlock(claudeCodeSystemPrompt, true),
+		claudeTextBlock(auditStableCacheText(auditNonce), true),
 	}
 }
 

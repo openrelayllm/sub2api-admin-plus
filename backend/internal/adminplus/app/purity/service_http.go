@@ -9,7 +9,7 @@ import (
 func newPurityHTTPClient(allowPrivate bool) *http.Client {
 	client, err := httpclient.GetClient(httpclient.Options{
 		Timeout:               defaultHTTPTimeout,
-		ResponseHeaderTimeout: 15 * time.Second,
+		ResponseHeaderTimeout: defaultTokenAuditRoundTimeout + 5*time.Second,
 		ValidateResolvedIP:    true,
 		AllowPrivateHosts:     allowPrivate,
 		MaxConnsPerHost:       2,

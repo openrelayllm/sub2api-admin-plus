@@ -30,7 +30,7 @@ flowchart TD
 - 错误体只保留短错误原因、`status_code`、`error_class`、稳定错误 code/type。
 - 响应头只保留 detector 白名单需要的字段。
 - Base URL 只保留 host，不保存带 token 的 query。
-- Token audit 只保留每轮 usage、成本估算、状态链字段和失败原因。
+- Token audit 只保留每轮 usage、成本估算、context/history replay 字段和失败原因。
 
 ## 4. wrapper 样本模板
 

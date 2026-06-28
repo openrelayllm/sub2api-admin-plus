@@ -1,8 +1,17 @@
-import type { PurityCheckResult, PurityCheckStatus, PurityReport, PurityTokenAuditReport, PurityTokenAuditSample } from '@/api/admin/adminPlus'
+import type { PurityCheckResult, PurityCheckStatus, PurityReport, PurityTokenAuditSample } from '@/api/admin/adminPlus'
+import {
+  formatTokenAuditLatencyMS,
+  hasTokenAuditSampleData,
+  multiplierTone,
+  tokenAuditCostTotals,
+  tokenAuditDisplayRatio,
+  tokenAuditSampleDisplayRatio,
+  tokenAuditSampleDisplayRow,
+  type TokenAuditTone
+} from '@/utils/purityAuditDisplay'
 
 type AppLanguage = 'zh-CN' | 'en'
 type PurityCheck = PurityCheckResult
-type PurityTokenAudit = PurityTokenAuditReport
 type PurityVerdict = 'official_openai' | 'openai_compatible' | 'official_claude' | 'claude_compatible' | 'partial_compatible' | 'invalid_or_unavailable' | 'unknown' | string
 
 type PdfLabels = {
@@ -20,6 +29,7 @@ type PdfLabels = {
   officialScore: string
   compatibilityScore: string
   latency: string
+  auditLatency: string
   tokensPerSecond: string
   inputTokens: string
   outputTokens: string
@@ -40,6 +50,7 @@ type PdfLabels = {
   officialBaseline: string
   actualCost: string
   multiplier: string
+  billingMultiplier: string
   cacheHitRate: string
   probeDetails: string
   scoreDetail: string
@@ -104,6 +115,7 @@ const zhLabels: PdfLabels = {
   officialScore: '官方度',
   compatibilityScore: '兼容度',
   latency: '延迟',
+  auditLatency: '耗时',
   tokensPerSecond: 'Tokens/秒',
   inputTokens: '输入 Tokens',
   outputTokens: '输出 Tokens',
@@ -124,6 +136,7 @@ const zhLabels: PdfLabels = {
   officialBaseline: '官方基线',
   actualCost: 'Usage 估算',
   multiplier: '估算倍率',
+  billingMultiplier: '平台计费倍率',
   cacheHitRate: '缓存命中率',
   probeDetails: '后端探针明细',
   scoreDetail: '得分',
@@ -153,6 +166,7 @@ const enLabels: PdfLabels = {
   officialScore: 'Official score',
   compatibilityScore: 'Compatibility',
   latency: 'Latency',
+  auditLatency: 'Time',
   tokensPerSecond: 'Tokens/sec',
   inputTokens: 'Input tokens',
   outputTokens: 'Output tokens',
@@ -173,6 +187,7 @@ const enLabels: PdfLabels = {
   officialBaseline: 'Official baseline',
   actualCost: 'Usage estimate',
   multiplier: 'Estimated ratio',
+  billingMultiplier: 'Platform billing ratio',
   cacheHitRate: 'Cache hit rate',
   probeDetails: 'Backend probe details',
   scoreDetail: 'Score',
@@ -203,7 +218,7 @@ function renderPurityReportPages(report: PurityReport, language: AppLanguage): R
   drawOverview(state, report)
   drawEvidence(state, report)
   drawValidations(state, report)
-  drawTokenAudit(state, report.token_audit)
+  drawTokenAudit(state, report)
   drawProbeDetails(state, report.checks)
   finalizePages(state)
 
@@ -292,31 +307,54 @@ function drawValidations(state: DrawState, report: PurityReport) {
   }
 }
 
-function drawTokenAudit(state: DrawState, audit?: PurityTokenAudit) {
+function drawTokenAudit(state: DrawState, report: PurityReport) {
+  const audit = report.token_audit
   drawSectionTitle(state, state.labels.tokenAudit)
   if (!audit) {
     drawInfoBox(state, state.labels.tokenAuditSkipped, '#17121a', '#5b461f', '#c5a85b')
     return
   }
 
-  drawMetricGrid(state, [
-    { label: state.labels.officialBaseline, value: formatUSD(audit.official_baseline_usd || audit.baseline_total_cost_usd || 0) },
-    { label: state.labels.actualCost, value: formatUSD(audit.actual_cost_usd || audit.total_cost || 0) },
-    { label: state.labels.multiplier, value: formatMultiplier(audit.multiplier || audit.overall_ratio || 0) },
-    { label: state.labels.cacheHitRate, value: formatPercent(audit.cache_hit_rate) },
+  const totals = tokenAuditCostTotals(audit)
+  const auditMetrics = [
+    { label: state.labels.officialBaseline, value: formatUSD(totals.officialBaselineUSD) },
+    { label: state.labels.actualCost, value: formatUSD(totals.actualCostUSD) },
+    { label: state.labels.multiplier, value: formatMultiplier(tokenAuditDisplayRatio(audit)) },
+    ...tokenAuditBillingMultiplierMetric(state, audit),
+    { label: state.labels.cacheHitRate, value: formatPercent(audit.cacheHitRate ?? audit.cache_hit_rate) },
     { label: 'Samples', value: String(audit.sample_count || audit.samples.length || 0) },
     { label: 'Price', value: audit.price_source || '-' }
-  ])
+  ]
+  drawMetricGrid(state, auditMetrics)
 
-  drawInfoBox(state, audit.summary || '-', '#123421', '#244b36', '#8ee7b5')
+  const tone = audit.status === 'fail' ? 'bad' : audit.status === 'warn' ? multiplierTone(tokenAuditDisplayRatio(audit)) : multiplierTone(tokenAuditDisplayRatio(audit))
+  drawInfoBox(state, audit.summary || '-', auditInfoFill(tone), auditInfoStroke(tone), pdfAuditToneColor(tone))
 
-  const samples = (audit.rows?.length ? audit.rows : audit.samples).filter(hasAuditSampleData).slice(0, 11)
-  if (samples.length) {
-    drawAuditChart(state, samples)
-    drawAuditTable(state, samples)
+  const rawSamples = (audit.rows?.length ? audit.rows : audit.samples).slice(0, 11)
+  const chartSamples = rawSamples.filter(hasTokenAuditSampleData)
+  const diagnosticSamples = rawSamples.length - chartSamples.length
+  if (diagnosticSamples > 0) {
+    const text = state.language === 'zh-CN'
+      ? `${diagnosticSamples} 轮只返回失败诊断，明细表保留 0 值；请结合 status_code/error_class/error_message 复核。`
+      : `${diagnosticSamples} round(s) returned diagnostics only; the table keeps zero values and should be reviewed with status_code/error_class/error_message.`
+    drawInfoBox(state, text, '#17121a', '#5b461f', '#ffc857')
+  }
+  if (chartSamples.length) {
+    drawAuditChart(state, chartSamples)
+  }
+  if (rawSamples.length) {
+    drawAuditTable(state, rawSamples, report.provider)
   } else {
     drawInfoBox(state, state.labels.tokenAuditSkipped, '#17121a', '#5b461f', '#c5a85b')
   }
+}
+
+function tokenAuditBillingMultiplierMetric(state: DrawState, audit: PurityReport['token_audit']): Array<{ label: string; value: string }> {
+  const value = audit?.billing_multiplier ?? audit?.billingMultiplier
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return []
+  }
+  return [{ label: state.labels.billingMultiplier, value: formatMultiplier(value) }]
 }
 
 function drawProbeDetails(state: DrawState, checks: PurityCheck[]) {
@@ -398,15 +436,17 @@ function drawAuditChart(state: DrawState, samples: PurityTokenAuditSample[]) {
     const actualCost = sample.actual_cost_usd || sample.cost || 0
     const officialHeight = clamp((officialCost / maxCost) * 140, 8, 140)
     const actualHeight = clamp((actualCost / maxCost) * 140, 8, 140)
+    const ratio = tokenAuditSampleDisplayRatio(sample)
+    const tone = multiplierTone(ratio)
     const x = chartLeft + index * slot + slot / 2 - 22
     drawRoundRect(ctx, x, chartBottom - officialHeight, 16, officialHeight, 5)
     ctx.fillStyle = '#484755'
     ctx.fill()
     drawRoundRect(ctx, x + 24, chartBottom - actualHeight, 16, actualHeight, 5)
-    ctx.fillStyle = '#35d39b'
+    ctx.fillStyle = pdfAuditToneColor(tone)
     ctx.fill()
     drawText(ctx, `R${sampleRound(sample, index)}`, x + 20, chartBottom + 28, { size: 16, weight: 700, color: '#8e8ca3', align: 'center' })
-    drawText(ctx, formatMultiplier(sample.multiplier || sample.ratio || 0), x + 20, chartBottom + 56, { size: 18, weight: 800, color: '#5fd99a', align: 'center' })
+    drawText(ctx, formatMultiplier(ratio), x + 20, chartBottom + 56, { size: 18, weight: 800, color: pdfAuditToneColor(tone), align: 'center' })
   })
 
   drawText(ctx, state.labels.officialBaseline, pageWidth - marginX - 270, y + 42, { size: 18, weight: 700, color: '#8e8ca3' })
@@ -419,18 +459,19 @@ function drawAuditChart(state: DrawState, samples: PurityTokenAuditSample[]) {
   state.current.y = y + 308
 }
 
-function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[]) {
+function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[], provider: string) {
   const rowHeight = 46
   const tableHeaderHeight = 54
   ensureSpace(state, tableHeaderHeight + rowHeight + 24)
   const ctx = state.current.ctx
   const columns = [
     { label: state.labels.round, x: marginX + 24, align: 'left' as CanvasTextAlign },
-    { label: state.labels.input, x: marginX + 200, align: 'right' as CanvasTextAlign },
-    { label: state.labels.output, x: marginX + 345, align: 'right' as CanvasTextAlign },
-    { label: state.labels.cacheCreate, x: marginX + 525, align: 'right' as CanvasTextAlign },
-    { label: state.labels.cacheRead, x: marginX + 700, align: 'right' as CanvasTextAlign },
-    { label: state.labels.actual, x: marginX + 900, align: 'right' as CanvasTextAlign },
+    { label: state.labels.auditLatency, x: marginX + 150, align: 'right' as CanvasTextAlign },
+    { label: state.labels.input, x: marginX + 285, align: 'right' as CanvasTextAlign },
+    { label: state.labels.output, x: marginX + 420, align: 'right' as CanvasTextAlign },
+    { label: state.labels.cacheCreate, x: marginX + 585, align: 'right' as CanvasTextAlign },
+    { label: state.labels.cacheRead, x: marginX + 740, align: 'right' as CanvasTextAlign },
+    { label: state.labels.actual, x: marginX + 930, align: 'right' as CanvasTextAlign },
     { label: state.labels.multiplier, x: marginX + contentWidth - 24, align: 'right' as CanvasTextAlign }
   ]
 
@@ -454,13 +495,15 @@ function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[]) {
       drawPanel(state.current.ctx, marginX, y, contentWidth, tableHeaderHeight + rowHeight * (samples.length - index), '#0d0c18', '#242239', 18)
       y += tableHeaderHeight
     }
+    const row = tokenAuditSampleDisplayRow(sample, provider)
     drawText(state.current.ctx, `R${sampleRound(sample, index)}`, columns[0].x, y + 30, { size: 17, weight: 700, color: '#d9d7e7', align: columns[0].align })
-    drawText(state.current.ctx, formatInteger(sample.input_tokens), columns[1].x, y + 30, { size: 17, weight: 600, color: '#d9d7e7', align: columns[1].align })
-    drawText(state.current.ctx, formatInteger(sample.output_tokens), columns[2].x, y + 30, { size: 17, weight: 600, color: '#d9d7e7', align: columns[2].align })
-    drawText(state.current.ctx, formatInteger(sample.cache_creation_tokens || sample.cache_creation_input_tokens || 0), columns[3].x, y + 30, { size: 17, weight: 600, color: '#d9d7e7', align: columns[3].align })
-    drawText(state.current.ctx, formatInteger(sample.cached_tokens || sample.cache_read_input_tokens || 0), columns[4].x, y + 30, { size: 17, weight: 600, color: '#d9d7e7', align: columns[4].align })
-    drawText(state.current.ctx, formatUSD(sample.actual_cost_usd || sample.cost || 0), columns[5].x, y + 30, { size: 17, weight: 600, color: '#ffffff', align: columns[5].align })
-    drawText(state.current.ctx, formatMultiplier(sample.multiplier || sample.ratio || 0), columns[6].x, y + 30, { size: 17, weight: 800, color: '#5fd99a', align: columns[6].align })
+    drawText(state.current.ctx, formatTokenAuditLatencyMS(row.latency.value), columns[1].x, y + 30, { size: 17, weight: 800, color: pdfAuditToneColor(row.latency.tone), align: columns[1].align })
+    drawText(state.current.ctx, formatInteger(row.input.value), columns[2].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.input.tone), align: columns[2].align })
+    drawText(state.current.ctx, formatInteger(row.output.value), columns[3].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.output.tone), align: columns[3].align })
+    drawText(state.current.ctx, formatInteger(row.cacheCreation.value), columns[4].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cacheCreation.tone), align: columns[4].align })
+    drawText(state.current.ctx, formatInteger(row.cacheRead.value), columns[5].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cacheRead.tone), align: columns[5].align })
+    drawText(state.current.ctx, formatUSD(row.cost.value), columns[6].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cost.tone), align: columns[6].align })
+    drawText(state.current.ctx, formatMultiplier(row.multiplier.value), columns[7].x, y + 30, { size: 17, weight: 800, color: pdfAuditToneColor(row.multiplier.tone), align: columns[7].align })
     y += rowHeight
   }
   state.current.y = y + 24
@@ -869,20 +912,29 @@ function formatPercent(value: number): string {
   return `${Math.round(value > 1 ? value : value * 100)}%`
 }
 
-function sampleRound(sample: PurityTokenAuditSample, fallbackIndex = 0): number {
-  return sample.round || sample.index || fallbackIndex + 1
+function pdfAuditToneColor(tone: TokenAuditTone): string {
+  if (tone === 'good') return '#00df9a'
+  if (tone === 'warn') return '#ffc857'
+  if (tone === 'bad') return '#ff6673'
+  return '#f4f2ff'
 }
 
-function hasAuditSampleData(sample: PurityTokenAuditSample): boolean {
-  return Boolean(
-    (sample.total_tokens || 0) > 0 ||
-    (sample.input_tokens || 0) > 0 ||
-    (sample.output_tokens || 0) > 0 ||
-    (sample.cache_creation_tokens || sample.cache_creation_input_tokens || 0) > 0 ||
-    (sample.cached_tokens || sample.cache_read_input_tokens || 0) > 0 ||
-    (sample.actual_cost_usd || sample.cost || 0) > 0 ||
-    (sample.official_baseline_usd || sample.baseline_cost || 0) > 0
-  )
+function auditInfoFill(tone: TokenAuditTone): string {
+  if (tone === 'bad') return '#231018'
+  if (tone === 'warn') return '#17121a'
+  if (tone === 'good') return '#123421'
+  return '#151422'
+}
+
+function auditInfoStroke(tone: TokenAuditTone): string {
+  if (tone === 'bad') return '#6c2935'
+  if (tone === 'warn') return '#5b461f'
+  if (tone === 'good') return '#244b36'
+  return '#242235'
+}
+
+function sampleRound(sample: PurityTokenAuditSample, fallbackIndex = 0): number {
+  return sample.round || sample.index || fallbackIndex + 1
 }
 
 function safeFilePart(value: string): string {

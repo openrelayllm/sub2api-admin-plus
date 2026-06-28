@@ -10,19 +10,24 @@ import (
 )
 
 const (
-	defaultCheckTimeout    = 120 * time.Second
-	defaultHTTPTimeout     = 45 * time.Second
-	tokenAuditTimeout      = 70 * time.Second
-	tokenAuditRoundTimeout = 10 * time.Second
-	maxProbeBodyBytes      = 256 * 1024
-	maxFingerprintBytes    = 4 * 1024
-	maxErrorMessageLen     = 500
-	maxAPIKeyLength        = 8192
-	tokenAuditSamples      = 11
-	probePNGBase64         = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAJ0lEQVR42mN44WOLFRm0/MeKGEY10ESD0tE4rOjXGVGsaFQDTTQAAIwskRBmlXeKAAAAAElFTkSuQmCC"
-	probePNGData           = "data:image/png;base64," + probePNGBase64
+	defaultCheckTimeout           = 240 * time.Second
+	defaultHTTPTimeout            = 45 * time.Second
+	defaultTokenAuditTimeout      = 180 * time.Second
+	defaultTokenAuditRoundTimeout = 20 * time.Second
+	maxProbeBodyBytes             = 256 * 1024
+	maxFingerprintBytes           = 4 * 1024
+	maxErrorMessageLen            = 500
+	maxAPIKeyLength               = 8192
+	tokenAuditSamples             = 11
+	probePNGBase64                = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAJ0lEQVR42mN44WOLFRm0/MeKGEY10ESD0tE4rOjXGVGsaFQDTTQAAIwskRBmlXeKAAAAAElFTkSuQmCC"
+	probePNGData                  = "data:image/png;base64," + probePNGBase64
 
 	errorClassAccountBalanceInsufficient = "account_balance_insufficient"
+)
+
+var (
+	tokenAuditTimeout      = defaultTokenAuditTimeout
+	tokenAuditRoundTimeout = defaultTokenAuditRoundTimeout
 )
 
 type Service struct {
@@ -56,7 +61,7 @@ func NewServiceWithAccountResolver(repo Repository, accountResolver AccountResol
 func (s *Service) RunPublicCheck(ctx context.Context, in PublicCheckInput) (*PublicReport, error) {
 	return s.runCheck(ctx, in, nil, checkRunOptions{
 		EnforceRateLimit:  true,
-		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AllowPrivateHosts: s != nil && (s.allowPrivateHosts || in.AllowPrivateBaseURL),
 		AccessMode:        AccessModeWeb,
 		BillingMode:       BillingModeCaptchaRateLimit,
 	})
@@ -65,7 +70,7 @@ func (s *Service) RunPublicCheck(ctx context.Context, in PublicCheckInput) (*Pub
 func (s *Service) RunPublicCheckStream(ctx context.Context, in PublicCheckInput, emit PublicCheckEventSink) (*PublicReport, error) {
 	return s.runCheck(ctx, in, emit, checkRunOptions{
 		EnforceRateLimit:  true,
-		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AllowPrivateHosts: s != nil && (s.allowPrivateHosts || in.AllowPrivateBaseURL),
 		AccessMode:        AccessModeWeb,
 		BillingMode:       BillingModeCaptchaRateLimit,
 	})
@@ -74,7 +79,7 @@ func (s *Service) RunPublicCheckStream(ctx context.Context, in PublicCheckInput,
 func (s *Service) RunDeveloperAPICheck(ctx context.Context, in PublicCheckInput) (*PublicReport, error) {
 	return s.runCheck(ctx, in, nil, checkRunOptions{
 		EnforceRateLimit:  false,
-		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AllowPrivateHosts: s != nil && (s.allowPrivateHosts || in.AllowPrivateBaseURL),
 		AccessMode:        AccessModeDeveloperAPI,
 		BillingMode:       BillingModeAPIKeyMetered,
 	})
@@ -83,7 +88,7 @@ func (s *Service) RunDeveloperAPICheck(ctx context.Context, in PublicCheckInput)
 func (s *Service) RunDeveloperAPICheckStream(ctx context.Context, in PublicCheckInput, emit PublicCheckEventSink) (*PublicReport, error) {
 	return s.runCheck(ctx, in, emit, checkRunOptions{
 		EnforceRateLimit:  false,
-		AllowPrivateHosts: s != nil && s.allowPrivateHosts,
+		AllowPrivateHosts: s != nil && (s.allowPrivateHosts || in.AllowPrivateBaseURL),
 		AccessMode:        AccessModeDeveloperAPI,
 		BillingMode:       BillingModeAPIKeyMetered,
 	})
@@ -94,7 +99,7 @@ func (s *Service) RunAccountCheck(ctx context.Context, in AccountCheckInput) (*P
 }
 
 func (s *Service) RunAccountCheckStream(ctx context.Context, in AccountCheckInput, emit PublicCheckEventSink) (*PublicReport, error) {
-	publicInput, err := s.publicInputFromAccount(ctx, in)
+	account, publicInput, err := s.publicInputFromAccount(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +108,7 @@ func (s *Service) RunAccountCheckStream(ctx context.Context, in AccountCheckInpu
 		AllowPrivateHosts: true,
 		AccessMode:        AccessModeAccount,
 		BillingMode:       BillingModeAccountInternal,
+		BillingMultiplier: accountBillingMultiplier(account),
 	})
 }
 
@@ -111,6 +117,7 @@ type checkRunOptions struct {
 	AllowPrivateHosts bool
 	AccessMode        string
 	BillingMode       string
+	BillingMultiplier *float64
 }
 
 func (s *Service) runCheck(ctx context.Context, in PublicCheckInput, emit PublicCheckEventSink, options checkRunOptions) (*PublicReport, error) {
