@@ -146,7 +146,8 @@ func responsesAuditProbePayloadWithMode(model string, round int, auditNonce stri
 		"max_output_tokens": tokenAuditOutputBudget(round),
 		"stream":            false,
 	}
-	if mode == openAITokenAuditModeStateful {
+	switch mode {
+	case openAITokenAuditModeStateful:
 		bodyMap["store"] = true
 		if strings.TrimSpace(promptCacheKey) != "" {
 			bodyMap["prompt_cache_key"] = strings.TrimSpace(promptCacheKey)
@@ -154,7 +155,7 @@ func responsesAuditProbePayloadWithMode(model string, round int, auditNonce stri
 		if strings.TrimSpace(previousResponseID) != "" {
 			bodyMap["previous_response_id"] = strings.TrimSpace(previousResponseID)
 		}
-	} else if mode == openAITokenAuditModeCacheProbe || mode == openAITokenAuditModeContextReplay {
+	case openAITokenAuditModeCacheProbe, openAITokenAuditModeContextReplay:
 		if strings.TrimSpace(promptCacheKey) != "" {
 			bodyMap["prompt_cache_key"] = strings.TrimSpace(promptCacheKey)
 		}
@@ -822,20 +823,6 @@ func openAITokenAuditPromptCacheKey(model string, auditNonce string) string {
 
 func auditStableCacheText(auditNonce string) string {
 	return "stable-cache-prefix " + auditNonce + " " + strings.Repeat("cache-anchor proxyai-best-purity "+auditNonce+" ", 620)
-}
-
-func auditCumulativeRoundText(round int) string {
-	if round < 1 {
-		round = 1
-	}
-	if round > tokenAuditSamples {
-		round = tokenAuditSamples
-	}
-	parts := make([]string, 0, round)
-	for i := 1; i <= round; i++ {
-		parts = append(parts, auditRoundCacheText(i))
-	}
-	return strings.Join(parts, "\n")
 }
 
 func auditRoundCacheText(round int) string {
