@@ -898,6 +898,34 @@ sequenceDiagram
 | `metrics` | 延迟、usage、吞吐、错误 |
 | `token_audit` | token audit 报告 |
 
+### 17.1.1 TokenAuditReport / TokenAuditSample
+
+Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 usage 的失败诊断样本”：
+
+| 字段 | 说明 |
+|------|------|
+| `token_audit.status` | pass / warn / fail |
+| `token_audit.summary` | 汇总结论；失败或部分失败时必须包含可读原因 |
+| `token_audit.official_baseline_usd` | 基于官方计价的估算基线 |
+| `token_audit.actual_cost_usd` | 基于目标 API usage 的 Usage 估算 |
+| `token_audit.multiplier` | Usage 估算倍率 |
+| `token_audit.cache_hit_rate` | 缓存命中率 |
+| `token_audit.sample_count` | 已执行样本数 |
+| `token_audit.prompt_cache_key` | OpenAI Responses cache key，脱敏/截断展示 |
+| `token_audit.stateful_rounds` | previous_response_id 状态链成功轮数 |
+| `token_audit.previous_response_chain_ok` | 状态链是否完整 |
+| `token_audit.anomalies` | `usage_missing`、`cached_tokens_missing`、`previous_response_chain_incomplete` 等 |
+| `token_audit.samples[]/rows[]` | 单轮样本；前端图表只展示有 usage/成本数据的样本 |
+| `sample.status_code` | 失败轮次的上游 HTTP 状态码，可为空 |
+| `sample.error_class` | 失败轮次错误分类，如 `request_error`、`context_deadline_exceeded` |
+| `sample.error_message` | 已脱敏的失败原因，不得包含 API Key、账号或完整上游响应体 |
+
+约束：
+
+- 无 usage 的样本不能渲染为 0 成本柱状图，但必须保留在 `samples` / `rows` 中供失败诊断使用。
+- `token_audit_sample` SSE 事件和最终 `token_audit` 汇总必须使用同一 `TokenAuditSample` 字段契约。
+- 如果目标兼容层不支持 OpenAI state/cache 参数，后端可以 fallback 到最小 Responses usage 请求；此时应保留 usage 样本，同时通过状态链/缓存异常解释为什么不是完整官方行为。
+
 ### 17.2 ModelIdentityResult
 
 建议结构：
@@ -978,7 +1006,7 @@ sequenceDiagram
 | `check` | 原子检查项完成 |
 | `validation` | 验证分组更新 |
 | `metrics` | 延迟和 usage 更新 |
-| `token_audit_sample` | token audit 单样本 |
+| `token_audit_sample` | token audit 单样本；失败样本必须透出 `status_code` / `error_class` / `error_message` 中至少一项 |
 | `token_audit` | token audit 汇总 |
 | `report` | 最终报告 |
 | `error` | 检测异常 |

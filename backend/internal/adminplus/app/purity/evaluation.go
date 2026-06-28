@@ -130,18 +130,6 @@ func wrapperPurityScoreCap(report *PublicReport) int {
 	return capValue
 }
 
-func validationStatus(report *PublicReport, id string) string {
-	if report == nil {
-		return ""
-	}
-	for _, validation := range report.Validations {
-		if validation.ID == id {
-			return validation.Status
-		}
-	}
-	return ""
-}
-
 func validationFailedAfterProbe(report *PublicReport, id string) bool {
 	if report == nil {
 		return false
