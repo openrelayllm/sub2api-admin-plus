@@ -10,6 +10,7 @@ import (
 const (
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
+	ProviderGemini    = "gemini"
 
 	AccessModeWeb          = "web"
 	AccessModeDeveloperAPI = "developer_api"
@@ -32,6 +33,8 @@ const (
 	VerdictOpenAICompatible     = "openai_compatible"
 	VerdictOfficialClaude       = "official_claude"
 	VerdictClaudeCompatible     = "claude_compatible"
+	VerdictOfficialGemini       = "official_gemini"
+	VerdictGeminiCompatible     = "gemini_compatible"
 	VerdictPartialCompatible    = "partial_compatible"
 	VerdictInvalidOrUnavailable = "invalid_or_unavailable"
 	VerdictUnknown              = "unknown"
@@ -57,48 +60,56 @@ type AccountResolver interface {
 }
 
 type PublicReport struct {
-	Provider               string             `json:"provider"`
-	ReportID               string             `json:"report_id"`
-	AccessMode             string             `json:"access_mode,omitempty"`
-	AccessModeCompat       string             `json:"accessMode,omitempty"`
-	BillingMode            string             `json:"billing_mode,omitempty"`
-	BillingModeCompat      string             `json:"billingMode,omitempty"`
-	APIBaseHost            string             `json:"api_base_host"`
-	ModelID                string             `json:"model_id"`
-	CheckTokenUsage        bool               `json:"checkTokenUsage"`
-	ExpectedModel          string             `json:"expected_model,omitempty"`
-	ExpectedModelCompat    string             `json:"expectedModel,omitempty"`
-	ResponseModel          string             `json:"response_model,omitempty"`
-	ResponseModelCompat    string             `json:"responseModel,omitempty"`
-	Status                 string             `json:"status"`
-	Step                   int                `json:"step"`
-	StepName               string             `json:"step_name,omitempty"`
-	StepNameCompat         string             `json:"stepName,omitempty"`
-	Progress               float64            `json:"progress"`
-	Scores                 map[string]int     `json:"scores,omitempty"`
-	Score                  int                `json:"score"`
-	Total                  int                `json:"total"`
-	OfficialScore          int                `json:"official_score"`
-	CompatibilityScore     int                `json:"compatibility_score"`
-	Verdict                string             `json:"verdict"`
-	VerdictKey             string             `json:"verdictKey,omitempty"`
-	Summary                string             `json:"summary"`
-	Error                  string             `json:"error,omitempty"`
-	StreamChannel          string             `json:"stream_channel,omitempty"`
-	StreamChannelCompat    string             `json:"streamChannel,omitempty"`
-	NonStreamChannel       string             `json:"non_stream_channel,omitempty"`
-	NonStreamChannelCompat string             `json:"nonStreamChannel,omitempty"`
-	HasVertex              bool               `json:"has_vertex"`
-	HasVertexCompat        bool               `json:"hasVertex"`
-	IsKiro                 bool               `json:"is_kiro"`
-	IsKiroCompat           bool               `json:"isKiro"`
-	Validations            []ValidationResult `json:"validations"`
-	Checks                 []CheckResult      `json:"checks"`
-	Metrics                PublicCheckMetrics `json:"metrics"`
-	TokenAudit             *TokenAuditReport  `json:"token_audit,omitempty"`
-	TokenAuditProgress     string             `json:"token_audit_progress,omitempty"`
-	TokenAuditPartial      []TokenAuditSample `json:"token_audit_partial,omitempty"`
-	CheckedAt              time.Time          `json:"checked_at"`
+	Provider                  string               `json:"provider"`
+	ReportID                  string               `json:"report_id"`
+	AccessMode                string               `json:"access_mode,omitempty"`
+	AccessModeCompat          string               `json:"accessMode,omitempty"`
+	BillingMode               string               `json:"billing_mode,omitempty"`
+	BillingModeCompat         string               `json:"billingMode,omitempty"`
+	APIBaseHost               string               `json:"api_base_host"`
+	ModelID                   string               `json:"model_id"`
+	CheckTokenUsage           bool                 `json:"checkTokenUsage"`
+	ExpectedModel             string               `json:"expected_model,omitempty"`
+	ExpectedModelCompat       string               `json:"expectedModel,omitempty"`
+	ResponseModel             string               `json:"response_model,omitempty"`
+	ResponseModelCompat       string               `json:"responseModel,omitempty"`
+	ResponseModelSource       string               `json:"response_model_source,omitempty"`
+	ResponseModelSourceCompat string               `json:"responseModelSource,omitempty"`
+	Status                    string               `json:"status"`
+	Step                      int                  `json:"step"`
+	StepName                  string               `json:"step_name,omitempty"`
+	StepNameCompat            string               `json:"stepName,omitempty"`
+	Progress                  float64              `json:"progress"`
+	Scores                    map[string]int       `json:"scores,omitempty"`
+	Score                     int                  `json:"score"`
+	Total                     int                  `json:"total"`
+	OfficialScore             int                  `json:"official_score"`
+	CompatibilityScore        int                  `json:"compatibility_score"`
+	Verdict                   string               `json:"verdict"`
+	VerdictKey                string               `json:"verdictKey,omitempty"`
+	Summary                   string               `json:"summary"`
+	Error                     string               `json:"error,omitempty"`
+	StreamChannel             string               `json:"stream_channel,omitempty"`
+	StreamChannelCompat       string               `json:"streamChannel,omitempty"`
+	NonStreamChannel          string               `json:"non_stream_channel,omitempty"`
+	NonStreamChannelCompat    string               `json:"nonStreamChannel,omitempty"`
+	HasVertex                 bool                 `json:"has_vertex"`
+	HasVertexCompat           bool                 `json:"hasVertex"`
+	IsKiro                    bool                 `json:"is_kiro"`
+	IsKiroCompat              bool                 `json:"isKiro"`
+	WrapperSignals            []string             `json:"wrapper_signals,omitempty"`
+	WrapperSignalsCompat      []string             `json:"wrapperSignals,omitempty"`
+	ModelIdentity             *ModelIdentityResult `json:"model_identity,omitempty"`
+	ModelIdentityCompat       *ModelIdentityResult `json:"modelIdentity,omitempty"`
+	Validations               []ValidationResult   `json:"validations"`
+	Checks                    []CheckResult        `json:"checks"`
+	Metrics                   PublicCheckMetrics   `json:"metrics"`
+	TokenAudit                *TokenAuditReport    `json:"token_audit,omitempty"`
+	TokenAuditProgress        string               `json:"token_audit_progress,omitempty"`
+	TokenAuditPartial         []TokenAuditSample   `json:"token_audit_partial,omitempty"`
+	CheckedAt                 time.Time            `json:"checked_at"`
+	responseBodyModel         string
+	responseHeaderModel       string
 }
 
 const (
@@ -155,10 +166,26 @@ type CheckResult struct {
 	Details  map[string]any `json:"details,omitempty"`
 }
 
+type ModelIdentityResult struct {
+	Status                     string         `json:"status"`
+	Reason                     string         `json:"reason,omitempty"`
+	RequestedModel             string         `json:"requested_model,omitempty"`
+	ResponseModel              string         `json:"response_model,omitempty"`
+	RequestedVendor            string         `json:"requested_vendor,omitempty"`
+	ResponseVendor             string         `json:"response_vendor,omitempty"`
+	RequestedFamily            string         `json:"requested_family,omitempty"`
+	ResponseFamily             string         `json:"response_family,omitempty"`
+	VersionDelta               string         `json:"version_delta,omitempty"`
+	TierDelta                  string         `json:"tier_delta,omitempty"`
+	ModelListContainsRequested *bool          `json:"model_list_contains_requested,omitempty"`
+	Evidence                   map[string]any `json:"evidence,omitempty"`
+}
+
 type PublicCheckMetrics struct {
 	ModelsLatencyMS          int64       `json:"models_latency_ms,omitempty"`
 	ResponsesLatencyMS       int64       `json:"responses_latency_ms,omitempty"`
 	MessagesLatencyMS        int64       `json:"messages_latency_ms,omitempty"`
+	GenerateContentLatencyMS int64       `json:"generate_content_latency_ms,omitempty"`
 	StreamFirstTokenMS       int64       `json:"stream_first_token_ms,omitempty"`
 	StreamTotalLatencyMS     int64       `json:"stream_total_latency_ms,omitempty"`
 	MultimodalLatencyMS      int64       `json:"multimodal_latency_ms,omitempty"`
@@ -245,6 +272,9 @@ type TokenAuditSample struct {
 	Ratio                    float64 `json:"ratio,omitempty"`
 	LatencyMS                int64   `json:"latency_ms"`
 	Status                   string  `json:"status"`
+	StatusCode               int     `json:"status_code,omitempty"`
+	ErrorClass               string  `json:"error_class,omitempty"`
+	ErrorMessage             string  `json:"error_message,omitempty"`
 	ResponseID               string  `json:"response_id,omitempty"`
 	PreviousResponseID       string  `json:"previous_response_id,omitempty"`
 	PromptCacheKey           string  `json:"prompt_cache_key,omitempty"`

@@ -1,0 +1,258 @@
+{
+  "wrapper_cases": [
+    {
+      "sample_id": "synthetic-sub2api-transparent-001",
+      "sample_kind": "synthetic",
+      "name": "transparent_sub2api_black_box",
+      "host": "relay.example.com",
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "expected_model": "gpt-5.5",
+      "response_model": "gpt-5.5",
+      "headers": [
+        {
+          "x-client-request-id": "req_123"
+        }
+      ],
+      "values": [
+        "{\"error\":\"API_KEY_REQUIRED\",\"message\":\"missing Authorization, x-api-key, or x-goog-api-key\",\"routes\":[\"/v1/messages\",\"/backend-api/codex/responses\",\"/antigravity/v1beta/models\"]}",
+        "{\"data\":[{\"id\":\"codex-auto-review\"},{\"id\":\"gpt-5.3-codex-spark\"},{\"id\":\"models/gemini-3.1-pro-preview-customtools\"},{\"id\":\"claude-fable-5\"}]}"
+      ],
+      "want_signals": ["sub2api"],
+      "deny_signals": ["sub2api-model-mapping", "sub2api-protocol-bridge"],
+      "want_obfuscation": false,
+      "want_score_cap": 100
+    },
+    {
+      "sample_id": "synthetic-sub2api-weak-header-001",
+      "sample_kind": "synthetic",
+      "name": "weak_sub2api_header_alone",
+      "host": "relay.example.com",
+      "headers": [
+        {
+          "x-client-request-id": "req_123"
+        }
+      ],
+      "deny_signals": ["sub2api"],
+      "want_obfuscation": false,
+      "want_score_cap": 100
+    },
+    {
+      "sample_id": "synthetic-sub2api-model-mapping-001",
+      "sample_kind": "synthetic",
+      "name": "sub2api_model_mapping_leak",
+      "host": "relay.example.com",
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-8",
+      "expected_model": "claude-opus-4-8",
+      "response_model": "claude-opus-4-8",
+      "values": [
+        "{\"requested_model\":\"claude-opus-4-8\",\"upstream_model\":\"gpt-5.4\",\"model_mapping_chain\":[\"account.model_mapping\"]}"
+      ],
+      "want_signals": ["sub2api-model-mapping"],
+      "want_obfuscation": true,
+      "want_score_cap": 55
+    },
+    {
+      "sample_id": "synthetic-cliproxyapi-codex-bridge-001",
+      "sample_kind": "synthetic",
+      "name": "cliproxyapi_codex_and_signature_bridge",
+      "host": "proxy.local",
+      "provider": "openai",
+      "model_id": "gpt-5.4",
+      "expected_model": "gpt-5.4",
+      "response_model": "gpt-5.4",
+      "headers": [
+        {
+          "access-control-expose-headers": "X-CPA-VERSION, X-CPA-COMMIT, X-CPA-SUPPORT-PLUGIN",
+          "openai-beta": "responses_websockets=2026-02-06",
+          "originator": "codex-tui",
+          "x-codex-turn-metadata": "{\"prompt_cache_key\":\"cache-1\",\"turn_id\":\"turn-1\"}",
+          "x-codex-window-id": "cache-1:0"
+        }
+      ],
+      "values": [
+        "{\"message\":\"CLI Proxy API Server\",\"endpoints\":[\"POST /v1/responses/compact\",\"GET /v1beta/models\"]}",
+        "{\"oauth-model-alias\":[{\"name\":\"glm-5.2\",\"alias\":\"claude-sonnet-latest\",\"force-mapping\":true}]}",
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"claude#abc\"}}",
+        "{\"native_finish_reason\":\"MAX_TOKENS\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden\"}}]}"
+      ],
+      "want_signals": [
+        "cliproxyapi",
+        "cliproxyapi-codex-direct",
+        "codex",
+        "cliproxyapi-codex-identity",
+        "cliproxyapi-model-mapping",
+        "cliproxyapi-signature-bridge"
+      ],
+      "want_obfuscation": true,
+      "want_score_cap": 55
+    },
+    {
+      "sample_id": "synthetic-cn-vendor-mix-001",
+      "sample_kind": "synthetic",
+      "name": "chinese_open_model_vendor_mix",
+      "host": "ark.cn-beijing.volces.com",
+      "model_id": "qwen3.7-max",
+      "expected_model": "glm-5.2",
+      "response_model": "doubao-seed-2-1-pro-260628",
+      "headers": [
+        {
+          "x-model-provider": "kimi-k2.7-code-highspeed mimo-v2.5-pro",
+          "x-provider": "MiniMax-M2.7-highspeed",
+          "x-upstream-provider": "hy3-preview"
+        }
+      ],
+      "want_signals": ["qwen", "glm", "doubao", "minimax", "hunyuan", "kimi", "mimo"],
+      "want_obfuscation": false,
+      "want_score_cap": 100
+    },
+    {
+      "sample_id": "synthetic-gemini-native-clean-001",
+      "sample_kind": "synthetic",
+      "name": "native_gemini_not_wrapper",
+      "host": "generativelanguage.googleapis.com",
+      "provider": "gemini",
+      "model_id": "gemini-3-pro-preview",
+      "expected_model": "gemini-3-pro-preview",
+      "response_model": "gemini-3-pro-preview",
+      "values": [
+        "{\"models\":[{\"name\":\"models/gemini-3-pro-preview\",\"supportedGenerationMethods\":[\"generateContent\",\"streamGenerateContent\"]}]}"
+      ],
+      "deny_signals": ["gemini", "aistudio", "vertex"],
+      "want_obfuscation": false,
+      "want_score_cap": 100
+    }
+  ],
+  "token_audit_cases": [
+    {
+      "sample_id": "synthetic-openai-token-audit-fallback-001",
+      "sample_kind": "synthetic",
+      "name": "openai_stateful_params_unsupported_fallback",
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "samples": [
+        {
+          "round": 1,
+          "status": "pass",
+          "input_tokens": 201,
+          "output_tokens": 21,
+          "total_tokens": 222,
+          "official_baseline_usd": 0.001635,
+          "actual_cost_usd": 0.001635
+        },
+        {
+          "round": 2,
+          "status": "pass",
+          "input_tokens": 202,
+          "output_tokens": 22,
+          "total_tokens": 224,
+          "official_baseline_usd": 0.00167,
+          "actual_cost_usd": 0.00167
+        }
+      ],
+      "want_status": "warn",
+      "want_summary_contains": "Responses 状态链路不完整",
+      "want_anomalies": ["previous_response_chain_incomplete", "cached_tokens_missing"],
+      "want_usable_samples": 2,
+      "want_missing_samples": 0
+    },
+    {
+      "sample_id": "synthetic-openai-token-audit-failure-reason-001",
+      "sample_kind": "synthetic",
+      "name": "openai_token_audit_failure_reason_visible",
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "samples": [
+        {
+          "round": 1,
+          "status": "fail",
+          "status_code": 400,
+          "error_class": "request_error",
+          "error_message": "unsupported parameter: prompt_cache_key"
+        },
+        {
+          "round": 2,
+          "status": "fail",
+          "error_class": "context_deadline_exceeded",
+          "error_message": "context deadline exceeded"
+        }
+      ],
+      "want_status": "fail",
+      "want_summary_contains": "第 1 轮 HTTP 400 unsupported parameter",
+      "want_anomalies": ["usage_missing"],
+      "want_usable_samples": 0,
+      "want_missing_samples": 2
+    }
+  ],
+  "model_identity_cases": [
+    {
+      "sample_id": "synthetic-openai-version-downgrade-001",
+      "sample_kind": "synthetic",
+      "name": "openai_version_downgrade",
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "expected_model": "gpt-5.5",
+      "response_model": "gpt-5.4-mini",
+      "want_status": "fail",
+      "want_reason": "version_downgrade"
+    },
+    {
+      "sample_id": "synthetic-claude-cross-vendor-001",
+      "sample_kind": "synthetic",
+      "name": "claude_cross_vendor_alias",
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-latest",
+      "expected_model": "claude-sonnet-latest",
+      "response_model": "glm-5.2",
+      "want_status": "fail",
+      "want_reason": "cross_vendor_alias"
+    },
+    {
+      "sample_id": "synthetic-wrapper-vendor-mismatch-001",
+      "sample_kind": "synthetic",
+      "name": "wrapper_vendor_signal_mismatch",
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-8",
+      "expected_model": "claude-opus-4-8",
+      "response_model": "claude-opus-4-8",
+      "wrapper_signals": ["antigravity"],
+      "want_status": "fail",
+      "want_reason": "wrapper_vendor_signal_mismatch",
+      "want_suspected_vendor": "google"
+    },
+    {
+      "sample_id": "synthetic-native-qwen-pass-001",
+      "sample_kind": "synthetic",
+      "name": "native_qwen_identity_pass",
+      "provider": "qwen",
+      "model_id": "qwen3.7-max",
+      "expected_model": "qwen3.7-max",
+      "response_model": "qwen3.7-max",
+      "want_status": "pass",
+      "want_reason": "exact_match"
+    },
+    {
+      "sample_id": "synthetic-qwen-openai-protocol-mismatch-001",
+      "sample_kind": "synthetic",
+      "name": "qwen_under_openai_protocol_is_not_official_identity",
+      "provider": "openai",
+      "model_id": "qwen3.7-max",
+      "expected_model": "qwen3.7-max",
+      "response_model": "qwen3.7-max",
+      "want_status": "fail",
+      "want_reason": "protocol_model_vendor_mismatch"
+    },
+    {
+      "sample_id": "synthetic-native-gemini-pass-001",
+      "sample_kind": "synthetic",
+      "name": "native_gemini_identity_pass",
+      "provider": "gemini",
+      "model_id": "gemini-3-pro-preview",
+      "expected_model": "gemini-3-pro-preview",
+      "response_model": "gemini-3-pro-preview",
+      "want_status": "pass",
+      "want_reason": "exact_match"
+    }
+  ]
+}

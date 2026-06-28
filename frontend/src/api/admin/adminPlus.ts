@@ -646,7 +646,7 @@ export interface LocalAccountTestPayload {
   mode?: string
 }
 
-export type PurityProvider = 'openai' | 'anthropic'
+export type PurityProvider = 'openai' | 'anthropic' | 'gemini'
 export type PurityCheckStatus = 'pass' | 'warn' | 'fail'
 export type PurityRunStatus = 'pending' | 'running' | 'done' | string
 
@@ -692,6 +692,7 @@ export interface PurityCheckMetrics {
   models_latency_ms?: number
   responses_latency_ms?: number
   messages_latency_ms?: number
+  generate_content_latency_ms?: number
   stream_first_token_ms?: number
   stream_total_latency_ms?: number
   multimodal_latency_ms?: number
@@ -758,6 +759,21 @@ export interface PurityTokenAuditReport {
   rows?: PurityTokenAuditSample[]
 }
 
+export interface PurityModelIdentityResult {
+  status: PurityCheckStatus
+  reason?: string
+  requested_model?: string
+  response_model?: string
+  requested_vendor?: string
+  response_vendor?: string
+  requested_family?: string
+  response_family?: string
+  version_delta?: string
+  tier_delta?: string
+  model_list_contains_requested?: boolean
+  evidence?: Record<string, unknown>
+}
+
 export interface PurityReport {
   provider: string
   report_id: string
@@ -768,7 +784,11 @@ export interface PurityReport {
   api_base_host: string
   model_id: string
   expected_model?: string
+  expectedModel?: string
   response_model?: string
+  responseModel?: string
+  response_model_source?: string
+  responseModelSource?: string
   status?: PurityRunStatus
   step?: number
   step_name?: string
@@ -784,6 +804,10 @@ export interface PurityReport {
   non_stream_channel?: string
   has_vertex?: boolean
   is_kiro?: boolean
+  wrapper_signals?: string[]
+  wrapperSignals?: string[]
+  model_identity?: PurityModelIdentityResult
+  modelIdentity?: PurityModelIdentityResult
   validations: PurityValidationResult[]
   checks: PurityCheckResult[]
   metrics: PurityCheckMetrics
