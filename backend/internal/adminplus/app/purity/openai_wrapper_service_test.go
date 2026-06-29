@@ -151,7 +151,7 @@ func TestServiceRunPublicCheck_DetectsCLIProxyAPIHeaderFingerprint(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, VerdictOfficialOpenAI, report.Verdict)
 	require.Contains(t, report.WrapperSignals, "cliproxyapi")
-	require.Equal(t, CheckStatusWarn, findCheck(t, report, "wrapper_fingerprint").Status)
+	require.Equal(t, CheckStatusPass, findCheck(t, report, "wrapper_fingerprint").Status)
 	require.GreaterOrEqual(t, report.Score, 85)
 	require.Contains(t, report.Summary, "透明中转/兼容网关")
 }

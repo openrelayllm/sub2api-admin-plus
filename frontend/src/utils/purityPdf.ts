@@ -2,7 +2,9 @@ import type { PurityCheckResult, PurityCheckStatus, PurityReport, PurityTokenAud
 import {
   formatTokenAuditLatencyMS,
   hasTokenAuditSampleData,
+  isGeminiTokenAuditProvider,
   multiplierTone,
+  normalizeTokenAuditProvider,
   tokenAuditCostTotals,
   tokenAuditDisplayRatio,
   tokenAuditSampleDisplayRatio,
@@ -49,7 +51,7 @@ type PdfLabels = {
   tokenAuditSkipped: string
   officialBaseline: string
   actualCost: string
-  multiplier: string
+  usageRatio: string
   billingMultiplier: string
   cacheHitRate: string
   probeDetails: string
@@ -135,7 +137,7 @@ const zhLabels: PdfLabels = {
   tokenAuditSkipped: 'Token 用量审计未执行或未返回。',
   officialBaseline: '官方基线',
   actualCost: 'Usage 估算',
-  multiplier: '估算倍率',
+  usageRatio: 'Usage 比值',
   billingMultiplier: '平台计费倍率',
   cacheHitRate: '缓存命中率',
   probeDetails: '后端探针明细',
@@ -186,7 +188,7 @@ const enLabels: PdfLabels = {
   tokenAuditSkipped: 'Token usage audit was not executed or not returned.',
   officialBaseline: 'Official baseline',
   actualCost: 'Usage estimate',
-  multiplier: 'Estimated ratio',
+  usageRatio: 'Usage ratio',
   billingMultiplier: 'Platform billing ratio',
   cacheHitRate: 'Cache hit rate',
   probeDetails: 'Backend probe details',
@@ -309,6 +311,7 @@ function drawValidations(state: DrawState, report: PurityReport) {
 
 function drawTokenAudit(state: DrawState, report: PurityReport) {
   const audit = report.token_audit
+  const provider = normalizeTokenAuditProvider(report.provider)
   drawSectionTitle(state, state.labels.tokenAudit)
   if (!audit) {
     drawInfoBox(state, state.labels.tokenAuditSkipped, '#17121a', '#5b461f', '#c5a85b')
@@ -316,11 +319,15 @@ function drawTokenAudit(state: DrawState, report: PurityReport) {
   }
 
   const totals = tokenAuditCostTotals(audit)
+  const billingMultiplier = audit.billing_multiplier ?? audit.billingMultiplier
+  const hasBillingMultiplier = typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)
   const auditMetrics = [
     { label: state.labels.officialBaseline, value: formatUSD(totals.officialBaselineUSD) },
     { label: state.labels.actualCost, value: formatUSD(totals.actualCostUSD) },
-    { label: state.labels.multiplier, value: formatMultiplier(tokenAuditDisplayRatio(audit)) },
-    ...tokenAuditBillingMultiplierMetric(state, audit),
+    hasBillingMultiplier
+      ? { label: state.labels.billingMultiplier, value: formatMultiplier(billingMultiplier) }
+      : { label: state.labels.billingMultiplier, value: '-' },
+    { label: state.labels.usageRatio, value: formatMultiplier(tokenAuditDisplayRatio(audit)) },
     { label: state.labels.cacheHitRate, value: formatPercent(audit.cacheHitRate ?? audit.cache_hit_rate) },
     { label: 'Samples', value: String(audit.sample_count || audit.samples.length || 0) },
     { label: 'Price', value: audit.price_source || '-' }
@@ -342,19 +349,20 @@ function drawTokenAudit(state: DrawState, report: PurityReport) {
   if (chartSamples.length) {
     drawAuditChart(state, chartSamples)
   }
+  if (isGeminiTokenAuditProvider(provider) && rawSamples.some((sample) => {
+    const row = tokenAuditSampleDisplayRow(sample, provider)
+    return row.cacheCreation.available === false || row.cacheRead.available === false
+  })) {
+    const text = state.language === 'zh-CN'
+      ? 'Gemini 未返回或未命中的缓存字段以 0 展示；缓存创建字段不可确认，缓存读取 0 表示本轮未观察到命中。'
+      : 'Gemini cache fields that are missing or not hit are shown as 0; cache creation is unconfirmed, while cache read 0 means no hit was observed in that round.'
+    drawInfoBox(state, text, '#17121a', '#5b461f', '#ffc857')
+  }
   if (rawSamples.length) {
-    drawAuditTable(state, rawSamples, report.provider)
+    drawAuditTable(state, rawSamples, provider, hasBillingMultiplier ? billingMultiplier : undefined)
   } else {
     drawInfoBox(state, state.labels.tokenAuditSkipped, '#17121a', '#5b461f', '#c5a85b')
   }
-}
-
-function tokenAuditBillingMultiplierMetric(state: DrawState, audit: PurityReport['token_audit']): Array<{ label: string; value: string }> {
-  const value = audit?.billing_multiplier ?? audit?.billingMultiplier
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return []
-  }
-  return [{ label: state.labels.billingMultiplier, value: formatMultiplier(value) }]
 }
 
 function drawProbeDetails(state: DrawState, checks: PurityCheck[]) {
@@ -459,7 +467,7 @@ function drawAuditChart(state: DrawState, samples: PurityTokenAuditSample[]) {
   state.current.y = y + 308
 }
 
-function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[], provider: string) {
+function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[], provider: string, billingMultiplier?: number) {
   const rowHeight = 46
   const tableHeaderHeight = 54
   ensureSpace(state, tableHeaderHeight + rowHeight + 24)
@@ -472,7 +480,7 @@ function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[], pro
     { label: state.labels.cacheCreate, x: marginX + 585, align: 'right' as CanvasTextAlign },
     { label: state.labels.cacheRead, x: marginX + 740, align: 'right' as CanvasTextAlign },
     { label: state.labels.actual, x: marginX + 930, align: 'right' as CanvasTextAlign },
-    { label: state.labels.multiplier, x: marginX + contentWidth - 24, align: 'right' as CanvasTextAlign }
+    { label: billingMultiplier !== undefined ? state.labels.billingMultiplier : state.labels.usageRatio, x: marginX + contentWidth - 24, align: 'right' as CanvasTextAlign }
   ]
 
   ensureSpace(state, tableHeaderHeight + rowHeight * samples.length + 24)
@@ -500,10 +508,12 @@ function drawAuditTable(state: DrawState, samples: PurityTokenAuditSample[], pro
     drawText(state.current.ctx, formatTokenAuditLatencyMS(row.latency.value), columns[1].x, y + 30, { size: 17, weight: 800, color: pdfAuditToneColor(row.latency.tone), align: columns[1].align })
     drawText(state.current.ctx, formatInteger(row.input.value), columns[2].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.input.tone), align: columns[2].align })
     drawText(state.current.ctx, formatInteger(row.output.value), columns[3].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.output.tone), align: columns[3].align })
-    drawText(state.current.ctx, formatInteger(row.cacheCreation.value), columns[4].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cacheCreation.tone), align: columns[4].align })
-    drawText(state.current.ctx, formatInteger(row.cacheRead.value), columns[5].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cacheRead.tone), align: columns[5].align })
+    drawText(state.current.ctx, row.cacheCreation.display, columns[4].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cacheCreation.tone), align: columns[4].align })
+    drawText(state.current.ctx, row.cacheRead.display, columns[5].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cacheRead.tone), align: columns[5].align })
     drawText(state.current.ctx, formatUSD(row.cost.value), columns[6].x, y + 30, { size: 17, weight: 700, color: pdfAuditToneColor(row.cost.tone), align: columns[6].align })
-    drawText(state.current.ctx, formatMultiplier(row.multiplier.value), columns[7].x, y + 30, { size: 17, weight: 800, color: pdfAuditToneColor(row.multiplier.tone), align: columns[7].align })
+    const ratioDisplay = billingMultiplier !== undefined ? formatMultiplier(billingMultiplier) : row.multiplier.display
+    const ratioTone = billingMultiplier !== undefined ? 'good' : row.multiplier.tone
+    drawText(state.current.ctx, ratioDisplay, columns[7].x, y + 30, { size: 17, weight: 800, color: pdfAuditToneColor(ratioTone), align: columns[7].align })
     y += rowHeight
   }
   state.current.y = y + 24
@@ -871,10 +881,11 @@ function statusColor(status: PurityCheckStatus): string {
 }
 
 function providerLabel(provider: string): string {
-  if (provider === 'anthropic') {
+  const normalized = normalizeTokenAuditProvider(provider)
+  if (normalized === 'anthropic') {
     return 'Claude'
   }
-  if (provider === 'gemini') {
+  if (normalized === 'gemini') {
     return 'Gemini'
   }
   return 'OpenAI'
@@ -901,7 +912,8 @@ function formatUSD(value: number): string {
 }
 
 function formatMultiplier(value: number): string {
-  const safe = Number.isFinite(value) ? value : 0
+  const safe = Number.isFinite(value) && value > 0 ? value : 0
+  if (safe <= 0) return '-'
   return `${safe.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}x`
 }
 

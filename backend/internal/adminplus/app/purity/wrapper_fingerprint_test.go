@@ -104,7 +104,7 @@ func TestWrapperPurityScoreCap_DistinguishesTransparentRelayAndObfuscation(t *te
 		WrapperSignals: []string{"cliproxyapi", "new-api", "sub2api"},
 	}
 	require.False(t, hasWrapperObfuscationFingerprint(transparent))
-	require.Equal(t, CheckStatusWarn, buildWrapperFingerprintCheck(transparent).Status)
+	require.Equal(t, CheckStatusPass, buildWrapperFingerprintCheck(transparent).Status)
 	require.Equal(t, 100, wrapperPurityScoreCap(transparent))
 	require.Contains(t, summaryForReport(transparent), "透明中转/兼容网关")
 	require.Contains(t, summaryForReport(transparent), "未显示模型或协议混淆")

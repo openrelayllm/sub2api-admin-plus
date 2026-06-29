@@ -236,6 +236,10 @@ func validationWeightedScore(report *PublicReport, validationID string, weight i
 		if validation.ID != validationID {
 			continue
 		}
+		score, ok := validationCheckScore(report, validation, weight)
+		if ok {
+			return score
+		}
 		switch validation.Status {
 		case CheckStatusPass:
 			return weight
@@ -246,6 +250,49 @@ func validationWeightedScore(report *PublicReport, validationID string, weight i
 		}
 	}
 	return 0
+}
+
+func validationCheckScore(report *PublicReport, validation ValidationResult, weight int) (int, bool) {
+	if report == nil || weight <= 0 || len(validation.RelatedCheckIDs) == 0 {
+		return 0, false
+	}
+	totalScore := 0
+	totalMax := 0
+	hasZeroMaxFail := false
+	hasZeroMaxWarn := false
+	for _, id := range validation.RelatedCheckIDs {
+		for _, check := range report.Checks {
+			if check.ID != id {
+				continue
+			}
+			if check.MaxScore <= 0 {
+				switch check.Status {
+				case CheckStatusFail:
+					hasZeroMaxFail = true
+				case CheckStatusWarn:
+					hasZeroMaxWarn = true
+				}
+				break
+			}
+			totalScore += check.Score
+			totalMax += check.MaxScore
+			break
+		}
+	}
+	if hasZeroMaxFail {
+		return 0, true
+	}
+	if totalMax <= 0 {
+		if hasZeroMaxWarn {
+			return weight / 2, true
+		}
+		return 0, false
+	}
+	score := (totalScore*weight + totalMax/2) / totalMax
+	if hasZeroMaxWarn {
+		score = minInt(score, weight/2)
+	}
+	return score, true
 }
 
 func hasValidation(validations []ValidationResult, id string) bool {

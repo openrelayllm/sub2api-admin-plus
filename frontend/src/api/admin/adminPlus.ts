@@ -716,10 +716,12 @@ export interface PurityTokenAuditSample {
   uncached_input_tokens: number
   cache_creation_tokens: number
   cache_creation_input_tokens?: number
+  cache_creation_tokens_present?: boolean
   baseline_cache_creation_input_tokens?: number
   cache_creation_delta_pct?: number
   cached_tokens: number
   cache_read_input_tokens?: number
+  cached_tokens_present?: boolean
   baseline_cache_read_input_tokens?: number
   cache_read_delta_pct?: number
   reasoning_tokens?: number

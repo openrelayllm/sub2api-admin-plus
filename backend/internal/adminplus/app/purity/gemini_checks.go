@@ -90,9 +90,12 @@ func buildGeminiGenerateContentCheck(probe httpProbe, apiKey string) CheckResult
 	return CheckResult{ID: "responses_schema", Name: "GenerateContent 非流式结构", Status: CheckStatusWarn, Score: 8, MaxScore: 20, Message: "GenerateContent 返回 2xx，但响应结构不完整。", Details: details}
 }
 
-func buildGeminiToolCallCheck(probe httpProbe) CheckResult {
+func buildGeminiToolCallCheck(probe httpProbe, apiKey string) CheckResult {
 	details := probeDetails(probe)
 	if probe.StatusCode < 200 || probe.StatusCode >= 300 {
+		if probe.ErrorMessage != "" {
+			details["error_message"] = sanitizeMessage(probe.ErrorMessage, apiKey)
+		}
 		return failCheck("tool_call", "强制工具调用", 20, "GenerateContent 探测未成功，无法确认工具调用。", details)
 	}
 	ok, toolDetails := geminiBodyHasExpectedFunctionCall(probe.Body)
@@ -171,7 +174,7 @@ func buildGeminiMultimodalCheck(probe httpProbe, apiKey string) CheckResult {
 	if probe.StatusCode >= 200 && probe.StatusCode < 300 && gjson.GetBytes(probe.Body, "candidates").IsArray() {
 		return passCheck("multimodal", "多模态输入", 10, "GenerateContent 接受 inlineData image/png 多模态输入结构。", details)
 	}
-	if probe.StatusCode == http.StatusBadRequest || probe.StatusCode == http.StatusUnprocessableEntity {
+	if probe.StatusCode >= 400 && probe.StatusCode < 600 {
 		return CheckResult{ID: "multimodal", Name: "多模态输入", Status: CheckStatusWarn, Score: 5, MaxScore: 10, Message: "端点存在，但当前模型或上游不接受 inlineData 图像输入。", Details: details}
 	}
 	return failCheck("multimodal", "多模态输入", 10, "多模态探测未返回标准 GenerateContent 响应。", details)
@@ -187,6 +190,24 @@ func buildGeminiTokenAuditUnsupportedCheck() CheckResult {
 		Message:  "Gemini Token 用量审计未执行。",
 		Details:  map[string]any{"skipped": true, "reason": "gemini_token_audit_skipped"},
 	}
+}
+
+func annotateGeminiFallbackCheck(check *CheckResult, selection geminiModelSelection) {
+	if check == nil || !selection.FallbackUsed {
+		return
+	}
+	if check.Details == nil {
+		check.Details = map[string]any{}
+	}
+	check.Details["requested_model"] = selection.Requested
+	check.Details["probe_model"] = selection.Model
+	check.Details["model_fallback"] = true
+	check.Details["model_fallback_cause"] = selection.FallbackCause
+	if check.Status == CheckStatusPass {
+		check.Message = "请求模型不可用，已按 Gemini CLI 可用模型白名单回退到 " + selection.Model + " 完成 GenerateContent 探测；GenerateContent 响应结构符合 Gemini 预期。"
+		return
+	}
+	check.Message = check.Message + " 已按 Gemini CLI 可用模型白名单回退到 " + selection.Model + " 完成探测。"
 }
 
 func geminiBodyHasExpectedFunctionCall(body []byte) (bool, map[string]any) {

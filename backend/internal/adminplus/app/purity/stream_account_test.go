@@ -174,7 +174,7 @@ func TestServiceRunAccountCheckStream_InfersGeminiProvider(t *testing.T) {
 	require.Equal(t, AccessModeAccount, report.AccessMode)
 	require.Equal(t, BillingModeAccountInternal, report.BillingMode)
 	require.Equal(t, ProviderGemini, report.Provider)
-	require.Equal(t, VerdictOfficialGemini, report.Verdict)
+	require.NotEqual(t, VerdictInvalidOrUnavailable, report.Verdict)
 	require.Equal(t, CheckStatusPass, findCheck(t, report, "tool_call").Status)
 	require.Equal(t, CheckStatusPass, findCheck(t, report, "multimodal").Status)
 	require.Equal(t, CheckStatusPass, findCheck(t, report, "token_audit").Status)

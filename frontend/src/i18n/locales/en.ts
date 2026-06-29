@@ -812,7 +812,7 @@ export default {
       },
       gemini: {
         description: 'Add the following environment variables to your terminal profile or run directly in terminal to configure Gemini CLI access.',
-        modelComment: 'If you have Gemini 3 access, you can use: gemini-3-pro-preview',
+        modelComment: 'For Gemini tests, prefer the official or compatible models available on the current account.',
         note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       },
       opencode: {

@@ -166,13 +166,13 @@
                   />
                   <div
                     class="w-2 rounded-t transition-all"
-                    :class="auditBarClass(tokenAuditSampleRow(sample).multiplier.tone)"
+                    :class="auditBarClass(tokenAuditSampleRatioCell(sample).tone)"
                     :style="{ height: `${sampleActualBarHeight(sample)}%` }"
                   />
                 </div>
                 <div class="text-center text-[10px] text-gray-500 dark:text-dark-400">R{{ sample.index }}</div>
-                <div class="text-center text-[10px] font-semibold" :class="auditToneTextClass(tokenAuditSampleRow(sample).multiplier.tone)">
-                  {{ formatMultiplier(tokenAuditSampleRow(sample).multiplier.value) }}
+                <div class="text-center text-[10px] font-semibold" :class="auditToneTextClass(tokenAuditSampleRatioCell(sample).tone)" :title="tokenAuditSampleRatioCell(sample).title">
+                  {{ tokenAuditSampleRatioCell(sample).display }}
                 </div>
               </div>
             </div>
@@ -193,7 +193,7 @@
                   <th class="w-24 py-1 pr-2 font-medium text-right">缓存创建</th>
                   <th class="w-24 py-1 pr-2 font-medium text-right">缓存读取</th>
                   <th class="w-24 py-1 pr-2 font-medium text-right">Usage 估算</th>
-                  <th class="w-20 py-1 pr-2 font-medium text-right">估算倍率</th>
+                  <th class="w-20 py-1 pr-2 font-medium text-right">{{ tokenAuditSampleRatioHeader }}</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-dark-600">
@@ -216,17 +216,17 @@
                   <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).output.tone)">
                     {{ formatInteger(tokenAuditSampleRow(sample).output.value) }}<span v-if="sample.output_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.output_delta_pct)">{{ deltaLabel(sample.output_delta_pct) }}</span>
                   </td>
-                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cacheCreation.tone)">
-                    {{ formatInteger(tokenAuditSampleRow(sample).cacheCreation.value) }}<span v-if="sample.cache_creation_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.cache_creation_delta_pct)">{{ deltaLabel(sample.cache_creation_delta_pct) }}</span>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cacheCreation.tone)" :title="tokenAuditSampleRow(sample).cacheCreation.title">
+                    {{ tokenAuditSampleRow(sample).cacheCreation.display }}<span v-if="tokenAuditSampleRow(sample).cacheCreation.available && sample.cache_creation_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.cache_creation_delta_pct)">{{ deltaLabel(sample.cache_creation_delta_pct) }}</span>
                   </td>
-                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cacheRead.tone)">
-                    {{ formatInteger(tokenAuditSampleRow(sample).cacheRead.value) }}<span v-if="sample.cache_read_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.cache_read_delta_pct)">{{ deltaLabel(sample.cache_read_delta_pct) }}</span>
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cacheRead.tone)" :title="tokenAuditSampleRow(sample).cacheRead.title">
+                    {{ tokenAuditSampleRow(sample).cacheRead.display }}<span v-if="tokenAuditSampleRow(sample).cacheRead.available && sample.cache_read_delta_pct" class="ml-1 text-[10px]" :class="deltaTextClass(sample.cache_read_delta_pct)">{{ deltaLabel(sample.cache_read_delta_pct) }}</span>
                   </td>
                   <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).cost.tone)">
                     {{ formatUSD(tokenAuditSampleRow(sample).cost.value) }}
                   </td>
-                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRow(sample).multiplier.tone)">
-                    {{ formatMultiplier(tokenAuditSampleRow(sample).multiplier.value) }}
+                  <td class="py-1.5 pr-2 text-right font-semibold" :class="auditValueTextClass(tokenAuditSampleRatioCell(sample).tone)" :title="tokenAuditSampleRatioCell(sample).title">
+                    {{ tokenAuditSampleRatioCell(sample).display }}
                   </td>
                 </tr>
                 <tr v-if="auditSamplesForTable.length === 0">
@@ -303,10 +303,13 @@ import { downloadPurityReportPDF } from '@/utils/purityPdf'
 import {
   formatTokenAuditLatencyMS,
   hasTokenAuditSampleData,
+  isGeminiTokenAuditProvider,
   multiplierTone,
+  normalizeTokenAuditProvider,
   tokenAuditCostTotals,
   tokenAuditDisplayRatio,
   tokenAuditSampleDisplayRow,
+  tokenAuditSampleRatioDisplayCell,
   type TokenAuditTone
 } from '@/utils/purityAuditDisplay'
 import { formatInteger } from '@/views/admin/operations/SupplierAccountsUtils'
@@ -355,6 +358,42 @@ const { t } = useI18n({
           invalid_or_unavailable: '不可用',
           waiting: '等待检测',
           running: '检测中'
+        },
+        status: {
+          pass: '通过',
+          warn: '警告',
+          fail: '失败',
+          running: '检测中',
+          idle: '等待'
+        },
+        evidence: {
+          requestModel: '请求模型',
+          requestModelDesc: '检测请求使用的目标模型',
+          responseModel: '响应模型',
+          responseVendor: '响应厂商',
+          responseSource: '来源',
+          responseModelPending: '等待上游返回 model 字段',
+          modelIdentity: '模型身份',
+          modelIdentityPending: '等待模型身份一致性检查',
+          wrapperSignals: '包装信号',
+          wrapperSignalCount: '{count} 个',
+          wrapperSignalsNone: '未发现',
+          wrapperSignalsNoneDesc: '未检测到中转、反代或兼容网关指纹',
+          suspectedUpstreamVendor: '疑似上游厂商'
+        },
+        modelIdentity: {
+          exactMatch: '请求模型与响应模型一致',
+          compatibleAlias: '同厂商别名或预览模型，需结合模型列表确认',
+          responseModelMissing: '响应缺少 model 字段，无法完整确认',
+          probeModelFallback: '请求模型不可用，已使用同协议可用模型完成探针',
+          crossVendorAlias: '请求模型与响应模型属于不同厂商',
+          familyMismatch: '请求模型与响应模型属于不同模型家族',
+          versionDowngrade: '响应模型版本低于请求模型',
+          tierDowngrade: '响应模型档位低于请求模型',
+          protocolVendorMismatch: '请求模型与当前协议厂商不一致',
+          wrapperVendorMismatch: '包装层暴露的上游厂商与请求模型不一致',
+          reasoningTokensMismatch: '非 reasoning 模型响应暴露了 reasoning_tokens',
+          completed: '模型身份检查已完成'
         }
       }
     },
@@ -371,6 +410,42 @@ const { t } = useI18n({
           invalid_or_unavailable: 'Invalid or unavailable',
           waiting: 'Waiting',
           running: 'Checking'
+        },
+        status: {
+          pass: 'Pass',
+          warn: 'Warning',
+          fail: 'Fail',
+          running: 'Checking',
+          idle: 'Waiting'
+        },
+        evidence: {
+          requestModel: 'Requested model',
+          requestModelDesc: 'Target model used by this check',
+          responseModel: 'Response model',
+          responseVendor: 'Response vendor',
+          responseSource: 'Source',
+          responseModelPending: 'Waiting for upstream model field',
+          modelIdentity: 'Model identity',
+          modelIdentityPending: 'Waiting for model identity check',
+          wrapperSignals: 'Wrapper signals',
+          wrapperSignalCount: '{count} signal(s)',
+          wrapperSignalsNone: 'None',
+          wrapperSignalsNoneDesc: 'No relay, proxy, or compatible gateway fingerprint detected',
+          suspectedUpstreamVendor: 'Suspected upstream vendor'
+        },
+        modelIdentity: {
+          exactMatch: 'Requested and response models match',
+          compatibleAlias: 'Same-vendor alias or preview model; confirm with the model list',
+          responseModelMissing: 'The response does not include a model field',
+          probeModelFallback: 'Requested model was unavailable; probes used an available model on the same protocol',
+          crossVendorAlias: 'Requested and response models belong to different vendors',
+          familyMismatch: 'Requested and response models belong to different model families',
+          versionDowngrade: 'The response model version is lower than requested',
+          tierDowngrade: 'The response model tier is lower than requested',
+          protocolVendorMismatch: 'The requested model does not match the current protocol vendor',
+          wrapperVendorMismatch: 'Wrapper-exposed upstream vendor does not match the requested model',
+          reasoningTokensMismatch: 'A non-reasoning model response exposed reasoning_tokens',
+          completed: 'Model identity check completed'
         }
       }
     }
@@ -438,13 +513,14 @@ let abortController: AbortController | null = null
 
 const modelOptions = computed(() => availableModels.value as unknown as Array<Record<string, unknown>>)
 const currentProvider = computed<PurityProvider | null>(() => normalizeAccountProvider(props.account?.platform))
+const isGeminiProvider = computed(() => isGeminiTokenAuditProvider(currentProvider.value))
 const isSupportedAccount = computed(() => {
   const account = props.account
   return Boolean(account && currentProvider.value && account.type.toLowerCase() === 'apikey')
 })
 const providerLabel = computed(() => {
   if (currentProvider.value === 'anthropic') return 'Claude'
-  if (currentProvider.value === 'gemini') return 'Gemini'
+  if (isGeminiProvider.value) return 'Gemini'
   return 'OpenAI'
 })
 const dialogTitle = computed(() => `${providerLabel.value} API 纯度检测`)
@@ -530,30 +606,45 @@ const tokenAuditMetricCards = computed(() => {
   const audit = tokenAudit.value
   const totals = tokenAuditCostTotals(audit)
   const ratio = tokenAuditDisplayRatio(audit)
+  const billingMultiplier = audit?.billing_multiplier ?? audit?.billingMultiplier
+  const hasBillingMultiplier = typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)
   const cards = [
     { label: '官方基线', value: formatUSD(totals.officialBaselineUSD), tone: 'neutral' as TokenAuditTone },
     { label: 'Usage 估算', value: formatUSD(totals.actualCostUSD), tone: ratio > 0 ? multiplierTone(ratio) : 'neutral' as TokenAuditTone },
-    { label: '估算倍率', value: formatMultiplier(ratio), tone: multiplierTone(ratio) },
+    hasBillingMultiplier
+      ? { label: '平台计费倍率', value: formatMultiplier(billingMultiplier), tone: 'good' as TokenAuditTone }
+      : { label: '平台计费倍率', value: '-', tone: 'neutral' as TokenAuditTone },
+    { label: 'Usage 比值', value: formatMultiplier(ratio), tone: multiplierTone(ratio) },
     { label: '缓存命中率', value: formatPercent(audit?.cacheHitRate ?? audit?.cache_hit_rate), tone: audit?.cacheHitRate || audit?.cache_hit_rate ? 'good' as TokenAuditTone : 'neutral' as TokenAuditTone }
   ]
-  const billingMultiplier = audit?.billing_multiplier ?? audit?.billingMultiplier
-  if (typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)) {
-    cards.splice(3, 0, { label: '平台计费倍率', value: formatMultiplier(billingMultiplier), tone: 'neutral' as TokenAuditTone })
-  }
   return cards
 })
 const tokenAuditRatio = computed(() => tokenAuditDisplayRatio(tokenAudit.value))
 const tokenAuditRatioTone = computed(() => multiplierTone(tokenAuditRatio.value))
+const tokenAuditBillingMultiplier = computed(() => tokenAudit.value?.billing_multiplier ?? tokenAudit.value?.billingMultiplier)
+const hasTokenAuditBillingMultiplier = computed(() => typeof tokenAuditBillingMultiplier.value === 'number' && Number.isFinite(tokenAuditBillingMultiplier.value))
+const tokenAuditSampleRatioHeader = computed(() => hasTokenAuditBillingMultiplier.value ? '平台倍率' : 'Usage 比值')
+const geminiCacheFieldNotice = computed(() => {
+  if (!isGeminiProvider.value) return ''
+  const samples = auditSamplesForTable.value
+  if (!samples.length) return ''
+  const missingCacheCreate = samples.some((sample) => tokenAuditSampleRow(sample).cacheCreation.available === false)
+  const missingCacheRead = samples.some((sample) => tokenAuditSampleRow(sample).cacheRead.available === false)
+  if (!missingCacheCreate && !missingCacheRead) return ''
+  return 'Gemini 未返回或未命中的缓存字段以 0 展示；缓存创建字段不可确认，缓存读取 0 表示本轮未观察到命中。'
+})
 const tokenAuditNoticeText = computed(() => {
   const ratio = tokenAuditRatio.value
-  if (!ratio) return '用量倍率暂无法确认，需结合每轮 usage 字段和平台账单复核。'
-  if (tokenAuditRatioTone.value === 'bad') return `用量倍率 ${formatMultiplier(ratio)}，明显高于常见范围，可能存在异常扣费或 Token 统计混淆。`
-  if (tokenAuditRatioTone.value === 'warn') return `用量倍率 ${formatMultiplier(ratio)}，高于常见范围，建议结合平台单价/倍率复核。`
-  const billingMultiplier = tokenAudit.value?.billing_multiplier ?? tokenAudit.value?.billingMultiplier
+  const billingMultiplier = tokenAuditBillingMultiplier.value
+  const cacheNotice = geminiCacheFieldNotice.value ? ` ${geminiCacheFieldNotice.value}` : ''
   if (typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)) {
-    return `Usage 倍率 ${formatMultiplier(ratio)}；平台计费倍率 ${formatMultiplier(billingMultiplier)}。两者口径不同，后者来自账号配置。`
+    return `平台计费倍率 ${formatMultiplier(billingMultiplier)}；Usage 比值 ${formatMultiplier(ratio)}。两者口径不同，前者来自账号配置或 /v1/usage 扣费增量。${cacheNotice}`
   }
-  return `Usage 倍率 ${formatMultiplier(ratio)}，当前未发现明显超额消耗；平台计费倍率需结合账号配置或账单复核。`
+  if (isGeminiProvider.value) return `Usage 比值 ${formatMultiplier(ratio)}；Gemini usageMetadata 只能确认本轮 token 统计，平台计费倍率需结合账号配置或 /v1/usage 扣费增量。${cacheNotice}`
+  if (!ratio) return 'Usage 比值暂无法确认，需结合每轮 usage 字段和平台账单复核。'
+  if (tokenAuditRatioTone.value === 'bad') return `Usage 比值 ${formatMultiplier(ratio)}，明显高于常见范围，可能存在异常扣费或 Token 统计混淆。`
+  if (tokenAuditRatioTone.value === 'warn') return `Usage 比值 ${formatMultiplier(ratio)}，高于常见范围，建议结合平台单价/倍率复核。`
+  return `Usage 比值 ${formatMultiplier(ratio)}，当前未发现明显超额消耗；平台计费倍率需结合账号配置或账单复核。${cacheNotice}`
 })
 const tokenAuditNoticeClass = computed(() => {
   if (tokenAudit.value?.status === 'fail') return auditToneNoticeClass('bad')
@@ -565,8 +656,8 @@ const tokenAuditBadgeClass = computed(() => validationBadgeClass((tokenAudit.val
 const metricCards = computed(() => [
   { label: '模型列表', value: latencyLabel(metrics.value.models_latency_ms) },
   {
-    label: currentProvider.value === 'anthropic' ? 'Messages' : currentProvider.value === 'gemini' ? 'GenerateContent' : 'Responses',
-    value: latencyLabel(currentProvider.value === 'anthropic' ? metrics.value.messages_latency_ms : currentProvider.value === 'gemini' ? metrics.value.generate_content_latency_ms || metrics.value.responses_latency_ms : metrics.value.responses_latency_ms)
+    label: currentProvider.value === 'anthropic' ? 'Messages' : isGeminiProvider.value ? 'GenerateContent' : 'Responses',
+    value: latencyLabel(currentProvider.value === 'anthropic' ? metrics.value.messages_latency_ms : isGeminiProvider.value ? metrics.value.generate_content_latency_ms || metrics.value.responses_latency_ms : metrics.value.responses_latency_ms)
   },
   { label: '首 Token', value: latencyLabel(metrics.value.stream_first_token_ms) },
   { label: '总耗时', value: latencyLabel(metrics.value.latency_ms) }
@@ -578,30 +669,30 @@ const wrapperSignals = computed(() => {
   return snake.length ? snake : camel
 })
 const evidenceCards = computed(() => {
-  const identity = modelIdentity.value
-  const signals = wrapperSignals.value
-  return [
-    {
-      label: '请求模型',
-      value: report.value?.expected_model || report.value?.expectedModel || selectedModelId.value || '-',
-      description: '检测请求使用的目标模型'
-    },
-    {
-      label: '响应模型',
-      value: report.value?.response_model || report.value?.responseModel || '-',
-      description: responseModelDescription(identity)
-    },
-    {
-      label: '模型身份',
-      value: identity ? validationStatusLabel(identity.status) : '等待',
-      description: identity ? modelIdentityEvidenceDescription(identity) : '等待模型身份一致性检查'
-    },
-    {
-      label: '包装信号',
-      value: signals.length ? `${signals.length} 个` : '未发现',
-      description: signals.length ? signals.join('、') : '未检测到中转、反代或兼容网关指纹'
-    }
-  ]
+	const identity = modelIdentity.value
+	const signals = wrapperSignals.value
+	return [
+		{
+			label: t('purity.evidence.requestModel'),
+			value: report.value?.expected_model || report.value?.expectedModel || selectedModelId.value || '-',
+			description: t('purity.evidence.requestModelDesc')
+		},
+		{
+			label: t('purity.evidence.responseModel'),
+			value: report.value?.response_model || report.value?.responseModel || '-',
+			description: responseModelDescription(identity)
+		},
+		{
+			label: t('purity.evidence.modelIdentity'),
+			value: identity ? validationStatusLabel(identity.status) : t('purity.status.idle'),
+			description: identity ? modelIdentityEvidenceDescription(identity) : t('purity.evidence.modelIdentityPending')
+		},
+		{
+			label: t('purity.evidence.wrapperSignals'),
+			value: signals.length ? t('purity.evidence.wrapperSignalCount', { count: signals.length }) : t('purity.evidence.wrapperSignalsNone'),
+			description: signals.length ? signals.join('、') : t('purity.evidence.wrapperSignalsNoneDesc')
+		}
+	]
 })
 const canDownloadPDF = computed(() => Boolean(report.value || started.value))
 
@@ -638,8 +729,8 @@ function preferredModel(models: LocalAccountTestModel[]): string {
   if (currentProvider.value === 'anthropic') {
     return findPreferredModel(models, ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus', 'opus', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-sonnet', 'sonnet', 'claude'])
   }
-  if (currentProvider.value === 'gemini') {
-    return findPreferredModel(models, ['gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini'])
+  if (isGeminiProvider.value) {
+    return findPreferredModel(models, ['gemini-3.5-flash', 'gemini-3.1-pro', 'gemini-3.1-pro-thinking', 'gemini-3.5-flash-thinking', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', 'gemini-3-flash-preview', 'gemini-3.1-flash-image'])
   }
   return findPreferredModel(models, ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.5', 'gpt'])
 }
@@ -859,11 +950,11 @@ function maxAuditCost(): number {
 }
 
 function validationStatusLabel(status: DisplayStatus): string {
-  if (status === 'pass') return '通过'
-  if (status === 'warn') return '警告'
-  if (status === 'fail') return '失败'
-  if (status === 'running') return '检测中'
-  return '等待'
+	if (status === 'pass') return t('purity.status.pass')
+	if (status === 'warn') return t('purity.status.warn')
+	if (status === 'fail') return t('purity.status.fail')
+	if (status === 'running') return t('purity.status.running')
+	return t('purity.status.idle')
 }
 
 function scoreRingColor(score: number): string {
@@ -951,8 +1042,8 @@ function latencyLabel(value?: number): string {
 }
 
 function formatMultiplier(value?: number): string {
-  if (!value) return '-'
-  return `${value.toFixed(2)}x`
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-'
+  return `${value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}x`
 }
 
 function formatUSD(value?: number): string {
@@ -961,7 +1052,7 @@ function formatUSD(value?: number): string {
 }
 
 function formatPercent(value?: number): string {
-  if (!value) return '-'
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
   return `${Math.round(value > 1 ? value : value * 100)}%`
 }
 
@@ -977,10 +1068,8 @@ function deltaTextClass(value?: number): string {
 }
 
 function normalizeAccountProvider(platform?: string): PurityProvider | null {
-  const value = (platform || '').toLowerCase()
-  if (value === 'openai') return 'openai'
-  if (value === 'anthropic' || value === 'claude') return 'anthropic'
-  if (value === 'gemini' || value === 'google') return 'gemini'
+  const value = normalizeTokenAuditProvider(platform)
+  if (value === 'openai' || value === 'anthropic' || value === 'gemini') return value
   return null
 }
 
@@ -1001,7 +1090,7 @@ function findPreferredModel(models: LocalAccountTestModel[], candidates: string[
 }
 
 function validationDisplayName(definition: ValidationDefinition): string {
-  if (currentProvider.value === 'gemini') {
+  if (isGeminiProvider.value) {
     if (definition.id === 'schema_integrity') return 'GenerateContent 结构完整性'
     if (definition.id === 'multimodal') return 'InlineData 多模态'
     return definition.name
@@ -1013,7 +1102,7 @@ function validationDisplayName(definition: ValidationDefinition): string {
 }
 
 function validationWaitingMessage(definition: ValidationDefinition): string {
-  if (currentProvider.value === 'gemini') {
+  if (isGeminiProvider.value) {
     if (definition.id === 'schema_integrity') return '等待 GenerateContent schema 探测'
     if (definition.id === 'multimodal') return '等待 inlineData 探测'
     return definition.message
@@ -1025,31 +1114,35 @@ function validationWaitingMessage(definition: ValidationDefinition): string {
 }
 
 function modelIdentityReasonLabel(reason?: string): string {
-  if (reason === 'exact_match') return '请求模型与响应模型一致'
-  if (reason === 'compatible_alias') return '同厂商别名或预览模型，需结合模型列表确认'
-  if (reason === 'response_model_missing') return '响应缺少 model 字段，无法完整确认'
-  if (reason === 'cross_vendor_alias') return '请求模型与响应模型属于不同厂商'
-  if (reason === 'family_mismatch') return '请求模型与响应模型属于不同模型家族'
-  if (reason === 'version_downgrade') return '响应模型版本低于请求模型'
-  if (reason === 'tier_downgrade') return '响应模型档位低于请求模型'
-  if (reason === 'protocol_model_vendor_mismatch') return '请求模型与当前协议厂商不一致'
-  if (reason === 'wrapper_vendor_signal_mismatch') return '包装层暴露的上游厂商与请求模型不一致'
-  if (reason === 'reasoning_tokens_mismatch') return '非 reasoning 模型响应暴露了 reasoning_tokens'
-  return reason || '模型身份检查已完成'
+	const reasonKeys: Record<string, string> = {
+		exact_match: 'purity.modelIdentity.exactMatch',
+		compatible_alias: 'purity.modelIdentity.compatibleAlias',
+		response_model_missing: 'purity.modelIdentity.responseModelMissing',
+		probe_model_fallback: 'purity.modelIdentity.probeModelFallback',
+		cross_vendor_alias: 'purity.modelIdentity.crossVendorAlias',
+		family_mismatch: 'purity.modelIdentity.familyMismatch',
+		version_downgrade: 'purity.modelIdentity.versionDowngrade',
+		tier_downgrade: 'purity.modelIdentity.tierDowngrade',
+		protocol_model_vendor_mismatch: 'purity.modelIdentity.protocolVendorMismatch',
+		wrapper_vendor_signal_mismatch: 'purity.modelIdentity.wrapperVendorMismatch',
+		reasoning_tokens_mismatch: 'purity.modelIdentity.reasoningTokensMismatch'
+	}
+	if (reason && reasonKeys[reason]) return t(reasonKeys[reason])
+	return reason || t('purity.modelIdentity.completed')
 }
 
 function responseModelDescription(identity?: PurityReport['model_identity'] | PurityReport['modelIdentity'] | null): string {
-  const parts: string[] = []
-  if (identity?.response_vendor) parts.push(`响应厂商：${identity.response_vendor}`)
-  const source = report.value?.response_model_source || report.value?.responseModelSource
-  if (source) parts.push(`来源：${source}`)
-  return parts.length ? parts.join('；') : '等待上游返回 model 字段'
+	const parts: string[] = []
+	if (identity?.response_vendor) parts.push(`${t('purity.evidence.responseVendor')}：${identity.response_vendor}`)
+	const source = report.value?.response_model_source || report.value?.responseModelSource
+	if (source) parts.push(`${t('purity.evidence.responseSource')}：${source}`)
+	return parts.length ? parts.join('；') : t('purity.evidence.responseModelPending')
 }
 
 function modelIdentityEvidenceDescription(identity: NonNullable<PurityReport['model_identity'] | PurityReport['modelIdentity']>): string {
-  const suspectedVendor = suspectedUpstreamVendor(identity)
-  const reason = modelIdentityReasonLabel(identity.reason)
-  return suspectedVendor ? `${reason}；疑似上游厂商：${suspectedVendor}` : reason
+	const suspectedVendor = suspectedUpstreamVendor(identity)
+	const reason = modelIdentityReasonLabel(identity.reason)
+	return suspectedVendor ? `${reason}；${t('purity.evidence.suspectedUpstreamVendor')}：${suspectedVendor}` : reason
 }
 
 function suspectedUpstreamVendor(identity?: PurityReport['model_identity'] | PurityReport['modelIdentity'] | null): string {
@@ -1067,6 +1160,10 @@ function hasAuditSampleData(sample: PurityTokenAuditSample): boolean {
 
 function tokenAuditSampleRow(sample: PurityTokenAuditSample) {
   return tokenAuditSampleDisplayRow(sample, currentProvider.value || 'openai')
+}
+
+function tokenAuditSampleRatioCell(sample: PurityTokenAuditSample): { display: string; tone: TokenAuditTone; title: string } {
+  return tokenAuditSampleRatioDisplayCell(sample, currentProvider.value || 'openai', tokenAuditBillingMultiplier.value)
 }
 
 function auditRequestModeLabel(mode?: string): string {

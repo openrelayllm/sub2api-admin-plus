@@ -10,6 +10,7 @@ const (
 	modelIdentityReasonExactMatch                  = "exact_match"
 	modelIdentityReasonCompatibleAlias             = "compatible_alias"
 	modelIdentityReasonResponseModelMissing        = "response_model_missing"
+	modelIdentityReasonProbeFallback               = "probe_model_fallback"
 	modelIdentityReasonCrossVendorAlias            = "cross_vendor_alias"
 	modelIdentityReasonFamilyMismatch              = "family_mismatch"
 	modelIdentityReasonVersionDowngrade            = "version_downgrade"
@@ -43,7 +44,7 @@ func buildModelIdentityCheck(report *PublicReport) CheckResult {
 	details := modelIdentityDetails(result)
 	switch result.Status {
 	case CheckStatusPass:
-		return CheckResult{ID: "model_identity", Name: "模型身份一致性", Status: CheckStatusPass, Score: 0, MaxScore: 0, Message: "请求模型与响应模型身份一致。", Details: details}
+		return CheckResult{ID: "model_identity", Name: "模型身份一致性", Status: CheckStatusPass, Score: 0, MaxScore: 0, Message: modelIdentityPassMessage(result), Details: details}
 	case CheckStatusFail:
 		return CheckResult{ID: "model_identity", Name: "模型身份一致性", Status: CheckStatusFail, Score: 0, MaxScore: 0, Message: modelIdentityFailureMessage(result), Details: details}
 	default:
@@ -87,6 +88,23 @@ func evaluateModelIdentity(report *PublicReport) ModelIdentityResult {
 	}
 	if modelListedKnown {
 		result.ModelListContainsRequested = boolPtr(modelListed)
+	}
+	if fallbackUsed, requestedFallback, probeFallback, fallbackCause := geminiProbeFallbackInfo(report); fallbackUsed {
+		if requestedFallback != "" {
+			result.Evidence["requested_model"] = requestedFallback
+		}
+		if probeFallback != "" {
+			result.Evidence["probe_model"] = probeFallback
+		}
+		if fallbackCause != "" {
+			result.Evidence["model_fallback_cause"] = fallbackCause
+		}
+		result.Evidence["model_fallback"] = true
+		if response.Vendor == "google" && response.Family == "gemini" {
+			result.Status = CheckStatusPass
+			result.Reason = modelIdentityReasonProbeFallback
+			return result
+		}
 	}
 	if requested.Canonical == "" {
 		result.Status = CheckStatusWarn
@@ -406,6 +424,26 @@ func reportProvider(report *PublicReport) string {
 	return report.Provider
 }
 
+func geminiProbeFallbackInfo(report *PublicReport) (bool, string, string, string) {
+	if report == nil || report.Provider != ProviderGemini {
+		return false, "", "", ""
+	}
+	for _, check := range report.Checks {
+		if check.ID != "responses_schema" || check.Details == nil {
+			continue
+		}
+		fallback, _ := check.Details["model_fallback"].(bool)
+		if !fallback {
+			continue
+		}
+		requested, _ := check.Details["requested_model"].(string)
+		probe, _ := check.Details["probe_model"].(string)
+		cause, _ := check.Details["model_fallback_cause"].(string)
+		return true, requested, probe, cause
+	}
+	return false, "", "", ""
+}
+
 func modelString(report *PublicReport, kind string) string {
 	if report == nil {
 		return ""
@@ -472,10 +510,21 @@ func modelIdentityFailureMessage(result ModelIdentityResult) string {
 	}
 }
 
+func modelIdentityPassMessage(result ModelIdentityResult) string {
+	switch result.Reason {
+	case modelIdentityReasonProbeFallback:
+		return "请求模型不可用，已使用同协议可用 Gemini 模型完成探针；未发现跨厂商或降级伪装证据。"
+	default:
+		return "请求模型与响应模型身份一致。"
+	}
+}
+
 func modelIdentityWarningMessage(result ModelIdentityResult) string {
 	switch result.Reason {
 	case modelIdentityReasonResponseModelMissing:
 		return "响应未返回 model 字段，无法完整确认模型身份。"
+	case modelIdentityReasonProbeFallback:
+		return "请求模型不可用，已使用同协议可用模型完成探针；需要结合模型列表确认目标模型是否可调度。"
 	case modelIdentityReasonCompatibleAlias:
 		return fmt.Sprintf("请求模型 %s 与响应模型 %s 不完全一致，可能是别名或预览版本。", result.RequestedModel, result.ResponseModel)
 	default:

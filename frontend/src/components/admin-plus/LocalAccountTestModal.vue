@@ -239,14 +239,14 @@ const previewImageUrl = ref('')
 let abortController: AbortController | null = null
 
 const prioritizedGeminiModels = [
-  'gemini-3.1-flash-image',
-  'gemini-2.5-flash-image',
   'gemini-3.5-flash',
-  'gemini-2.5-flash',
-  'gemini-2.5-pro',
+  'gemini-3.1-pro',
+  'gemini-3.1-pro-thinking',
+  'gemini-3.5-flash-thinking',
   'gemini-3-flash-preview',
   'gemini-3-pro-preview',
-  'gemini-2.0-flash'
+  'gemini-3.1-flash-image',
+  'gemini-2.5-flash-image'
 ]
 
 const modelOptions = computed(() => availableModels.value as unknown as Array<Record<string, unknown>>)

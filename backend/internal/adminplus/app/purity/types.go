@@ -238,9 +238,9 @@ type TokenAuditReport struct {
 	OutputTokens                  int64              `json:"output_tokens"`
 	CacheCreationTokens           int64              `json:"cache_creation_tokens"`
 	CachedTokens                  int64              `json:"cached_tokens"`
-	CachedTokensFieldObserved     bool               `json:"cached_tokens_field_observed,omitempty"`
-	CacheCreationFieldObserved    bool               `json:"cache_creation_field_observed,omitempty"`
-	CacheReadFieldObserved        bool               `json:"cache_read_field_observed,omitempty"`
+	CachedTokensFieldObserved     bool               `json:"cached_tokens_field_observed"`
+	CacheCreationFieldObserved    bool               `json:"cache_creation_field_observed"`
+	CacheReadFieldObserved        bool               `json:"cache_read_field_observed"`
 	CacheProbeRounds              int                `json:"cache_probe_rounds,omitempty"`
 	CacheProbeHits                int                `json:"cache_probe_hits,omitempty"`
 	ContextReplayRounds           int                `json:"context_replay_rounds,omitempty"`
@@ -273,12 +273,12 @@ type TokenAuditSample struct {
 	UncachedInputTokens       int64   `json:"uncached_input_tokens"`
 	CacheCreationTokens       int64   `json:"cache_creation_tokens"`
 	CacheCreationInputTokens  int64   `json:"cache_creation_input_tokens,omitempty"`
-	CacheCreationFieldPresent bool    `json:"cache_creation_tokens_present,omitempty"`
+	CacheCreationFieldPresent bool    `json:"cache_creation_tokens_present"`
 	BaselineCacheCreation     int64   `json:"baseline_cache_creation_input_tokens,omitempty"`
 	CacheCreationDeltaPct     float64 `json:"cache_creation_delta_pct,omitempty"`
 	CachedTokens              int64   `json:"cached_tokens"`
 	CacheReadInputTokens      int64   `json:"cache_read_input_tokens,omitempty"`
-	CachedTokensFieldPresent  bool    `json:"cached_tokens_present,omitempty"`
+	CachedTokensFieldPresent  bool    `json:"cached_tokens_present"`
 	BaselineCacheRead         int64   `json:"baseline_cache_read_input_tokens,omitempty"`
 	CacheReadDeltaPct         float64 `json:"cache_read_delta_pct,omitempty"`
 	ReasoningTokens           int64   `json:"reasoning_tokens,omitempty"`

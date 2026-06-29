@@ -6,6 +6,32 @@ export interface TokenAuditDisplayCell {
   value: number
   delta?: number
   tone: TokenAuditTone
+  available: boolean
+  display: string
+  title?: string
+  unavailableReason?: TokenAuditUnavailableReason
+}
+
+export type TokenAuditUnavailableReason = 'gemini_cache_creation_missing' | 'gemini_cached_content_missing'
+export type TokenAuditCacheDisplayMode = 'dash' | 'zero'
+
+export function normalizeTokenAuditProvider(provider?: PurityProvider | string | null): PurityProvider | string {
+  const value = String(provider || '').trim().toLowerCase()
+  const alias = value.replace(/[\s-]+/g, '_')
+  if (alias === 'claude' || alias === 'anthropic_compatible' || alias === 'claude_compatible' || alias === 'claude_compat') {
+    return 'anthropic'
+  }
+  if (alias === 'google' || alias === 'google_ai' || alias === 'google_ai_studio' || alias === 'ai_studio' || alias === 'aistudio' || alias === 'gemini_compatible' || alias === 'gemini_compat' || alias === 'vertex' || alias === 'vertex_ai' || alias === 'google_vertex' || alias === 'antigravity') {
+    return 'gemini'
+  }
+  if (alias === 'openai_compatible' || alias === 'openai_compat') {
+    return 'openai'
+  }
+  return alias || 'openai'
+}
+
+export function isGeminiTokenAuditProvider(provider?: PurityProvider | string | null): boolean {
+  return normalizeTokenAuditProvider(provider) === 'gemini'
 }
 
 export interface TokenAuditDisplayRow {
@@ -18,6 +44,9 @@ export interface TokenAuditDisplayRow {
   multiplier: {
     value: number
     tone: TokenAuditTone
+    available: boolean
+    display: string
+    title?: string
   }
 }
 
@@ -27,6 +56,12 @@ export interface TokenAuditRuntimeSummary {
   inputTokens: number
   outputTokens: number
   sampleCount: number
+}
+
+export interface TokenAuditSampleRatioCell {
+  display: string
+  tone: TokenAuditTone
+  title: string
 }
 
 type AuditRatioInput = Partial<PurityTokenAuditReport> & {
@@ -59,45 +94,90 @@ export function tokenAuditSampleDisplayRatio(sample: AuditSampleInput): number {
   return firstPositiveNumber(sample.ratio, sample.multiplier)
 }
 
+export function tokenAuditSampleRatioDisplayCell(
+  sample: AuditSampleInput,
+  provider: PurityProvider | string,
+  billingMultiplier?: number | null
+): TokenAuditSampleRatioCell {
+  const normalizedProvider = normalizeTokenAuditProvider(provider)
+  const row = tokenAuditSampleDisplayRow(sample, normalizedProvider)
+  if (typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)) {
+    return {
+      display: formatMultiplier(billingMultiplier),
+      tone: 'good',
+      title: `平台计费倍率 ${formatMultiplier(billingMultiplier)}；本轮 Usage 比值 ${formatMultiplier(row.multiplier.value)}。`
+    }
+  }
+  if (isGeminiTokenAuditProvider(normalizedProvider)) {
+    return {
+      display: row.multiplier.display,
+      tone: row.multiplier.tone,
+      title: 'Gemini usageMetadata 的 Usage 比值通常只是官方 usage 估算口径，不等同平台计费倍率；需结合账号配置或 /v1/usage 扣费增量确认。'
+    }
+  }
+  return {
+    display: row.multiplier.display,
+    tone: row.multiplier.tone,
+    title: `本轮 Usage 比值 ${row.multiplier.display}。`
+  }
+}
+
 export function tokenAuditSampleDisplayRow(sample: AuditSampleInput, provider: PurityProvider | string): TokenAuditDisplayRow {
-  const input = auditDisplayInputTokens(sample, provider)
+  const normalizedProvider = normalizeTokenAuditProvider(provider)
+  const input = auditDisplayInputTokens(sample, normalizedProvider)
   const output = nonNegativeNumber(sample.output_tokens)
-  const cacheCreation = auditDisplayCacheCreationTokens(sample)
-  const cacheRead = auditDisplayCacheReadTokens(sample)
+  const cacheCreation = auditDisplayCacheCreationTokens(sample, normalizedProvider)
+  const cacheRead = auditDisplayCacheReadTokens(sample, normalizedProvider)
   const multiplier = tokenAuditSampleDisplayRatio(sample)
   return {
     input: {
       value: input,
       delta: sample.input_delta_pct,
-      tone: deltaTone(sample.input_delta_pct)
+      tone: deltaTone(sample.input_delta_pct),
+      available: true,
+      display: formatAuditInteger(input)
     },
     output: {
       value: output,
       delta: sample.output_delta_pct,
-      tone: deltaTone(sample.output_delta_pct)
+      tone: deltaTone(sample.output_delta_pct),
+      available: true,
+      display: formatAuditInteger(output)
     },
     cacheCreation: {
-      value: cacheCreation,
+      value: cacheCreation.value,
       delta: sample.cache_creation_delta_pct,
-      tone: deltaTone(sample.cache_creation_delta_pct)
+      tone: cacheCreation.available ? deltaTone(sample.cache_creation_delta_pct) : 'neutral',
+      available: cacheCreation.available,
+      display: cacheCreation.display,
+      title: cacheCreation.title
     },
     cacheRead: {
-      value: cacheRead,
+      value: cacheRead.value,
       delta: sample.cache_read_delta_pct,
-      tone: deltaTone(sample.cache_read_delta_pct)
+      tone: cacheRead.available ? deltaTone(sample.cache_read_delta_pct) : 'neutral',
+      available: cacheRead.available,
+      display: cacheRead.display,
+      title: cacheRead.title
     },
     latency: {
       value: nonNegativeNumber(sample.latency_ms),
-      tone: latencyTone(sample.latency_ms)
+      tone: latencyTone(sample.latency_ms),
+      available: true,
+      display: formatTokenAuditLatencyMS(sample.latency_ms)
     },
     cost: {
       value: firstNonNegativeNumber(sample.actual_cost_usd, sample.cost),
       delta: sample.cost_delta_pct,
-      tone: deltaTone(sample.cost_delta_pct)
+      tone: deltaTone(sample.cost_delta_pct),
+      available: true,
+      display: ''
     },
     multiplier: {
       value: multiplier,
-      tone: multiplierTone(multiplier)
+      tone: multiplierTone(multiplier),
+      available: multiplier > 0,
+      display: formatMultiplier(multiplier)
     }
   }
 }
@@ -184,18 +264,26 @@ export function multiplierTone(value: number): TokenAuditTone {
 
 function auditDisplayInputTokens(sample: AuditSampleInput, provider: PurityProvider | string): number {
   const input = nonNegativeNumber(sample.input_tokens)
-  if (provider === 'openai') {
-    return Math.max(0, input - auditDisplayCacheReadTokens(sample))
+  if (normalizeTokenAuditProvider(provider) === 'openai') {
+    return Math.max(0, input - auditDisplayCacheReadTokens(sample, provider).value)
   }
   return input
 }
 
-function auditDisplayCacheCreationTokens(sample: AuditSampleInput): number {
-  return firstDisplayNumber(sample.cache_creation_input_tokens, sample.cache_creation_tokens)
+function auditDisplayCacheCreationTokens(sample: AuditSampleInput, provider: PurityProvider | string): TokenAuditDisplayCellValue {
+  const value = firstDisplayNumber(sample.cache_creation_input_tokens, sample.cache_creation_tokens)
+  if (isGeminiTokenAuditProvider(provider) && value <= 0) {
+    return unavailableTokenCell('gemini_cache_creation_missing', 'Gemini GenerateContent usageMetadata 没有缓存创建 token 字段，本列无法确认。', 'zero')
+  }
+  return availableTokenCell(value)
 }
 
-function auditDisplayCacheReadTokens(sample: AuditSampleInput): number {
-  return firstDisplayNumber(sample.cache_read_input_tokens, sample.cached_tokens)
+function auditDisplayCacheReadTokens(sample: AuditSampleInput, provider: PurityProvider | string): TokenAuditDisplayCellValue {
+  const value = firstDisplayNumber(sample.cache_read_input_tokens, sample.cached_tokens)
+  if (isGeminiTokenAuditProvider(provider) && value <= 0) {
+    return unavailableTokenCell('gemini_cached_content_missing', 'Gemini usageMetadata 本轮未观察到 cachedContentTokenCount 命中，按本轮缓存读取 0 展示。', 'zero')
+  }
+  return availableTokenCell(value)
 }
 
 function firstDisplayNumber(...values: Array<number | undefined | null>): number {
@@ -218,6 +306,35 @@ function firstPositiveNumber(...values: Array<number | undefined | null>): numbe
 
 function nonNegativeNumber(value: number | undefined | null): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+type TokenAuditDisplayCellValue = Pick<TokenAuditDisplayCell, 'value' | 'available' | 'display' | 'title' | 'unavailableReason'>
+
+function availableTokenCell(value: number): TokenAuditDisplayCellValue {
+  return {
+    value,
+    available: true,
+    display: formatAuditInteger(value)
+  }
+}
+
+function unavailableTokenCell(unavailableReason: TokenAuditUnavailableReason, title: string, displayMode: TokenAuditCacheDisplayMode = 'dash'): TokenAuditDisplayCellValue {
+  return {
+    value: 0,
+    available: false,
+    display: displayMode === 'zero' ? '0' : '-',
+    title,
+    unavailableReason
+  }
+}
+
+function formatAuditInteger(value: number): string {
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value || 0)
+}
+
+function formatMultiplier(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '-'
+  return `${value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}x`
 }
 
 function deltaTone(delta: number | undefined): TokenAuditTone {

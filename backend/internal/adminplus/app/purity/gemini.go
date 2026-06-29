@@ -7,7 +7,6 @@ import (
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/tidwall/gjson"
 )
 
 func (s *Service) runGeminiCheck(ctx context.Context, in PublicCheckInput, emit PublicCheckEventSink, options checkRunOptions) (*PublicReport, error) {
@@ -96,22 +95,31 @@ func (s *Service) runGeminiCheck(ctx context.Context, in PublicCheckInput, emit 
 	}
 
 	emitProgress(report, emit, 2, "structure")
-	generateProbe := s.probeGeminiGenerateContent(checkCtx, client, baseURL, apiKey, model)
+	probeModel := model
+	generateProbe := s.probeGeminiGenerateContent(checkCtx, client, baseURL, apiKey, probeModel)
+	modelSelection := selectGeminiProbeModel(model, modelsProbe, generateProbe)
+	if modelSelection.FallbackUsed {
+		probeModel = modelSelection.Model
+		generateProbe = s.probeGeminiGenerateContent(checkCtx, client, baseURL, apiKey, probeModel)
+	}
 	report.Metrics.GenerateContentLatencyMS = generateProbe.LatencyMS
 	report.Metrics.ResponsesLatencyMS = generateProbe.LatencyMS
 	report.Metrics.Usage = parseGeminiUsage(generateProbe.Body)
-	report.ResponseModel = strings.TrimSpace(gjson.GetBytes(generateProbe.Body, "modelVersion").String())
+	report.ResponseModel, report.ResponseModelSource, report.responseBodyModel, report.responseHeaderModel = geminiResponseModelFromProbe(generateProbe, probeModel)
 	report.NonStreamChannel = channelFromProbe(ProviderGemini, host, officialHost, generateProbe)
 	schemaCheck := buildGeminiGenerateContentCheck(generateProbe, apiKey)
-	toolCheck := buildGeminiToolCallCheck(generateProbe)
+	annotateGeminiFallbackCheck(&schemaCheck, modelSelection)
 	usageCheck := buildGeminiUsageCheck(report.Metrics.Usage, generateProbe)
-	appendAndEmitChecks(report, emit, schemaCheck, toolCheck, usageCheck)
+	appendAndEmitChecks(report, emit, schemaCheck, usageCheck)
 	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("schema_integrity", "结构完整性", []CheckResult{schemaCheck}))
 	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("signature", "签名校验", []CheckResult{usageCheck}))
 	emitMetrics(report, emit)
 
 	emitProgress(report, emit, 3, "behavior")
-	streamProbe := s.probeGeminiStream(checkCtx, client, baseURL, apiKey, model)
+	toolProbe := s.probeGeminiToolCall(checkCtx, client, baseURL, apiKey, probeModel)
+	toolCheck := buildGeminiToolCallCheck(toolProbe, apiKey)
+	appendAndEmitChecks(report, emit, toolCheck)
+	streamProbe := s.probeGeminiStream(checkCtx, client, baseURL, apiKey, probeModel)
 	report.Metrics.StreamFirstTokenMS = streamProbe.FirstTokenMS
 	report.Metrics.StreamTotalLatencyMS = streamProbe.TotalLatencyMS
 	report.StreamChannel = firstNonEmptyString(channelFromStreamProbe(ProviderGemini, host, officialHost, streamProbe.Headers), report.NonStreamChannel)
@@ -122,7 +130,7 @@ func (s *Service) runGeminiCheck(ctx context.Context, in PublicCheckInput, emit 
 	emitMetrics(report, emit)
 
 	emitProgress(report, emit, 5, "multimodal")
-	multimodalProbe := s.probeGeminiMultimodal(checkCtx, client, baseURL, apiKey, model)
+	multimodalProbe := s.probeGeminiMultimodal(checkCtx, client, baseURL, apiKey, probeModel)
 	report.Metrics.MultimodalLatencyMS = multimodalProbe.LatencyMS
 	multimodalCheck := buildGeminiMultimodalCheck(multimodalProbe, apiKey)
 	appendAndEmitChecks(report, emit, multimodalCheck)
@@ -141,7 +149,7 @@ func (s *Service) runGeminiCheck(ctx context.Context, in PublicCheckInput, emit 
 	} else if generateProbe.StatusCode >= 200 && generateProbe.StatusCode < 300 {
 		emitProgress(report, emit, 6, "token_audit")
 		billingSnapshot := s.captureBillingUsageSnapshotForAudit(checkCtx, client, ProviderGemini, baseURL, apiKey, options)
-		report.TokenAudit = s.runGeminiTokenAudit(checkCtx, client, baseURL, apiKey, model, func(sample TokenAuditSample) {
+		report.TokenAudit = s.runGeminiTokenAudit(checkCtx, client, baseURL, apiKey, probeModel, func(sample TokenAuditSample) {
 			report.TokenAuditPartial = upsertTokenAuditPartial(report.TokenAuditPartial, sample)
 			report.TokenAuditProgress = fmt.Sprintf("%d/%d", len(report.TokenAuditPartial), tokenAuditSamples)
 			emitPublicCheckEvent(emit, PublicCheckEvent{

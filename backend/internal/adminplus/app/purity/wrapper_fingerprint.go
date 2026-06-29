@@ -30,10 +30,10 @@ func buildWrapperFingerprintCheck(report *PublicReport) CheckResult {
 		return CheckResult{
 			ID:       "wrapper_fingerprint",
 			Name:     "包装/反代指纹",
-			Status:   CheckStatusWarn,
+			Status:   CheckStatusPass,
 			Score:    0,
 			MaxScore: 0,
-			Message:  "检测到透明中转或兼容网关信号，当前未发现混淆证据。",
+			Message:  "检测到透明中转或兼容网关信号，当前未发现模型、协议、签名或 usage/cache 混淆证据。",
 			Details:  details,
 		}
 	}

@@ -12,6 +12,7 @@ import (
 )
 
 const geminiTokenAuditModeHistoryReplay = "gemini_history_replay"
+const geminiTokenAuditModeMinimalRetry = "gemini_minimal_retry"
 
 type geminiAuditTurn struct {
 	Round         int
@@ -62,9 +63,10 @@ func (s *Service) runGeminiTokenAudit(ctx context.Context, client *http.Client, 
 		}
 		roundCtx, cancelRound := context.WithTimeout(auditCtx, tokenAuditRoundTimeout)
 		historyMessages := len(history) * 2
-		probe := s.probeGeminiTokenAudit(roundCtx, client, baseURL, apiKey, model, i, auditNonce, history)
+		probeResult := s.probeGeminiTokenAudit(roundCtx, client, baseURL, apiKey, model, i, auditNonce, history)
 		cancelRound()
-		sample := geminiTokenAuditSampleFromProbe(i, probe, pricing, historyMessages)
+		sample := geminiTokenAuditSampleFromProbe(i, probeResult.probe, pricing, historyMessages, probeResult.requestMode)
+		sample.Retried = probeResult.retried
 		report.Samples = append(report.Samples, sample)
 		if emitSample != nil {
 			emitSample(sample)
@@ -82,7 +84,7 @@ func (s *Service) runGeminiTokenAudit(ctx context.Context, client *http.Client, 
 		report.OfficialBaselineUSD += sample.OfficialBaselineUSD
 		report.UncachedBaselineUSD += sample.UncachedBaselineUSD
 		report.ActualCostUSD += sample.ActualCostUSD
-		if assistantText := geminiAssistantTextFromBody(probe.Body); assistantText != "" {
+		if assistantText := geminiAssistantTextFromBody(probeResult.probe.Body); assistantText != "" {
 			history = append(history, geminiAuditTurn{
 				Round:         i,
 				UserText:      geminiAuditUserText(i, auditNonce),
@@ -97,21 +99,54 @@ func (s *Service) runGeminiTokenAudit(ctx context.Context, client *http.Client, 
 	return report
 }
 
-func (s *Service) probeGeminiTokenAudit(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, round int, auditNonce string, history []geminiAuditTurn) httpProbe {
-	return s.doGeminiJSON(ctx, client, http.MethodPost, buildGeminiGenerateURL(baseURL, model, "generateContent", false), apiKey, geminiAuditProbePayload(model, round, auditNonce, history), "application/json")
+type geminiTokenAuditProbeResult struct {
+	probe       httpProbe
+	requestMode string
+	retried     bool
+}
+
+func (s *Service) probeGeminiTokenAudit(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, round int, auditNonce string, history []geminiAuditTurn) geminiTokenAuditProbeResult {
+	probe := s.doGeminiJSON(ctx, client, http.MethodPost, buildGeminiGenerateURL(baseURL, model, "generateContent", false), apiKey, geminiAuditProbePayload(model, round, auditNonce, history), "application/json")
+	if shouldRetryGeminiTokenAuditMinimal(probe) {
+		fallbackProbe := s.doGeminiJSON(ctx, client, http.MethodPost, buildGeminiGenerateURL(baseURL, model, "generateContent", false), apiKey, geminiAuditMinimalProbePayload(round, auditNonce), "application/json")
+		return geminiTokenAuditProbeResult{probe: fallbackProbe, requestMode: geminiTokenAuditModeMinimalRetry, retried: true}
+	}
+	return geminiTokenAuditProbeResult{probe: probe, requestMode: geminiTokenAuditModeHistoryReplay}
 }
 
 func geminiAuditProbePayload(model string, round int, auditNonce string, history []geminiAuditTurn) []byte {
 	body, _ := json.Marshal(map[string]any{
 		"contents":          geminiAuditContents(round, auditNonce, history),
 		"systemInstruction": geminiAuditSystemInstruction(auditNonce),
-		"tools":             geminiAuditTools(),
 		"generationConfig": map[string]any{
 			"maxOutputTokens": tokenAuditOutputBudget(round),
 			"temperature":     0,
 		},
 	})
 	return body
+}
+
+func geminiAuditMinimalProbePayload(round int, auditNonce string) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			geminiTextContent("user", strings.Join([]string{
+				"Gemini usageMetadata minimal audit.",
+				"audit_nonce=" + auditNonce,
+				tokenAuditRoundInstruction(round),
+			}, "\n")),
+		},
+		"generationConfig": map[string]any{
+			"maxOutputTokens": tokenAuditOutputBudget(round),
+			"temperature":     0,
+		},
+	})
+	return body
+}
+
+func shouldRetryGeminiTokenAuditMinimal(probe httpProbe) bool {
+	return probe.StatusCode == http.StatusBadRequest ||
+		probe.StatusCode == http.StatusUnprocessableEntity ||
+		strings.Contains(strings.ToLower(firstNonEmptyString(probe.ErrorMessage, upstreamErrorMessage(probe.Body))), "top-level must be a list")
 }
 
 func geminiAuditSystemInstruction(auditNonce string) map[string]any {
@@ -153,23 +188,6 @@ func geminiTextContent(role string, text string) map[string]any {
 	}
 }
 
-func geminiAuditTools() []map[string]any {
-	return []map[string]any{
-		{
-			"functionDeclarations": []map[string]any{
-				{
-					"name":        "audit_noop",
-					"description": "No-op declaration mirroring Gemini CLI tool declaration shape. Do not call unless asked.",
-					"parameters": map[string]any{
-						"type":       "OBJECT",
-						"properties": map[string]any{"ok": map[string]any{"type": "BOOLEAN"}},
-					},
-				},
-			},
-		},
-	}
-}
-
 func geminiAuditUserText(round int, auditNonce string) string {
 	return strings.Join([]string{
 		"Gemini CLI history replay audit.",
@@ -190,7 +208,7 @@ func twoDigitRound(round int) string {
 	return fmt.Sprintf("%02d", clampAuditRound(round))
 }
 
-func geminiTokenAuditSampleFromProbe(index int, probe httpProbe, pricing geminiModelPricing, historyMessages int) TokenAuditSample {
+func geminiTokenAuditSampleFromProbe(index int, probe httpProbe, pricing geminiModelPricing, historyMessages int, requestMode string) TokenAuditSample {
 	sample := TokenAuditSample{
 		Index:           index,
 		Round:           index,
@@ -199,7 +217,7 @@ func geminiTokenAuditSampleFromProbe(index int, probe httpProbe, pricing geminiM
 		StatusCode:      probe.StatusCode,
 		ErrorClass:      strings.TrimSpace(probe.ErrorClass),
 		ErrorMessage:    strings.TrimSpace(probe.ErrorMessage),
-		RequestMode:     geminiTokenAuditModeHistoryReplay,
+		RequestMode:     requestMode,
 		HistoryMessages: historyMessages,
 	}
 	expectedHistoryMessages := maxInt(0, (index-1)*2)

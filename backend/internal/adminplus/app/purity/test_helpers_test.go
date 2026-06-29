@@ -13,6 +13,14 @@ func writeJSON(t *testing.T, w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	require.NoError(t, json.NewEncoder(w).Encode(payload))
 }
+
+func writeJSONWithStatus(t *testing.T, w http.ResponseWriter, status int, payload any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	require.NoError(t, json.NewEncoder(w).Encode(payload))
+}
+
 func payloadHasInputImage(payload map[string]any) bool {
 	body, err := json.Marshal(payload)
 	if err != nil {

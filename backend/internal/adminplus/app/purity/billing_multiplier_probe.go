@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -47,8 +48,34 @@ func (s *Service) applyTokenAuditBillingMultiplierForAudit(ctx context.Context, 
 		applyTokenAuditBillingMultiplier(audit, options.BillingMultiplier)
 		return
 	}
-	after := s.captureBillingUsageSnapshot(ctx, client, provider, baseURL, apiKey)
-	applyTokenAuditBillingMultiplierFromProbe(audit, probeBillingMultiplierFromUsageDelta(before, after))
+	probe := s.probeBillingMultiplierAfterAudit(ctx, client, provider, baseURL, apiKey, before)
+	applyTokenAuditBillingMultiplierFromProbe(audit, probe)
+}
+
+func (s *Service) probeBillingMultiplierAfterAudit(ctx context.Context, client *http.Client, provider string, baseURL string, apiKey string, before *usageCostSnapshot) billingMultiplierProbe {
+	if before == nil {
+		return billingMultiplierProbe{}
+	}
+	var lastAfter *usageCostSnapshot
+	for attempt := 0; attempt < 8; attempt++ {
+		if attempt > 0 {
+			if !sleepWithContext(ctx, time.Duration(attempt)*500*time.Millisecond) {
+				return billingMultiplierProbe{}
+			}
+		}
+		after := s.captureBillingUsageSnapshot(ctx, client, provider, baseURL, apiKey)
+		if after != nil {
+			lastAfter = after
+		}
+		probe := probeBillingMultiplierFromUsageDelta(before, after)
+		if probe.Multiplier != nil {
+			return probe
+		}
+	}
+	if probe := probeBillingMultiplierFromUsageSnapshot(lastAfter); probe.Multiplier != nil {
+		return probe
+	}
+	return probeBillingMultiplierFromUsageSnapshot(before)
 }
 
 func billingUsageHeaders(provider string, apiKey string) map[string]string {
@@ -57,6 +84,7 @@ func billingUsageHeaders(provider string, apiKey string) map[string]string {
 	case ProviderAnthropic:
 		headers["x-api-key"] = apiKey
 	case ProviderGemini:
+		headers["Authorization"] = "Bearer " + apiKey
 		headers["x-goog-api-key"] = apiKey
 	default:
 		headers["Authorization"] = "Bearer " + apiKey
@@ -83,18 +111,24 @@ func probeBillingMultiplierFromUsageDelta(before *usageCostSnapshot, after *usag
 	}
 }
 
+func probeBillingMultiplierFromUsageSnapshot(snapshot *usageCostSnapshot) billingMultiplierProbe {
+	if snapshot == nil || !finitePositive(snapshot.StandardCost) || snapshot.ActualCost < 0 || !isFinite(snapshot.ActualCost) {
+		return billingMultiplierProbe{}
+	}
+	multiplier := roundRatio(snapshot.ActualCost / snapshot.StandardCost)
+	if multiplier < 0 || !isFinite(multiplier) {
+		return billingMultiplierProbe{}
+	}
+	return billingMultiplierProbe{
+		Multiplier: &multiplier,
+		Source:     "usage_snapshot_ratio",
+	}
+}
+
 func parseUsageCostSnapshot(body []byte) (usageCostSnapshot, bool) {
-	for _, prefix := range []string{"usage.total", "data.usage.total", "data.total", "total", "usage"} {
-		standard := firstGJSONFloat(body,
-			prefix+".cost",
-			prefix+".total_cost",
-			prefix+".standard_cost",
-		)
-		actual := firstGJSONFloat(body,
-			prefix+".actual_cost",
-			prefix+".total_actual_cost",
-			prefix+".user_cost",
-		)
+	for _, prefix := range []string{"usage.total", "data.usage.total", "data.total", "total", "usage.today", "data.usage.today", "usage", "summary", "data.summary", ""} {
+		standard, standardPath := usageSnapshotStandardCost(body, prefix)
+		actual := usageSnapshotActualCost(body, prefix, standardPath)
 		if standard == nil || actual == nil {
 			continue
 		}
@@ -106,7 +140,48 @@ func parseUsageCostSnapshot(body []byte) (usageCostSnapshot, bool) {
 	return usageCostSnapshot{}, false
 }
 
+func usageSnapshotStandardCost(body []byte, prefix string) (*float64, string) {
+	return firstGJSONFloatWithPath(body,
+		usageSnapshotPath(prefix, "standard_cost"),
+		usageSnapshotPath(prefix, "total_standard_cost"),
+		usageSnapshotPath(prefix, "cost"),
+		usageSnapshotPath(prefix, "total_cost"),
+	)
+}
+
+func usageSnapshotActualCost(body []byte, prefix string, standardPath string) *float64 {
+	actual := firstGJSONFloat(body,
+		usageSnapshotPath(prefix, "actual_cost"),
+		usageSnapshotPath(prefix, "total_actual_cost"),
+		usageSnapshotPath(prefix, "account_cost"),
+		usageSnapshotPath(prefix, "total_account_cost"),
+	)
+	if actual != nil {
+		return actual
+	}
+	if strings.HasSuffix(standardPath, ".standard_cost") || strings.HasSuffix(standardPath, ".total_standard_cost") {
+		actual = firstGJSONFloat(body, usageSnapshotPath(prefix, "cost"), usageSnapshotPath(prefix, "total_cost"))
+		if actual != nil {
+			return actual
+		}
+	}
+	return firstGJSONFloat(body, usageSnapshotPath(prefix, "user_cost"), usageSnapshotPath(prefix, "total_user_cost"))
+}
+
+func usageSnapshotPath(prefix string, field string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return field
+	}
+	return prefix + "." + field
+}
+
 func firstGJSONFloat(body []byte, paths ...string) *float64 {
+	value, _ := firstGJSONFloatWithPath(body, paths...)
+	return value
+}
+
+func firstGJSONFloatWithPath(body []byte, paths ...string) (*float64, string) {
 	for _, path := range paths {
 		result := gjson.GetBytes(body, path)
 		if !result.Exists() {
@@ -116,9 +191,9 @@ func firstGJSONFloat(body []byte, paths ...string) *float64 {
 		if !isFinite(value) {
 			continue
 		}
-		return &value
+		return &value, path
 	}
-	return nil
+	return nil, ""
 }
 
 func finitePositive(value float64) bool {
@@ -127,4 +202,18 @@ func finitePositive(value float64) bool {
 
 func isFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) bool {
+	if duration <= 0 {
+		return true
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

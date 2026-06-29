@@ -13,13 +13,28 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const defaultGeminiModel = "gemini-3-pro-preview"
+const defaultGeminiModel = "gemini-3.5-flash"
+
+var geminiPreferredProbeModels = []string{
+	defaultGeminiModel,
+	"gemini-3.1-pro",
+	"gemini-3.1-pro-thinking",
+	"gemini-3.5-flash-thinking",
+	"gemini-3-pro-preview",
+	"gemini-2.5-flash-image",
+	"gemini-3-flash-preview",
+	"gemini-3.1-flash-image",
+}
 
 func (s *Service) probeGeminiModels(ctx context.Context, client *http.Client, baseURL string, apiKey string) httpProbe {
 	return s.doGeminiJSON(ctx, client, http.MethodGet, buildGeminiModelsURL(baseURL), apiKey, nil, "application/json")
 }
 
 func (s *Service) probeGeminiGenerateContent(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string) httpProbe {
+	return s.doGeminiJSON(ctx, client, http.MethodPost, buildGeminiGenerateURL(baseURL, model, "generateContent", false), apiKey, geminiClientTextProbePayload("hi"), "application/json")
+}
+
+func (s *Service) probeGeminiToolCall(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string) httpProbe {
 	return s.doGeminiJSON(ctx, client, http.MethodPost, buildGeminiGenerateURL(baseURL, model, "generateContent", false), apiKey, geminiToolProbePayload(), "application/json")
 }
 
@@ -169,6 +184,32 @@ func geminiTextProbePayload(prompt string) []byte {
 	return body
 }
 
+func geminiClientTextProbePayload(prompt string) []byte {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		prompt = "hi"
+	}
+	body, _ := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			{
+				"role": "user",
+				"parts": []map[string]any{
+					{"text": prompt},
+				},
+			},
+		},
+		"systemInstruction": map[string]any{
+			"parts": []map[string]any{
+				{"text": "You are a helpful AI assistant."},
+			},
+		},
+		"generationConfig": map[string]any{
+			"maxOutputTokens": 128,
+		},
+	})
+	return body
+}
+
 func geminiMultimodalProbePayload() []byte {
 	body, _ := json.Marshal(map[string]any{
 		"contents": []map[string]any{
@@ -195,7 +236,7 @@ func parseGeminiUsage(body []byte) *TokenUsage {
 	input := usage.Get("promptTokenCount").Int()
 	output := usage.Get("candidatesTokenCount").Int()
 	total := usage.Get("totalTokenCount").Int()
-	cached := usage.Get("cachedContentTokenCount").Int()
+	cached, cachedFieldPresent := geminiCachedTokensFromUsage(usage)
 	thoughts := usage.Get("thoughtsTokenCount").Int()
 	toolUse := usage.Get("toolUsePromptTokenCount").Int()
 	return &TokenUsage{
@@ -203,7 +244,31 @@ func parseGeminiUsage(body []byte) *TokenUsage {
 		OutputTokens:             output,
 		TotalTokens:              total,
 		CachedTokens:             cached,
-		CachedTokensFieldPresent: usagePathExists(usage, "cachedContentTokenCount"),
+		CachedTokensFieldPresent: cachedFieldPresent,
 		ReasoningTokens:          thoughts + toolUse,
 	}
+}
+
+func geminiCachedTokensFromUsage(usage gjson.Result) (int64, bool) {
+	if usagePathExists(usage, "cachedContentTokenCount") {
+		return usage.Get("cachedContentTokenCount").Int(), true
+	}
+	return geminiCachedTokensFromDetails(usage.Get("cacheTokensDetails"))
+}
+
+func geminiCachedTokensFromDetails(details gjson.Result) (int64, bool) {
+	if !details.IsArray() {
+		return 0, false
+	}
+	var total int64
+	observed := false
+	for _, item := range details.Array() {
+		count := firstPositiveUsageInt(item, "tokenCount", "token_count", "count")
+		if count <= 0 {
+			continue
+		}
+		total += count
+		observed = true
+	}
+	return total, observed
 }
