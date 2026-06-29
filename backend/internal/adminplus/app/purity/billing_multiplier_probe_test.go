@@ -118,7 +118,9 @@ func TestProbeBillingMultiplierAfterAuditRetriesUntilUsageDeltaAppears(t *testin
 			},
 		}
 		if attempt >= 2 {
-			payload["usage"].(map[string]any)["total"] = map[string]any{
+			usage, ok := payload["usage"].(map[string]any)
+			require.True(t, ok)
+			usage["total"] = map[string]any{
 				"cost":        11,
 				"actual_cost": 1.11,
 			}
