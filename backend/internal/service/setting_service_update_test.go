@@ -14,7 +14,8 @@ import (
 )
 
 type settingUpdateRepoStub struct {
-	updates map[string]string
+	updates       map[string]string
+	allowGetValue bool
 }
 
 func (s *settingUpdateRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
@@ -22,7 +23,10 @@ func (s *settingUpdateRepoStub) Get(ctx context.Context, key string) (*Setting, 
 }
 
 func (s *settingUpdateRepoStub) GetValue(ctx context.Context, key string) (string, error) {
-	panic("unexpected GetValue call")
+	if !s.allowGetValue {
+		panic("unexpected GetValue call")
+	}
+	return "", ErrSettingNotFound
 }
 
 func (s *settingUpdateRepoStub) Set(ctx context.Context, key, value string) error {
@@ -99,6 +103,23 @@ func (s *defaultSubGroupReaderStub) GetByID(ctx context.Context, id int64) (*Gro
 		return g, nil
 	}
 	return nil, ErrGroupNotFound
+}
+
+func TestSettingService_InitializeDefaultSettings_SimpleRunModeUsesConservativeDefaults(t *testing.T) {
+	repo := &settingUpdateRepoStub{allowGetValue: true}
+	svc := NewSettingService(repo, &config.Config{
+		RunMode: config.RunModeSimple,
+		Default: config.DefaultConfig{
+			UserConcurrency: 5,
+		},
+	})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+	require.NoError(t, err)
+
+	require.Equal(t, "false", repo.updates[SettingKeyOpsRealtimeMonitoringEnabled])
+	require.Equal(t, "300", repo.updates[SettingKeyOpsMetricsIntervalSeconds])
+	require.Equal(t, "300", repo.updates[SettingKeyChannelMonitorDefaultIntervalSeconds])
 }
 
 func TestSettingService_UpdateSettings_DefaultSubscriptions_ValidGroup(t *testing.T) {

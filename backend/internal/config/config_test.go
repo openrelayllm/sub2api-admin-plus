@@ -756,6 +756,69 @@ func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
 	}
 }
 
+func TestLoadSimpleRunModeResourceDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("RUN_MODE", RunModeSimple)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, RunModeSimple, cfg.RunMode)
+	require.Equal(t, 32, cfg.Database.MaxOpenConns)
+	require.Equal(t, 8, cfg.Database.MaxIdleConns)
+	require.Equal(t, 64, cfg.Redis.PoolSize)
+	require.Equal(t, 8, cfg.Redis.MinIdleConns)
+	require.False(t, cfg.Ops.Aggregation.Enabled)
+	require.Equal(t, 300, cfg.DashboardAgg.IntervalSeconds)
+	require.Equal(t, 0, cfg.DashboardAgg.RecomputeDays)
+	require.Equal(t, 60, cfg.UsageCleanup.WorkerIntervalSeconds)
+	require.Equal(t, 5, cfg.Gateway.Scheduling.OutboxPollIntervalSeconds)
+	require.Equal(t, 1800, cfg.Gateway.Scheduling.FullRebuildIntervalSeconds)
+	require.Equal(t, 16, cfg.Gateway.UsageRecord.WorkerCount)
+	require.Equal(t, 4096, cfg.Gateway.UsageRecord.QueueSize)
+	require.Equal(t, 16, cfg.Gateway.UsageRecord.AutoScaleMinWorkers)
+	require.Equal(t, 64, cfg.Gateway.UsageRecord.AutoScaleMaxWorkers)
+	require.Equal(t, 32, cfg.Gateway.OpenAIWS.MaxConnsPerAccount)
+	require.Equal(t, 0, cfg.Gateway.OpenAIWS.MinIdlePerAccount)
+	require.Equal(t, 4, cfg.Gateway.OpenAIWS.MaxIdlePerAccount)
+	require.Equal(t, 15, cfg.TokenRefresh.CheckIntervalMinutes)
+	require.Equal(t, 2, cfg.TokenRefresh.MaxRetries)
+}
+
+func TestLoadSimpleRunModeDoesNotOverrideExplicitValues(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("RUN_MODE", RunModeSimple)
+	t.Setenv("DASHBOARD_AGGREGATION_INTERVAL_SECONDS", "120")
+	t.Setenv("DASHBOARD_AGGREGATION_RECOMPUTE_DAYS", "1")
+	t.Setenv("GATEWAY_USAGE_RECORD_WORKER_COUNT", "24")
+	t.Setenv("GATEWAY_USAGE_RECORD_AUTO_SCALE_MIN_WORKERS", "24")
+	t.Setenv("GATEWAY_USAGE_RECORD_AUTO_SCALE_MAX_WORKERS", "96")
+	t.Setenv("TOKEN_REFRESH_CHECK_INTERVAL_MINUTES", "7")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, 120, cfg.DashboardAgg.IntervalSeconds)
+	require.Equal(t, 1, cfg.DashboardAgg.RecomputeDays)
+	require.Equal(t, 24, cfg.Gateway.UsageRecord.WorkerCount)
+	require.Equal(t, 24, cfg.Gateway.UsageRecord.AutoScaleMinWorkers)
+	require.Equal(t, 96, cfg.Gateway.UsageRecord.AutoScaleMaxWorkers)
+	require.Equal(t, 7, cfg.TokenRefresh.CheckIntervalMinutes)
+}
+
+func TestLoadSimpleRunModeWorkerCountKeepsImplicitAutoScaleBoundsValid(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("RUN_MODE", RunModeSimple)
+	t.Setenv("GATEWAY_USAGE_RECORD_WORKER_COUNT", "96")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, 96, cfg.Gateway.UsageRecord.WorkerCount)
+	require.Equal(t, 16, cfg.Gateway.UsageRecord.AutoScaleMinWorkers)
+	require.Equal(t, 96, cfg.Gateway.UsageRecord.AutoScaleMaxWorkers)
+}
+
 func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

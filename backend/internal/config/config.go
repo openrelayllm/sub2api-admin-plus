@@ -418,6 +418,91 @@ func hasExplicitConfigOrEnv(configKey, envKey string) bool {
 	return ok
 }
 
+func applySimpleRunModeDefaults(cfg *Config) {
+	if cfg == nil || cfg.RunMode != RunModeSimple {
+		return
+	}
+	usageWorkerExplicit := hasExplicitConfigOrEnv("gateway.usage_record.worker_count", "GATEWAY_USAGE_RECORD_WORKER_COUNT")
+	usageMinExplicit := hasExplicitConfigOrEnv("gateway.usage_record.auto_scale_min_workers", "GATEWAY_USAGE_RECORD_AUTO_SCALE_MIN_WORKERS")
+	usageMaxExplicit := hasExplicitConfigOrEnv("gateway.usage_record.auto_scale_max_workers", "GATEWAY_USAGE_RECORD_AUTO_SCALE_MAX_WORKERS")
+
+	setIfImplicitInt("database.max_open_conns", "DATABASE_MAX_OPEN_CONNS", &cfg.Database.MaxOpenConns, 32)
+	setIfImplicitInt("database.max_idle_conns", "DATABASE_MAX_IDLE_CONNS", &cfg.Database.MaxIdleConns, 8)
+	setIfImplicitInt("redis.pool_size", "REDIS_POOL_SIZE", &cfg.Redis.PoolSize, 64)
+	setIfImplicitInt("redis.min_idle_conns", "REDIS_MIN_IDLE_CONNS", &cfg.Redis.MinIdleConns, 8)
+
+	setIfImplicitBool("ops.aggregation.enabled", "OPS_AGGREGATION_ENABLED", &cfg.Ops.Aggregation.Enabled, false)
+	setIfImplicitInt("dashboard_aggregation.interval_seconds", "DASHBOARD_AGGREGATION_INTERVAL_SECONDS", &cfg.DashboardAgg.IntervalSeconds, 300)
+	setIfImplicitInt("dashboard_aggregation.recompute_days", "DASHBOARD_AGGREGATION_RECOMPUTE_DAYS", &cfg.DashboardAgg.RecomputeDays, 0)
+	setIfImplicitInt("usage_cleanup.worker_interval_seconds", "USAGE_CLEANUP_WORKER_INTERVAL_SECONDS", &cfg.UsageCleanup.WorkerIntervalSeconds, 60)
+
+	setIfImplicitInt("gateway.scheduling.outbox_poll_interval_seconds", "GATEWAY_SCHEDULING_OUTBOX_POLL_INTERVAL_SECONDS", &cfg.Gateway.Scheduling.OutboxPollIntervalSeconds, 5)
+	setIfImplicitInt("gateway.scheduling.full_rebuild_interval_seconds", "GATEWAY_SCHEDULING_FULL_REBUILD_INTERVAL_SECONDS", &cfg.Gateway.Scheduling.FullRebuildIntervalSeconds, 1800)
+
+	setIfImplicitInt("gateway.usage_record.worker_count", "GATEWAY_USAGE_RECORD_WORKER_COUNT", &cfg.Gateway.UsageRecord.WorkerCount, 16)
+	setIfImplicitInt("gateway.usage_record.queue_size", "GATEWAY_USAGE_RECORD_QUEUE_SIZE", &cfg.Gateway.UsageRecord.QueueSize, 4096)
+	setIfImplicitBool("gateway.usage_record.auto_scale_enabled", "GATEWAY_USAGE_RECORD_AUTO_SCALE_ENABLED", &cfg.Gateway.UsageRecord.AutoScaleEnabled, true)
+	setIfImplicitInt("gateway.usage_record.auto_scale_min_workers", "GATEWAY_USAGE_RECORD_AUTO_SCALE_MIN_WORKERS", &cfg.Gateway.UsageRecord.AutoScaleMinWorkers, 16)
+	setIfImplicitInt("gateway.usage_record.auto_scale_max_workers", "GATEWAY_USAGE_RECORD_AUTO_SCALE_MAX_WORKERS", &cfg.Gateway.UsageRecord.AutoScaleMaxWorkers, 64)
+	setIfImplicitInt("gateway.usage_record.auto_scale_up_step", "GATEWAY_USAGE_RECORD_AUTO_SCALE_UP_STEP", &cfg.Gateway.UsageRecord.AutoScaleUpStep, 8)
+	setIfImplicitInt("gateway.usage_record.auto_scale_down_step", "GATEWAY_USAGE_RECORD_AUTO_SCALE_DOWN_STEP", &cfg.Gateway.UsageRecord.AutoScaleDownStep, 4)
+	setIfImplicitInt("gateway.usage_record.auto_scale_check_interval_seconds", "GATEWAY_USAGE_RECORD_AUTO_SCALE_CHECK_INTERVAL_SECONDS", &cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds, 10)
+	normalizeSimpleUsageRecordAutoScaleDefaults(&cfg.Gateway.UsageRecord, usageWorkerExplicit, usageMinExplicit, usageMaxExplicit)
+
+	setIfImplicitInt("gateway.openai_ws.max_conns_per_account", "GATEWAY_OPENAI_WS_MAX_CONNS_PER_ACCOUNT", &cfg.Gateway.OpenAIWS.MaxConnsPerAccount, 32)
+	setIfImplicitInt("gateway.openai_ws.min_idle_per_account", "GATEWAY_OPENAI_WS_MIN_IDLE_PER_ACCOUNT", &cfg.Gateway.OpenAIWS.MinIdlePerAccount, 0)
+	setIfImplicitInt("gateway.openai_ws.max_idle_per_account", "GATEWAY_OPENAI_WS_MAX_IDLE_PER_ACCOUNT", &cfg.Gateway.OpenAIWS.MaxIdlePerAccount, 4)
+	setIfImplicitInt("gateway.max_idle_conns", "GATEWAY_MAX_IDLE_CONNS", &cfg.Gateway.MaxIdleConns, 512)
+	setIfImplicitInt("gateway.max_idle_conns_per_host", "GATEWAY_MAX_IDLE_CONNS_PER_HOST", &cfg.Gateway.MaxIdleConnsPerHost, 32)
+	setIfImplicitInt("gateway.max_conns_per_host", "GATEWAY_MAX_CONNS_PER_HOST", &cfg.Gateway.MaxConnsPerHost, 128)
+	setIfImplicitInt("gateway.max_upstream_clients", "GATEWAY_MAX_UPSTREAM_CLIENTS", &cfg.Gateway.MaxUpstreamClients, 1000)
+
+	setIfImplicitInt("token_refresh.check_interval_minutes", "TOKEN_REFRESH_CHECK_INTERVAL_MINUTES", &cfg.TokenRefresh.CheckIntervalMinutes, 15)
+	setIfImplicitInt("token_refresh.max_retries", "TOKEN_REFRESH_MAX_RETRIES", &cfg.TokenRefresh.MaxRetries, 2)
+}
+
+func normalizeSimpleUsageRecordAutoScaleDefaults(cfg *GatewayUsageRecordConfig, workerExplicit, minExplicit, maxExplicit bool) {
+	if cfg == nil || !cfg.AutoScaleEnabled {
+		return
+	}
+	if cfg.AutoScaleMinWorkers > cfg.AutoScaleMaxWorkers {
+		switch {
+		case minExplicit && !maxExplicit:
+			cfg.AutoScaleMaxWorkers = cfg.AutoScaleMinWorkers
+		case !minExplicit && maxExplicit:
+			cfg.AutoScaleMinWorkers = cfg.AutoScaleMaxWorkers
+		}
+	}
+	if cfg.WorkerCount < cfg.AutoScaleMinWorkers {
+		if workerExplicit && !minExplicit {
+			cfg.AutoScaleMinWorkers = cfg.WorkerCount
+		} else if !workerExplicit {
+			cfg.WorkerCount = cfg.AutoScaleMinWorkers
+		}
+	}
+	if cfg.WorkerCount > cfg.AutoScaleMaxWorkers {
+		if workerExplicit && !maxExplicit {
+			cfg.AutoScaleMaxWorkers = cfg.WorkerCount
+		} else if !workerExplicit {
+			cfg.WorkerCount = cfg.AutoScaleMaxWorkers
+		}
+	}
+}
+
+func setIfImplicitBool(configKey, envKey string, target *bool, value bool) {
+	if target == nil || hasExplicitConfigOrEnv(configKey, envKey) {
+		return
+	}
+	*target = value
+}
+
+func setIfImplicitInt(configKey, envKey string, target *int, value int) {
+	if target == nil || hasExplicitConfigOrEnv(configKey, envKey) {
+		return
+	}
+	*target = value
+}
+
 func applyLegacyWeChatConnectEnvCompatibility(cfg *WeChatConnectConfig) {
 	if cfg == nil {
 		return
@@ -1431,6 +1516,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 
 	cfg.RunMode = NormalizeRunMode(cfg.RunMode)
+	applySimpleRunModeDefaults(&cfg)
 	cfg.Server.Mode = strings.ToLower(strings.TrimSpace(cfg.Server.Mode))
 	if cfg.Server.Mode == "" {
 		cfg.Server.Mode = "debug"

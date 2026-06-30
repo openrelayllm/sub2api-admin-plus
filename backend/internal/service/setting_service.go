@@ -967,8 +967,11 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		BalanceLowNotifyThreshold:        balanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:      settings[SettingKeyBalanceLowNotifyRechargeURL],
 
-		ChannelMonitorEnabled:                !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
-		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+		ChannelMonitorEnabled: !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
+		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorIntervalWithFallback(
+			settings[SettingKeyChannelMonitorDefaultIntervalSeconds],
+			s.defaultChannelMonitorIntervalSeconds(),
+		),
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 
@@ -986,16 +989,45 @@ const (
 	channelMonitorIntervalMin      = 15
 	channelMonitorIntervalMax      = 3600
 	channelMonitorIntervalFallback = 60
+	channelMonitorSimpleFallback   = 300
+	opsMetricsIntervalFallback     = 60
+	opsMetricsSimpleFallback       = 300
 )
 
 // parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
 // Empty / invalid input falls back to channelMonitorIntervalFallback.
 func parseChannelMonitorInterval(raw string) int {
+	return parseChannelMonitorIntervalWithFallback(raw, channelMonitorIntervalFallback)
+}
+
+func parseChannelMonitorIntervalWithFallback(raw string, fallback int) int {
 	v, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
-		return channelMonitorIntervalFallback
+		return fallback
 	}
 	return clampChannelMonitorInterval(v)
+}
+
+func (s *SettingService) isSimpleRunMode() bool {
+	return s != nil && s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
+}
+
+func (s *SettingService) defaultOpsRealtimeMonitoringEnabled() bool {
+	return !s.isSimpleRunMode()
+}
+
+func (s *SettingService) defaultOpsMetricsIntervalSeconds() int {
+	if s.isSimpleRunMode() {
+		return opsMetricsSimpleFallback
+	}
+	return opsMetricsIntervalFallback
+}
+
+func (s *SettingService) defaultChannelMonitorIntervalSeconds() int {
+	if s.isSimpleRunMode() {
+		return channelMonitorSimpleFallback
+	}
+	return channelMonitorIntervalFallback
 }
 
 // clampChannelMonitorInterval clamps v to the allowed range. 0 means "not provided".
@@ -1027,11 +1059,14 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 	})
 	if err != nil {
-		return ChannelMonitorRuntime{Enabled: true, DefaultIntervalSeconds: channelMonitorIntervalFallback}
+		return ChannelMonitorRuntime{Enabled: true, DefaultIntervalSeconds: s.defaultChannelMonitorIntervalSeconds()}
 	}
 	return ChannelMonitorRuntime{
-		Enabled:                !isFalseSettingValue(vals[SettingKeyChannelMonitorEnabled]),
-		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+		Enabled: !isFalseSettingValue(vals[SettingKeyChannelMonitorEnabled]),
+		DefaultIntervalSeconds: parseChannelMonitorIntervalWithFallback(
+			vals[SettingKeyChannelMonitorDefaultIntervalSeconds],
+			s.defaultChannelMonitorIntervalSeconds(),
+		),
 	}
 }
 
@@ -2895,6 +2930,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	opsRealtimeDefault := strconv.FormatBool(s.defaultOpsRealtimeMonitoringEnabled())
+	opsMetricsIntervalDefault := strconv.Itoa(s.defaultOpsMetricsIntervalSeconds())
+	channelMonitorIntervalDefault := strconv.Itoa(s.defaultChannelMonitorIntervalSeconds())
 
 	// 初始化默认设置
 	defaults := map[string]string{
@@ -3025,13 +3063,13 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// Ops monitoring defaults (vNext)
 		SettingKeyOpsMonitoringEnabled:         "true",
-		SettingKeyOpsRealtimeMonitoringEnabled: "true",
+		SettingKeyOpsRealtimeMonitoringEnabled: opsRealtimeDefault,
 		SettingKeyOpsQueryModeDefault:          "auto",
-		SettingKeyOpsMetricsIntervalSeconds:    "60",
+		SettingKeyOpsMetricsIntervalSeconds:    opsMetricsIntervalDefault,
 
 		// Channel monitor defaults (enabled, 60s)
 		SettingKeyChannelMonitorEnabled:                "true",
-		SettingKeyChannelMonitorDefaultIntervalSeconds: "60",
+		SettingKeyChannelMonitorDefaultIntervalSeconds: channelMonitorIntervalDefault,
 
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
@@ -3529,9 +3567,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Ops monitoring settings (default: enabled, fail-open)
 	result.OpsMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsMonitoringEnabled])
-	result.OpsRealtimeMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsRealtimeMonitoringEnabled])
+	if raw, ok := settings[SettingKeyOpsRealtimeMonitoringEnabled]; ok && strings.TrimSpace(raw) != "" {
+		result.OpsRealtimeMonitoringEnabled = !isFalseSettingValue(raw)
+	} else {
+		result.OpsRealtimeMonitoringEnabled = s.defaultOpsRealtimeMonitoringEnabled()
+	}
 	result.OpsQueryModeDefault = string(ParseOpsQueryMode(settings[SettingKeyOpsQueryModeDefault]))
-	result.OpsMetricsIntervalSeconds = 60
+	result.OpsMetricsIntervalSeconds = s.defaultOpsMetricsIntervalSeconds()
 	if raw := strings.TrimSpace(settings[SettingKeyOpsMetricsIntervalSeconds]); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil {
 			if v < 60 {
@@ -3546,8 +3588,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Channel monitor feature (default: enabled, 60s)
 	result.ChannelMonitorEnabled = !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled])
-	result.ChannelMonitorDefaultIntervalSeconds = parseChannelMonitorInterval(
+	result.ChannelMonitorDefaultIntervalSeconds = parseChannelMonitorIntervalWithFallback(
 		settings[SettingKeyChannelMonitorDefaultIntervalSeconds],
+		s.defaultChannelMonitorIntervalSeconds(),
 	)
 
 	// Available channels feature (default: disabled; strict true)
