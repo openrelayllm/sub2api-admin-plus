@@ -994,12 +994,6 @@ const (
 	opsMetricsSimpleFallback       = 300
 )
 
-// parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
-// Empty / invalid input falls back to channelMonitorIntervalFallback.
-func parseChannelMonitorInterval(raw string) int {
-	return parseChannelMonitorIntervalWithFallback(raw, channelMonitorIntervalFallback)
-}
-
 func parseChannelMonitorIntervalWithFallback(raw string, fallback int) int {
 	v, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
