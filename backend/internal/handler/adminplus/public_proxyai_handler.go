@@ -1,6 +1,7 @@
 package adminplus
 
 import (
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 const (
 	defaultPublicProxyAIPageSize = 50
 	maxPublicProxyAIPageSize     = 100
+	publicProxyAIPublicListLimit = math.MaxInt
 )
 
 type PublicProxyAIHandler struct {
@@ -203,7 +205,7 @@ func (h *PublicProxyAIHandler) publicSites(c *gin.Context) ([]*adminplusdomain.S
 		Status:   adminplusdomain.SiteCatalogStatusPublished,
 		SiteKind: adminplusdomain.SiteCatalogKind(strings.TrimSpace(c.Query("site_kind"))),
 		Provider: normalizeDiscoveryProviderType(c.Query("provider_type")),
-		Limit:    1000,
+		Limit:    publicProxyAIPublicListLimit,
 	})
 	if response.ErrorFrom(c, err) {
 		return nil, false

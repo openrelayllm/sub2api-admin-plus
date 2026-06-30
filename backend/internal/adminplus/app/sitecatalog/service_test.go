@@ -52,6 +52,34 @@ func TestBulkPublishSitesPublishesByFilterWithoutIDs(t *testing.T) {
 	}
 }
 
+func TestListSitesPreservesExplicitLimitAboveDefault(t *testing.T) {
+	repo := &listSitesCaptureRepo{}
+	service := NewService(repo)
+
+	_, err := service.ListSites(context.Background(), SiteFilter{
+		Limit: defaultListLimit + 1,
+	})
+	if err != nil {
+		t.Fatalf("ListSites returned error: %v", err)
+	}
+	if repo.limit != defaultListLimit+1 {
+		t.Fatalf("expected limit %d, got %d", defaultListLimit+1, repo.limit)
+	}
+}
+
+func TestListSitesUsesDefaultLimitWhenUnset(t *testing.T) {
+	repo := &listSitesCaptureRepo{}
+	service := NewService(repo)
+
+	_, err := service.ListSites(context.Background(), SiteFilter{})
+	if err != nil {
+		t.Fatalf("ListSites returned error: %v", err)
+	}
+	if repo.limit != defaultListLimit {
+		t.Fatalf("expected default limit %d, got %d", defaultListLimit, repo.limit)
+	}
+}
+
 func TestBulkAddDiscoveryCandidatesCanIncludeUnsupported(t *testing.T) {
 	repo := &bulkPublishSitesRepo{}
 	service := NewService(repo)
@@ -99,15 +127,32 @@ type bulkPublishSitesRepo struct {
 	addedIDs    []int64
 }
 
+type listSitesCaptureRepo struct {
+	limit int
+}
+
 func (r *bulkPublishSitesRepo) ListSites(context.Context, SiteFilter) ([]*adminplusdomain.SiteCatalogSite, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (r *listSitesCaptureRepo) ListSites(_ context.Context, filter SiteFilter) ([]*adminplusdomain.SiteCatalogSite, error) {
+	r.limit = filter.Limit
+	return []*adminplusdomain.SiteCatalogSite{}, nil
 }
 
 func (r *bulkPublishSitesRepo) GetSite(context.Context, int64) (*adminplusdomain.SiteCatalogSite, error) {
 	return nil, errors.New("not implemented")
 }
 
+func (r *listSitesCaptureRepo) GetSite(context.Context, int64) (*adminplusdomain.SiteCatalogSite, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (r *bulkPublishSitesRepo) CreateSite(context.Context, *adminplusdomain.SiteCatalogSite) (*adminplusdomain.SiteCatalogSite, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *listSitesCaptureRepo) CreateSite(context.Context, *adminplusdomain.SiteCatalogSite) (*adminplusdomain.SiteCatalogSite, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -116,6 +161,10 @@ func (r *bulkPublishSitesRepo) BulkPublishSites(_ context.Context, input BulkPub
 	r.input.IDs = append([]int64(nil), input.IDs...)
 	r.publishedAt = publishedAt
 	return r.updated, nil
+}
+
+func (r *listSitesCaptureRepo) BulkPublishSites(context.Context, BulkPublishSitesInput, time.Time) (int64, error) {
+	return 0, errors.New("not implemented")
 }
 
 func (r *bulkPublishSitesRepo) AddDiscoveryCandidate(_ context.Context, candidate *adminplusdomain.SiteDiscoveryItem, _ AddDiscoveryCandidateInput) (*adminplusdomain.SiteCatalogSite, error) {
@@ -128,7 +177,15 @@ func (r *bulkPublishSitesRepo) AddDiscoveryCandidate(_ context.Context, candidat
 	}, nil
 }
 
+func (r *listSitesCaptureRepo) AddDiscoveryCandidate(context.Context, *adminplusdomain.SiteDiscoveryItem, AddDiscoveryCandidateInput) (*adminplusdomain.SiteCatalogSite, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (r *bulkPublishSitesRepo) ListCategories(context.Context) ([]*adminplusdomain.SiteCatalogCategory, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *listSitesCaptureRepo) ListCategories(context.Context) ([]*adminplusdomain.SiteCatalogCategory, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -136,6 +193,14 @@ func (r *bulkPublishSitesRepo) ListTags(context.Context) ([]*adminplusdomain.Sit
 	return nil, errors.New("not implemented")
 }
 
+func (r *listSitesCaptureRepo) ListTags(context.Context) ([]*adminplusdomain.SiteCatalogTag, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (r *bulkPublishSitesRepo) SlugExists(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func (r *listSitesCaptureRepo) SlugExists(context.Context, string) (bool, error) {
 	return false, nil
 }

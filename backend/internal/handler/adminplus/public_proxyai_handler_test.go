@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -94,6 +95,57 @@ func TestPublicProxyAIGetSiteDoesNotRevealPrivateSite(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, w.Code)
 	require.Contains(t, w.Body.String(), "site not found")
+}
+
+func TestPublicProxyAISummaryCountsBeyondThousandSites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewPublicProxyAIHandler(sitecatalogapp.NewService(&fakePublicProxyAIRepo{
+		sites: buildPublicProxyAIList(1001),
+	}), nil)
+
+	router := gin.New()
+	router.GET("/api/v1/public/proxyai/summary", handler.Summary)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public/proxyai/summary", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var envelope struct {
+		Data struct {
+			SiteCount int `json:"site_count"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	require.Equal(t, 1001, envelope.Data.SiteCount)
+}
+
+func TestPublicProxyAIListSitesCountsBeyondThousandSites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewPublicProxyAIHandler(sitecatalogapp.NewService(&fakePublicProxyAIRepo{
+		sites: buildPublicProxyAIList(1001),
+	}), nil)
+
+	router := gin.New()
+	router.GET("/api/v1/public/proxyai/sites", handler.ListSites)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public/proxyai/sites?page_size=1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var envelope struct {
+		Data struct {
+			Total int `json:"total"`
+			Items []struct {
+				Slug string `json:"slug"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	require.Equal(t, 1001, envelope.Data.Total)
+	require.Len(t, envelope.Data.Items, 1)
+	require.Equal(t, "site-0", envelope.Data.Items[0].Slug)
 }
 
 type fakePublicProxyAIRepo struct {
@@ -205,4 +257,13 @@ func publicProxyAITestSite(id int64, slug string, visibility adminplusdomain.Sit
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+}
+
+func buildPublicProxyAIList(count int) []*adminplusdomain.SiteCatalogSite {
+	items := make([]*adminplusdomain.SiteCatalogSite, 0, count)
+	for i := 0; i < count; i++ {
+		slug := "site-" + strconv.Itoa(i)
+		items = append(items, publicProxyAITestSite(int64(i+1), slug, adminplusdomain.SiteCatalogVisibilityPublic, adminplusdomain.SiteCatalogStatusPublished, adminplusdomain.SiteCatalogQualityComplete))
+	}
+	return items
 }

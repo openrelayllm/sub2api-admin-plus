@@ -146,7 +146,7 @@ func (s *Service) ListSites(ctx context.Context, filter SiteFilter) ([]*adminplu
 	if s == nil || s.repo == nil {
 		return nil, internalError("site catalog service is not configured")
 	}
-	if filter.Limit <= 0 || filter.Limit > defaultListLimit {
+	if filter.Limit <= 0 {
 		filter.Limit = defaultListLimit
 	}
 	filter.Query = strings.TrimSpace(filter.Query)
