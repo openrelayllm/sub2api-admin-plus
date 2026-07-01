@@ -13,6 +13,13 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+const (
+	newAPIAdminRole       = 10
+	newAPIPageSize        = 100
+	newAPIHistoryMaxPages = 10000
+	newAPIPageDelay       = 150 * time.Millisecond
+)
+
 func (c *Client) ReadFundingTransactions(ctx context.Context, in ports.SessionProbeInput, request ports.ReadFundingTransactionsInput) (*ports.ReadFundingTransactionsResult, error) {
 	if c == nil || c.httpClient == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "new api provider adapter is not configured")
@@ -24,20 +31,27 @@ func (c *Client) ReadFundingTransactions(ctx context.Context, in ports.SessionPr
 	if err != nil {
 		return nil, err
 	}
-	baseEndpoint, err := buildEndpointURL(apiBaseURL, "/api/user/topup/self")
+	role, roleKnown := newAPIRoleFromBundle(in.Bundle)
+	if roleKnown && role < newAPIAdminRole {
+		return nil, newAPIAdminSessionRequired(role, true)
+	}
+	baseEndpoint, err := buildEndpointURL(apiBaseURL, "/api/user/topup")
 	if err != nil {
 		return nil, err
 	}
 	items := make([]ports.ProviderFundingTransaction, 0)
-	for page := 1; page <= 20; page++ {
+	for page := 1; page <= newAPIHistoryMaxPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		endpoint := appendNewAPIQueryValues(baseEndpoint, map[string]string{
 			"p":         strconv.Itoa(page),
-			"page_size": "100",
+			"page_size": strconv.Itoa(newAPIPageSize),
 		})
 		raw, err := c.doSessionJSON(ctx, http.MethodGet, endpoint, in.Bundle)
 		if err != nil {
-			if len(items) > 0 {
-				break
+			if isNewAPIAdminPermissionError(err) {
+				return nil, newAPIAdminSessionRequired(role, roleKnown)
 			}
 			return nil, err
 		}
@@ -46,15 +60,29 @@ func (c *Client) ReadFundingTransactions(ctx context.Context, in ports.SessionPr
 			return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_FUNDING_RESPONSE_INVALID", "new api topup response is invalid").WithCause(err)
 		}
 		if !envelope.Success {
-			return nil, classifySessionBusinessFailure(envelope.Message)
+			err := classifySessionBusinessFailure(envelope.Message)
+			if isNewAPIAdminPermissionError(err) {
+				return nil, newAPIAdminSessionRequired(role, roleKnown)
+			}
+			return nil, err
 		}
 		pageItems := parseNewAPITopupTransactions(envelope.Data)
 		if len(pageItems) == 0 {
 			break
 		}
 		items = append(items, pageItems...)
-		if len(pageItems) < 100 {
+		total := int64FromAny(envelope.Data["total"])
+		if total > 0 && len(items) >= int(total) {
 			break
+		}
+		if total == 0 && len(pageItems) < newAPIPageSize {
+			break
+		}
+		if page == newAPIHistoryMaxPages {
+			return nil, newAPIPageLimitExceeded("funding_transactions", newAPIHistoryMaxPages, newAPIPageSize)
+		}
+		if err := waitForProviderPage(ctx, newAPIPageDelay); err != nil {
+			return nil, err
 		}
 	}
 	return &ports.ReadFundingTransactionsResult{
@@ -66,6 +94,18 @@ func (c *Client) ReadFundingTransactions(ctx context.Context, in ports.SessionPr
 		Items:        items,
 		CapturedAt:   c.now().UTC(),
 	}, nil
+}
+
+func newAPIPageLimitExceeded(resource string, maxPages int, pageSize int) error {
+	return infraerrors.New(
+		http.StatusConflict,
+		"SUPPLIER_HISTORY_PAGE_LIMIT_EXCEEDED",
+		"supplier history pagination exceeded the safety limit; narrow the time range and retry",
+	).WithMetadata(map[string]string{
+		"resource":  resource,
+		"max_pages": strconv.Itoa(maxPages),
+		"page_size": strconv.Itoa(pageSize),
+	})
 }
 
 func parseNewAPITopupTransactions(data map[string]any) []ports.ProviderFundingTransaction {

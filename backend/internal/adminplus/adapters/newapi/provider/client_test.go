@@ -287,7 +287,7 @@ func TestClientCreateKeyConvertsQuotaUSDToNewAPIUnits(t *testing.T) {
 
 func TestClientReadFundingTransactionsReadsTopupOrders(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/user/topup/self", r.URL.Path)
+		require.Equal(t, "/api/user/topup", r.URL.Path)
 		require.Equal(t, "1", r.URL.Query().Get("p"))
 		require.Equal(t, "100", r.URL.Query().Get("page_size"))
 		require.Equal(t, "9", r.Header.Get("New-Api-User"))
@@ -343,7 +343,7 @@ func TestClientReadFundingTransactionsReadsTopupOrders(t *testing.T) {
 func TestClientReadUsageCostsReadsConsumeLogsByPage(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/log/self", r.URL.Path)
+		require.Equal(t, "/api/log", r.URL.Path)
 		require.Equal(t, "100", r.URL.Query().Get("page_size"))
 		require.Equal(t, "2", r.URL.Query().Get("type"))
 		require.Equal(t, "1782122400", r.URL.Query().Get("start_timestamp"))
@@ -439,6 +439,87 @@ func TestClientReadUsageCostsReadsConsumeLogsByPage(t *testing.T) {
 	require.Equal(t, time.Unix(1782122502, 0).UTC(), *result.Lines[0].EndedAt)
 	require.Equal(t, int64(100), result.Lines[1].CostCents)
 	require.Equal(t, int64(1500), result.Lines[1].DurationMS)
+}
+
+func TestClientReadUsageCostsRequiresAdminSessionForNewAPIHistory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("non-admin role should fail before requesting upstream, got %s", r.URL.Path)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	_, err := client.ReadUsageCosts(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"provider_type": "new_api",
+			"context":       map[string]any{"role": "1"},
+		},
+	}, ports.ReadUsageCostsInput{
+		SupplierID: 7,
+		StartedAt:  time.Unix(1782122400, 0).UTC(),
+		EndedAt:    time.Unix(1782126000, 0).UTC(),
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "SUPPLIER_NEW_API_ADMIN_SESSION_REQUIRED", infraerrors.Reason(err))
+}
+
+func TestClientReadEntitlementTransactionsReadsRedemptions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/redemption/", r.URL.Path)
+		require.Equal(t, "1", r.URL.Query().Get("p"))
+		require.Equal(t, "100", r.URL.Query().Get("page_size"))
+		require.Equal(t, "9", r.Header.Get("New-Api-User"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success": true,
+			"data": {
+				"page": 1,
+				"page_size": 100,
+				"total": 1,
+				"items": [
+					{
+						"id": 801,
+						"key": "PAYabc1234",
+						"status": 3,
+						"quota": 500000,
+						"created_time": 1782122000,
+						"redeemed_time": 1782122600,
+						"used_user_id": 9
+					}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	result, err := client.ReadEntitlementTransactions(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"provider_type":    "new_api",
+			"required_headers": map[string]any{"New-Api-User": "9"},
+			"context":          map[string]any{"role": "10"},
+		},
+	}, ports.ReadEntitlementTransactionsInput{SupplierID: 7})
+
+	require.NoError(t, err)
+	require.Equal(t, "new_api", result.ProviderType)
+	require.Len(t, result.Items, 1)
+	item := result.Items[0]
+	require.Equal(t, "801", item.ExternalID)
+	require.Equal(t, "1234", item.CodeLast4)
+	require.Equal(t, "payment_auto_redeem", item.SourceFamily)
+	require.Equal(t, "balance", item.Type)
+	require.Equal(t, "used", item.Status)
+	require.Equal(t, int64(100), item.ValueCents)
+	require.NotNil(t, item.UsedAt)
+	require.Equal(t, time.Unix(1782122600, 0).UTC(), *item.UsedAt)
+	require.NotContains(t, item.RawPayload, "key")
 }
 
 func TestClientReadChannelMonitorsFromPulse(t *testing.T) {

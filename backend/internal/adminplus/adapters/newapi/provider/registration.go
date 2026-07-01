@@ -349,6 +349,7 @@ func (c *Client) registrationSessionFromResponse(ctx context.Context, in ports.D
 	if err != nil {
 		return nil
 	}
+	applyProfileToSessionBundle(bundle, probe)
 	return &newAPIRegistrationSession{bundle: bundle, expiresAt: expiresAt, profileStatus: stringFromProbeStatus(probe)}
 }
 

@@ -26,24 +26,30 @@ func (c *Client) ReadUsageCosts(ctx context.Context, in ports.SessionProbeInput,
 	if err != nil {
 		return nil, err
 	}
-	baseEndpoint, err := buildEndpointURL(apiBaseURL, "/api/log/self")
+	role, roleKnown := newAPIRoleFromBundle(in.Bundle)
+	if roleKnown && role < newAPIAdminRole {
+		return nil, newAPIAdminSessionRequired(role, true)
+	}
+	baseEndpoint, err := buildEndpointURL(apiBaseURL, "/api/log")
 	if err != nil {
 		return nil, err
 	}
 	lines := make([]ports.ProviderUsageCostLine, 0)
-	pageSize := 100
-	for page := 1; page <= 100; page++ {
+	for page := 1; page <= newAPIHistoryMaxPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		endpoint := appendNewAPIQueryValues(baseEndpoint, map[string]string{
 			"p":               strconv.Itoa(page),
-			"page_size":       strconv.Itoa(pageSize),
+			"page_size":       strconv.Itoa(newAPIPageSize),
 			"type":            newAPIConsumeLogType,
 			"start_timestamp": strconv.FormatInt(request.StartedAt.UTC().Unix(), 10),
 			"end_timestamp":   strconv.FormatInt(request.EndedAt.UTC().Unix(), 10),
 		})
 		raw, err := c.doSessionJSON(ctx, http.MethodGet, endpoint, in.Bundle)
 		if err != nil {
-			if len(lines) > 0 {
-				break
+			if isNewAPIAdminPermissionError(err) {
+				return nil, newAPIAdminSessionRequired(role, roleKnown)
 			}
 			return nil, err
 		}
@@ -52,7 +58,11 @@ func (c *Client) ReadUsageCosts(ctx context.Context, in ports.SessionProbeInput,
 			return nil, infraerrors.New(http.StatusBadGateway, "SUPPLIER_USAGE_COST_RESPONSE_INVALID", "new api usage log response is invalid").WithCause(err)
 		}
 		if !envelope.Success {
-			return nil, classifySessionBusinessFailure(envelope.Message)
+			err := classifySessionBusinessFailure(envelope.Message)
+			if isNewAPIAdminPermissionError(err) {
+				return nil, newAPIAdminSessionRequired(role, roleKnown)
+			}
+			return nil, err
 		}
 		pageLines := parseNewAPIUsageCostLines(envelope.Data)
 		if len(pageLines) == 0 {
@@ -64,10 +74,15 @@ func (c *Client) ReadUsageCosts(ctx context.Context, in ports.SessionProbeInput,
 			if len(lines) >= int(total) {
 				break
 			}
-			continue
 		}
-		if len(pageLines) < pageSize {
+		if total == 0 && len(pageLines) < newAPIPageSize {
 			break
+		}
+		if page == newAPIHistoryMaxPages {
+			return nil, newAPIPageLimitExceeded("usage_cost_lines", newAPIHistoryMaxPages, newAPIPageSize)
+		}
+		if err := waitForProviderPage(ctx, newAPIPageDelay); err != nil {
+			return nil, err
 		}
 	}
 	return &ports.ReadUsageCostsResult{

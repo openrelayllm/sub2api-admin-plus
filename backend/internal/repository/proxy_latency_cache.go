@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
 )
 
-const proxyLatencyKeyPrefix = "proxy:latency:"
+const (
+	proxyLatencyKeyPrefix = "proxy:latency:"
+	proxyLatencyTTL       = 6 * time.Hour
+)
 
 func proxyLatencyKey(proxyID int64) string {
 	return fmt.Sprintf("%s%d", proxyLatencyKeyPrefix, proxyID)
@@ -70,5 +74,5 @@ func (c *proxyLatencyCache) SetProxyLatency(ctx context.Context, proxyID int64, 
 	if err != nil {
 		return err
 	}
-	return c.rdb.Set(ctx, proxyLatencyKey(proxyID), payload, 0).Err()
+	return c.rdb.Set(ctx, proxyLatencyKey(proxyID), payload, proxyLatencyTTL).Err()
 }

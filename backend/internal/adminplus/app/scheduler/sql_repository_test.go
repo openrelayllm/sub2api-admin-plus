@@ -8,6 +8,7 @@ import (
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,10 +69,10 @@ func TestSQLRepositoryListRuns(t *testing.T) {
 		"error_code", "error_message", "request_snapshot", "result_snapshot",
 	}).AddRow("manual-1", "manual:1", "manual", "supplier.balance.sync", "succeeded", now, now, now, 1, 1, 1, 0, 0, int64(12), "", "", nil, nil)
 	mock.ExpectQuery("SELECT id, legacy_run_id, trigger_type").
-		WithArgs(20).
+		WithArgs(20, 0, "").
 		WillReturnRows(rows)
 
-	runs, err := repo.ListRuns(context.Background(), 20)
+	runs, err := repo.ListRuns(context.Background(), 20, 0, "")
 
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
@@ -107,10 +108,10 @@ func TestSQLRepositoryGetRunAndListSteps(t *testing.T) {
 		"locked_by", "locked_until", "request_snapshot", "result_snapshot", "started_at", "finished_at",
 	}).AddRow(int64(9), "manual-1", int64(7), "relay-a", "fetch_balance", "direct_sync", "retryable_failed", "scheduler:fetch_balance:supplier:7:202606231200", int64(0), 0, "upstream_500", 2, 3, nextAttemptAt, "", nil, nil, nil, now, now)
 	mock.ExpectQuery("FROM admin_plus_scheduler_steps").
-		WithArgs("manual-1", 200).
+		WithArgs("manual-1", 200, 0).
 		WillReturnRows(stepRows)
 
-	steps, err := repo.ListSteps(context.Background(), "manual-1", 200)
+	steps, err := repo.ListSteps(context.Background(), "manual-1", 200, 0)
 
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
@@ -118,6 +119,51 @@ func TestSQLRepositoryGetRunAndListSteps(t *testing.T) {
 	require.Equal(t, adminplusdomain.ExtensionTaskTypeFetchBalance, steps[0].TaskType)
 	require.Equal(t, 2, steps[0].Attempts)
 	require.NotNil(t, steps[0].NextAttemptAt)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSQLRepositoryDeleteRun(t *testing.T) {
+	db, mock := newSchedulerSQLMock(t)
+	repo := NewSQLRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status FROM admin_plus_scheduler_runs").
+		WithArgs("manual-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("succeeded"))
+	mock.ExpectExec("DELETE FROM admin_plus_scheduler_attempts").
+		WithArgs("manual-1").
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec("DELETE FROM admin_plus_scheduler_steps").
+		WithArgs("manual-1").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec("DELETE FROM admin_plus_scheduler_runs").
+		WithArgs("manual-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.DeleteRun(context.Background(), "manual-1")
+
+	require.NoError(t, err)
+	require.Equal(t, "manual-1", result.RunID)
+	require.Equal(t, int64(1), result.DeletedRuns)
+	require.Equal(t, int64(2), result.DeletedSteps)
+	require.Equal(t, int64(3), result.DeletedAttempts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSQLRepositoryDeleteRunRejectsActiveRun(t *testing.T) {
+	db, mock := newSchedulerSQLMock(t)
+	repo := NewSQLRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status FROM admin_plus_scheduler_runs").
+		WithArgs("manual-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("queued"))
+	mock.ExpectRollback()
+
+	result, err := repo.DeleteRun(context.Background(), "manual-1")
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, "ADMIN_PLUS_SCHEDULER_RUN_ACTIVE_DELETE_FORBIDDEN", infraerrors.Reason(err))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

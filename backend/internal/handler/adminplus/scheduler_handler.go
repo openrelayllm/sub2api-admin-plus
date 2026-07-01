@@ -130,7 +130,13 @@ func (h *SchedulerHandler) ListRuns(c *gin.Context) {
 			limit = parsed
 		}
 	}
-	response.Success(c, h.service.ListRuns(c.Request.Context(), limit))
+	offset := 0
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
+	response.Success(c, h.service.ListRuns(c.Request.Context(), limit, offset, c.Query("task_type")))
 }
 
 func (h *SchedulerHandler) GetRun(c *gin.Context) {
@@ -139,6 +145,22 @@ func (h *SchedulerHandler) GetRun(c *gin.Context) {
 		return
 	}
 	response.Success(c, detail)
+}
+
+func (h *SchedulerHandler) DeleteRun(c *gin.Context) {
+	result, err := h.service.DeleteRun(c.Request.Context(), c.Param("id"))
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *SchedulerHandler) DeleteRuns(c *gin.Context) {
+	result, err := h.service.DeleteRuns(c.Request.Context(), c.Query("task_type"))
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *SchedulerHandler) CancelRun(c *gin.Context) {
@@ -164,7 +186,13 @@ func (h *SchedulerHandler) ListSteps(c *gin.Context) {
 			limit = parsed
 		}
 	}
-	steps, err := h.service.ListSteps(c.Request.Context(), c.Query("run_id"), limit)
+	offset := 0
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
+	steps, err := h.service.ListSteps(c.Request.Context(), c.Query("run_id"), limit, offset)
 	if response.ErrorFrom(c, err) {
 		return
 	}

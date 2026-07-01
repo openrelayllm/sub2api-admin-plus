@@ -25,6 +25,13 @@ import (
 
 const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
+const (
+	sub2APIUsagePageSize        = 1000
+	sub2APIHistoryMaxPages      = 10000
+	sub2APIUsagePageDelay       = 100 * time.Millisecond
+	sub2APIUsageDateQueryLayout = "2006-01-02"
+)
+
 type rateEndpointCandidate struct {
 	path   string
 	parser func([]byte) []ports.ProviderRateEntry
@@ -873,27 +880,14 @@ func (c *SessionProfileClient) ReadUsageCosts(ctx context.Context, in ports.Sess
 		return nil, infraerrors.New(http.StatusBadRequest, "SUPPLIER_USAGE_COST_TIME_RANGE_INVALID", "invalid supplier usage cost time range")
 	}
 	apiBaseURL := firstNonEmpty(in.APIBaseURL, stringValueAt(in.Bundle, "context", "api_base_url"), stringValue(in.Bundle, "api_base_url"), in.Origin)
-	candidates := []billingEndpointCandidate{
-		{path: "/usage"},
-		{path: "/billing/lines"},
-		{path: "/billing/usage"},
-		{path: "/usage/lines"},
-		{path: "/user/billing"},
-	}
 	var lastErr error
-	for _, candidate := range candidates {
-		endpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, candidate.path)
-		if err != nil {
-			return nil, err
-		}
-		endpoint = appendUsageCostQuery(endpoint, request)
-		body, err := c.doSessionJSON(ctx, http.MethodGet, endpoint, in.Bundle, false)
+	for _, candidate := range sub2APIUsageEndpointCandidates(in.Bundle) {
+		lines, endpointWorked, err := c.readUsageCostPages(ctx, apiBaseURL, candidate.path, in.Bundle, request)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		lines := parseSub2APIUsageCostLines(body)
-		if len(lines) == 0 {
+		if !endpointWorked {
 			continue
 		}
 		return &ports.ReadUsageCostsResult{
@@ -909,6 +903,75 @@ func (c *SessionProfileClient) ReadUsageCosts(ctx context.Context, in ports.Sess
 		return nil, lastErr
 	}
 	return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_USAGE_COST_CAPABILITY_MISSING", "supplier session cannot read usage cost lines")
+}
+
+func sub2APIUsageEndpointCandidates(bundle map[string]any) []billingEndpointCandidate {
+	if role, ok := sub2APIUserRoleFromBundle(bundle); ok && !sub2APIIsAdminRole(role) {
+		return []billingEndpointCandidate{
+			{path: "/usage"},
+			{path: "/billing/lines"},
+			{path: "/billing/usage"},
+			{path: "/usage/lines"},
+			{path: "/user/billing"},
+		}
+	}
+	return []billingEndpointCandidate{
+		{path: "/admin/usage"},
+		{path: "/usage"},
+		{path: "/billing/lines"},
+		{path: "/billing/usage"},
+		{path: "/usage/lines"},
+		{path: "/user/billing"},
+	}
+}
+
+func sub2APIUserRoleFromBundle(bundle map[string]any) (string, bool) {
+	role := firstNonEmpty(
+		stringValue(bundle, "role"),
+		stringValueAt(bundle, "context", "role"),
+		stringValueAt(bundle, "profile", "role"),
+		stringValueAt(bundle, "user", "role"),
+		stringValueAt(bundle, "session_summary", "role"),
+		stringValueAt(bundle, "sessionSummary", "role"),
+	)
+	role = strings.ToLower(strings.TrimSpace(role))
+	return role, role != ""
+}
+
+func sub2APIIsAdminRole(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), "admin")
+}
+
+func (c *SessionProfileClient) readUsageCostPages(ctx context.Context, apiBaseURL string, path string, bundle map[string]any, request ports.ReadUsageCostsInput) ([]ports.ProviderUsageCostLine, bool, error) {
+	baseEndpoint, err := buildSub2APIUserEndpointURL(apiBaseURL, path)
+	if err != nil {
+		return nil, false, err
+	}
+	lines := make([]ports.ProviderUsageCostLine, 0)
+	seen := 0
+	for page := 1; page <= sub2APIHistoryMaxPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		endpoint := appendUsageCostQuery(baseEndpoint, request, page, sub2APIUsagePageSize)
+		body, err := c.doSessionJSON(ctx, http.MethodGet, endpoint, bundle, false)
+		if err != nil {
+			return nil, false, err
+		}
+		pageLines := parseSub2APIUsageCostLines(body)
+		seen += len(pageLines)
+		lines = append(lines, filterSub2APIUsageCostLines(pageLines, request)...)
+		if len(pageLines) < sub2APIUsagePageSize || sub2APIUsagePaginationDone(body, page, seen) {
+			return lines, true, nil
+		}
+		if page == sub2APIHistoryMaxPages {
+			return nil, false, sub2APIPageLimitExceeded("usage_cost_lines", sub2APIHistoryMaxPages, sub2APIUsagePageSize)
+		}
+		if err := waitSub2APIProviderPage(ctx, sub2APIUsagePageDelay); err != nil {
+			return nil, false, err
+		}
+	}
+	return lines, true, nil
 }
 
 func (c *SessionProfileClient) ReadFundingTransactions(ctx context.Context, in ports.SessionProbeInput, request ports.ReadFundingTransactionsInput) (*ports.ReadFundingTransactionsResult, error) {
@@ -1968,20 +2031,106 @@ func priceEntriesFromPricing(model string, pricing map[string]any, raw map[strin
 	return out
 }
 
-func appendUsageCostQuery(endpoint string, request ports.ReadUsageCostsInput) string {
+func appendUsageCostQuery(endpoint string, request ports.ReadUsageCostsInput, page int, pageSize int) string {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return endpoint
 	}
 	values := u.Query()
-	startedAt := request.StartedAt.UTC().Format(time.RFC3339)
-	endedAt := request.EndedAt.UTC().Format(time.RFC3339)
-	values.Set("started_at", startedAt)
-	values.Set("ended_at", endedAt)
-	values.Set("from", startedAt)
-	values.Set("to", endedAt)
+	startedAt := request.StartedAt.UTC()
+	endedAt := request.EndedAt.UTC()
+	endDate := endedAt.Add(-time.Nanosecond)
+	if endDate.Before(startedAt) {
+		endDate = startedAt
+	}
+	startedAtText := startedAt.Format(time.RFC3339)
+	endedAtText := endedAt.Format(time.RFC3339)
+	values.Set("page", strconv.Itoa(page))
+	values.Set("page_size", strconv.Itoa(pageSize))
+	values.Set("sort_by", "created_at")
+	values.Set("sort_order", "desc")
+	values.Set("exact_total", "false")
+	values.Set("timezone", "UTC")
+	values.Set("start_date", startedAt.Format(sub2APIUsageDateQueryLayout))
+	values.Set("end_date", endDate.Format(sub2APIUsageDateQueryLayout))
+	values.Set("started_at", startedAtText)
+	values.Set("ended_at", endedAtText)
+	values.Set("from", startedAtText)
+	values.Set("to", endedAtText)
 	u.RawQuery = values.Encode()
 	return u.String()
+}
+
+func filterSub2APIUsageCostLines(lines []ports.ProviderUsageCostLine, request ports.ReadUsageCostsInput) []ports.ProviderUsageCostLine {
+	if len(lines) == 0 {
+		return nil
+	}
+	startedAt := request.StartedAt.UTC()
+	endedAt := request.EndedAt.UTC()
+	out := make([]ports.ProviderUsageCostLine, 0, len(lines))
+	for _, line := range lines {
+		lineStartedAt := line.StartedAt.UTC()
+		if lineStartedAt.Before(startedAt) || !lineStartedAt.Before(endedAt) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func sub2APIUsagePaginationDone(data []byte, page int, seen int) bool {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return false
+	}
+	dataValue, _ := root["data"].(map[string]any)
+	total := firstPositiveInt64(
+		int64FromAny(root["total"]),
+		int64FromAny(dataValue["total"]),
+	)
+	if total > 0 && seen >= int(total) {
+		return true
+	}
+	pages := firstPositiveInt64(
+		int64FromAny(root["pages"]),
+		int64FromAny(dataValue["pages"]),
+	)
+	return pages > 0 && int64(page) >= pages
+}
+
+func firstPositiveInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func sub2APIPageLimitExceeded(resource string, maxPages int, pageSize int) error {
+	return infraerrors.New(
+		http.StatusConflict,
+		"SUPPLIER_HISTORY_PAGE_LIMIT_EXCEEDED",
+		"supplier history pagination exceeded the safety limit; narrow the time range and retry",
+	).WithMetadata(map[string]string{
+		"resource":  resource,
+		"max_pages": strconv.Itoa(maxPages),
+		"page_size": strconv.Itoa(pageSize),
+	})
+}
+
+func waitSub2APIProviderPage(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func appendQueryValues(endpoint string, pairs map[string]string) string {

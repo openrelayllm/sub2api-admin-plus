@@ -99,6 +99,13 @@ type SchedulerRunDetail struct {
 	Steps []SchedulerStepRecord `json:"steps"`
 }
 
+type SchedulerCleanupResult struct {
+	RunID           string `json:"run_id"`
+	DeletedRuns     int64  `json:"deleted_runs"`
+	DeletedSteps    int64  `json:"deleted_steps"`
+	DeletedAttempts int64  `json:"deleted_attempts"`
+}
+
 type SchedulerAttemptRecord struct {
 	ID               int64             `json:"id"`
 	StepID           int64             `json:"step_id"`

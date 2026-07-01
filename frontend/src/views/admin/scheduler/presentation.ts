@@ -177,6 +177,10 @@ export function runCancellable(status: string): boolean {
   return ['queued', 'running', 'retryable_failed', 'partial_succeeded', 'manual_required'].includes(status)
 }
 
+export function runDeletable(status: string): boolean {
+  return !['queued', 'running'].includes(status)
+}
+
 export function runRetryable(status: string, failedSteps: number): boolean {
   return failedSteps > 0 || ['retryable_failed', 'partial_succeeded', 'manual_required', 'dead', 'skipped', 'cancelled'].includes(status)
 }

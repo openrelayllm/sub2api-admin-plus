@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -461,13 +462,9 @@ func TestServiceEnqueueCostHistoryBackfillUsesStepSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "queued", summary.Status)
 	require.Equal(t, "supplier.costs.reconcile", summary.TaskType)
-	require.Greater(t, len(repo.steps), 1)
+	require.Len(t, repo.steps, 1)
 	require.Equal(t, adminplusdomain.ExtensionTaskTypeReconcileCosts, repo.steps[0].TaskType)
 	require.Equal(t, "2025-01-01T00:00:00Z", repo.steps[0].RequestSnapshot["started_at"])
-	require.Equal(t, "2025-01-01T06:00:00Z", repo.steps[0].RequestSnapshot["ended_at"])
-	require.Equal(t, false, repo.steps[0].RequestSnapshot["include_balance_snapshot"])
-	require.Equal(t, true, repo.steps[len(repo.steps)-1].RequestSnapshot["include_balance_snapshot"])
-	require.Equal(t, len(repo.steps), summary.TotalSteps)
 
 	processed, err := service.ProcessNext(context.Background(), "worker-test")
 
@@ -475,7 +472,7 @@ func TestServiceEnqueueCostHistoryBackfillUsesStepSnapshot(t *testing.T) {
 	require.True(t, processed)
 	require.Equal(t, 1, costSyncer.calls)
 	require.Equal(t, startedAt, *costSyncer.input.StartedAt)
-	require.Equal(t, startedAt.Add(costBackfillWindow), *costSyncer.input.EndedAt)
+	require.Equal(t, endedAt, *costSyncer.input.EndedAt)
 	require.True(t, costSyncer.input.IncludeFundingTransactions)
 	require.Equal(t, "succeeded", repo.steps[0].Status)
 	require.Equal(t, 14, repo.steps[0].ResultCount)
@@ -757,6 +754,7 @@ func TestServiceRetryStepRequeuesFailedStep(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, repo.steps, 1)
+	repo.steps[0].Status = "running"
 	require.NoError(t, repo.CompleteStep(context.Background(), repo.steps[0].ID, "retryable_failed", 0, "upstream_500", nil, service.now()))
 	require.NoError(t, repo.RefreshRunStatus(context.Background(), summary.ID, service.now()))
 	require.Equal(t, "retryable_failed", repo.runs[0].Status)
@@ -808,6 +806,10 @@ func TestServiceCancelAndRetryFailedRunSteps(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "cancelled", cancelledRun.Status)
 	require.Equal(t, "cancelled", repo.steps[0].Status)
+
+	processed, err := service.ProcessNext(context.Background(), "worker-test")
+	require.NoError(t, err)
+	require.False(t, processed)
 }
 
 func TestServiceRunKeepsNoBalanceSupplierOutOfSwitchOnlyTasks(t *testing.T) {
@@ -1112,12 +1114,27 @@ func cloneTestMap(in map[string]any) map[string]any {
 	return out
 }
 
-func (r *fakeSchedulerRepository) ListRuns(_ context.Context, limit int) ([]adminplusdomain.SchedulerRunSummary, error) {
+func (r *fakeSchedulerRepository) ListRuns(_ context.Context, limit int, offset int, taskType string) ([]adminplusdomain.SchedulerRunSummary, error) {
+	if offset < 0 {
+		offset = 0
+	}
 	if limit <= 0 || limit > len(r.runs) {
 		limit = len(r.runs)
 	}
+	if offset >= len(r.runs) {
+		return []adminplusdomain.SchedulerRunSummary{}, nil
+	}
+	taskType = strings.TrimSpace(taskType)
 	out := make([]adminplusdomain.SchedulerRunSummary, 0, limit)
+	skipped := 0
 	for i := len(r.runs) - 1; i >= 0 && len(out) < limit; i-- {
+		if taskType != "" && r.runs[i].TaskType != taskType {
+			continue
+		}
+		if skipped < offset {
+			skipped++
+			continue
+		}
 		out = append(out, r.runs[i])
 	}
 	return out, nil
@@ -1132,10 +1149,14 @@ func (r *fakeSchedulerRepository) GetRun(_ context.Context, runID string) (*admi
 	return nil, sql.ErrNoRows
 }
 
-func (r *fakeSchedulerRepository) ListSteps(_ context.Context, runID string, limit int) ([]adminplusdomain.SchedulerStepRecord, error) {
+func (r *fakeSchedulerRepository) ListSteps(_ context.Context, runID string, limit int, offset int) ([]adminplusdomain.SchedulerStepRecord, error) {
 	out := make([]adminplusdomain.SchedulerStepRecord, 0)
 	for _, step := range r.steps {
 		if runID != "" && step.RunID != runID {
+			continue
+		}
+		if offset > 0 {
+			offset--
 			continue
 		}
 		out = append(out, step)
@@ -1148,6 +1169,61 @@ func (r *fakeSchedulerRepository) ListSteps(_ context.Context, runID string, lim
 
 func (r *fakeSchedulerRepository) ListAttempts(_ context.Context, _ string, _ int) ([]adminplusdomain.SchedulerAttemptRecord, error) {
 	return []adminplusdomain.SchedulerAttemptRecord{}, nil
+}
+
+func (r *fakeSchedulerRepository) DeleteRun(_ context.Context, runID string) (*adminplusdomain.SchedulerCleanupResult, error) {
+	result := &adminplusdomain.SchedulerCleanupResult{RunID: runID}
+	nextRuns := r.runs[:0]
+	for _, run := range r.runs {
+		if run.ID == runID {
+			result.DeletedRuns++
+			continue
+		}
+		nextRuns = append(nextRuns, run)
+	}
+	r.runs = nextRuns
+	if result.DeletedRuns == 0 {
+		return nil, sql.ErrNoRows
+	}
+	nextSteps := r.steps[:0]
+	for _, step := range r.steps {
+		if step.RunID == runID {
+			result.DeletedSteps++
+			continue
+		}
+		nextSteps = append(nextSteps, step)
+	}
+	r.steps = nextSteps
+	return result, nil
+}
+
+func (r *fakeSchedulerRepository) DeleteRuns(_ context.Context, taskType string) (*adminplusdomain.SchedulerCleanupResult, error) {
+	taskType = strings.TrimSpace(taskType)
+	result := &adminplusdomain.SchedulerCleanupResult{RunID: "bulk"}
+	if taskType != "" {
+		result.RunID = "task_type:" + taskType
+	}
+	deletedRuns := map[string]struct{}{}
+	nextRuns := r.runs[:0]
+	for _, run := range r.runs {
+		if (taskType == "" || run.TaskType == taskType) && run.Status != "queued" && run.Status != "running" {
+			result.DeletedRuns++
+			deletedRuns[run.ID] = struct{}{}
+			continue
+		}
+		nextRuns = append(nextRuns, run)
+	}
+	r.runs = nextRuns
+	nextSteps := r.steps[:0]
+	for _, step := range r.steps {
+		if _, ok := deletedRuns[step.RunID]; ok {
+			result.DeletedSteps++
+			continue
+		}
+		nextSteps = append(nextSteps, step)
+	}
+	r.steps = nextSteps
+	return result, nil
 }
 
 func (r *fakeSchedulerRepository) RetryStep(_ context.Context, stepID int64, retryAt time.Time) (*adminplusdomain.SchedulerStepRecord, error) {
@@ -1457,7 +1533,7 @@ func (r *fakeSchedulerRepository) StepStats(_ context.Context) (running int, que
 
 func (r *fakeSchedulerRepository) ClaimStep(_ context.Context, _ string, _ time.Duration) (*adminplusdomain.SchedulerStepRecord, error) {
 	for idx := range r.steps {
-		if r.steps[idx].Status == "queued" || r.steps[idx].Status == "retryable_failed" {
+		if (r.steps[idx].Status == "queued" || r.steps[idx].Status == "retryable_failed") && r.runClaimable(r.steps[idx].RunID) {
 			r.steps[idx].Status = "running"
 			return &r.steps[idx], nil
 		}
@@ -1470,6 +1546,9 @@ func (r *fakeSchedulerRepository) CompleteStep(_ context.Context, stepID int64, 
 		if r.steps[idx].ID != stepID {
 			continue
 		}
+		if r.steps[idx].Status != "running" {
+			continue
+		}
 		r.steps[idx].Status = status
 		r.steps[idx].ResultCount = resultCount
 		r.steps[idx].Reason = reason
@@ -1477,6 +1556,20 @@ func (r *fakeSchedulerRepository) CompleteStep(_ context.Context, stepID int64, 
 		r.steps[idx].FinishedAt = &finishedAt
 	}
 	return nil
+}
+
+func (r *fakeSchedulerRepository) runClaimable(runID string) bool {
+	for idx := range r.runs {
+		if r.runs[idx].ID != runID {
+			continue
+		}
+		return r.runs[idx].Status == "queued" ||
+			r.runs[idx].Status == "running" ||
+			r.runs[idx].Status == "retryable_failed" ||
+			r.runs[idx].Status == "partial_succeeded" ||
+			r.runs[idx].Status == "manual_required"
+	}
+	return false
 }
 
 func (r *fakeSchedulerRepository) RefreshRunStatus(_ context.Context, runID string, finishedAt time.Time) error {

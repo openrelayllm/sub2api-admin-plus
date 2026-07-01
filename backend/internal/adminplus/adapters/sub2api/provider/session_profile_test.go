@@ -954,7 +954,13 @@ func TestSessionProfileClientReadUsageCosts(t *testing.T) {
 		require.Equal(t, "sid=abc", r.Header.Get("Cookie"))
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/v1/usage":
+		case "/api/v1/admin/usage":
+			require.Equal(t, "1", r.URL.Query().Get("page"))
+			require.Equal(t, "1000", r.URL.Query().Get("page_size"))
+			require.Equal(t, "created_at", r.URL.Query().Get("sort_by"))
+			require.Equal(t, "desc", r.URL.Query().Get("sort_order"))
+			require.Equal(t, "2026-06-20", r.URL.Query().Get("start_date"))
+			require.Equal(t, "2026-06-20", r.URL.Query().Get("end_date"))
 			require.Equal(t, startedAt.Format(time.RFC3339), r.URL.Query().Get("started_at"))
 			require.Equal(t, endedAt.Format(time.RFC3339), r.URL.Query().Get("ended_at"))
 			require.Equal(t, startedAt.Format(time.RFC3339), r.URL.Query().Get("from"))
@@ -987,6 +993,11 @@ func TestSessionProfileClientReadUsageCosts(t *testing.T) {
 							}
 						}
 					]
+					,
+					"total": 1,
+					"page": 1,
+					"page_size": 1000,
+					"pages": 1
 				}
 			}`))
 		default:
@@ -1032,6 +1043,62 @@ func TestSessionProfileClientReadUsageCosts(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, headers, "cookie")
 	require.Equal(t, "kept", headers["x-safe"])
+}
+
+func TestSessionProfileClientReadUsageCostsUsesUserEndpointForUserRole(t *testing.T) {
+	startedAt := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	endedAt := startedAt.Add(24 * time.Hour)
+	requestedPaths := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/usage":
+			require.Equal(t, "1", r.URL.Query().Get("page"))
+			require.Equal(t, "1000", r.URL.Query().Get("page_size"))
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"items": [
+						{
+							"id": 92,
+							"request_id": "req-user",
+							"model": "gpt-5-mini",
+							"total_cost": 0.42,
+							"created_at": "2026-06-20T08:00:00Z"
+						}
+					],
+					"total": 1,
+					"page": 1,
+					"page_size": 1000,
+					"pages": 1
+				}
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSessionProfileClient(server.Client())
+	result, err := client.ReadUsageCosts(context.Background(), ports.SessionProbeInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Bundle: map[string]any{
+			"access_token": "browser-access-token",
+			"context": map[string]any{
+				"role": "user",
+			},
+		},
+	}, ports.ReadUsageCostsInput{
+		SupplierID: 7,
+		StartedAt:  startedAt,
+		EndedAt:    endedAt,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Lines, 1)
+	require.Equal(t, []string{"/api/v1/usage"}, requestedPaths)
 }
 
 func TestParseSub2APIUsageCostLine_RealSub2APIShape(t *testing.T) {

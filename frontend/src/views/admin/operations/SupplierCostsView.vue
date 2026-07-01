@@ -323,11 +323,43 @@
       <section v-else class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div class="card overflow-hidden">
           <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-white">历史回补运行</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">一键提交后由后台按供应商拆分 step 执行，页面只轮询 run 状态。</p>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 class="text-base font-semibold text-gray-900 dark:text-white">历史回补运行</h2>
+                <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">一键提交后由后台按供应商拆分 step 执行，页面只轮询 run 状态。</p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  v-if="activeBackfillRun"
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="cancellingRun || !runCancellable(activeBackfillRun.run.status)"
+                  @click="cancelCurrentRun"
+                >
+                  取消队列/Run
+                </button>
+                <button
+                  v-if="activeBackfillRun"
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="Boolean(deletingRunId) || !runDeletable(activeBackfillRun.run.status)"
+                  @click="deleteRun(activeBackfillRun.run.id)"
+                >
+                  删除当前 Run
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-danger btn-sm"
+                  :disabled="clearingRuns || loadingRuns"
+                  @click="clearFinishedCostRuns"
+                >
+                  {{ clearingRuns ? '清空中' : '清空已结束历史' }}
+                </button>
+              </div>
+            </div>
           </div>
           <div v-if="!activeBackfillRun" class="px-5 py-10 text-center text-sm text-gray-500 dark:text-dark-400">
-            暂无本页提交的历史回补任务。
+            请选择一个历史回补 Run 查看明细。
           </div>
           <div v-else class="space-y-5 p-5">
             <div class="grid gap-3 md:grid-cols-5">
@@ -401,6 +433,13 @@
                 </tbody>
               </table>
             </div>
+            <div class="flex flex-col gap-2 text-sm text-gray-500 dark:text-dark-400 sm:flex-row sm:items-center sm:justify-between">
+              <div>Step 第 {{ stepPage }} 页，每页 {{ stepPageSize }} 条</div>
+              <div class="flex gap-2">
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="loadingSteps || stepPage <= 1" @click="changeStepPage(stepPage - 1)">上一页</button>
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="loadingSteps || !stepHasNext" @click="changeStepPage(stepPage + 1)">下一页</button>
+              </div>
+            </div>
 
             <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-dark-700">
               <table class="w-full min-w-[860px] divide-y divide-gray-200 dark:divide-dark-700">
@@ -411,11 +450,12 @@
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">供应商</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">Step</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">请求时间</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">操作</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-900">
                   <tr v-if="costRuns.length === 0">
-                    <td colspan="5" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-dark-400">暂无成本对账运行记录</td>
+                    <td colspan="6" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-dark-400">暂无成本对账运行记录</td>
                   </tr>
                   <tr
                     v-for="run in costRuns"
@@ -429,9 +469,26 @@
                     <td class="px-4 py-3 text-sm text-gray-500 dark:text-dark-400">{{ run.supplier_count }}</td>
                     <td class="px-4 py-3 text-sm text-gray-500 dark:text-dark-400">{{ run.succeeded_steps }}/{{ run.total_steps }} 成功，{{ run.failed_steps }} 失败</td>
                     <td class="px-4 py-3 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(run.requested_at) }}</td>
+                    <td class="px-4 py-3">
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        :disabled="deletingRunId === run.id || !runDeletable(run.status)"
+                        @click.stop="deleteRun(run.id)"
+                      >
+                        {{ runDeletable(run.status) ? '删除' : '先取消' }}
+                      </button>
+                    </td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+            <div class="flex flex-col gap-2 text-sm text-gray-500 dark:text-dark-400 sm:flex-row sm:items-center sm:justify-between">
+              <div>Run 第 {{ costRunPage }} 页，每页 {{ costRunPageSize }} 条</div>
+              <div class="flex gap-2">
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="loadingRuns || costRunPage <= 1" @click="changeRunPage(costRunPage - 1)">上一页</button>
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="loadingRuns || !costRunsHasNext" @click="changeRunPage(costRunPage + 1)">下一页</button>
+              </div>
             </div>
           </div>
         </div>
@@ -523,7 +580,10 @@ import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import {
   backfillSupplierCosts,
+  cancelSchedulerRun,
   cancelSchedulerStep,
+  deleteSchedulerRun,
+  deleteSchedulerRuns,
   getSchedulerRunDetail,
   getSupplierCostLedgerOverview,
   getSupplierCostSummary,
@@ -532,6 +592,7 @@ import {
   listSupplierEntitlementTransactions,
   listSupplierFundingTransactions,
   listSchedulerRuns,
+  listSchedulerSteps,
   listSuppliers,
   retrySchedulerStep,
   type SchedulerRunDetail,
@@ -561,6 +622,8 @@ import {
   plainStepReason,
   runStatusClass,
   runStatusLabel,
+  runCancellable,
+  runDeletable,
   stageLabel,
   stepCancellable,
   stepReasonSummary,
@@ -592,11 +655,26 @@ const activeBackfillRun = ref<SchedulerRunDetail | null>(null)
 const costRuns = ref<SchedulerRunSummary[]>([])
 const retryingStepId = ref<number | null>(null)
 const cancellingStepId = ref<number | null>(null)
+const cancellingRun = ref(false)
+const deletingRunId = ref<string | null>(null)
+const clearingRuns = ref(false)
+const loadingRuns = ref(false)
+const loadingSteps = ref(false)
 const selectedReasonStep = ref<SchedulerStepRecord | null>(null)
 let backfillRunTimer: number | undefined
 
+const schedulerCostTaskType = 'supplier.costs.reconcile'
+const legacySchedulerCostTaskType = 'reconcile_supplier_costs'
+const costRunPageSize = 20
+const stepPageSize = 100
+const costRunPage = ref(1)
+const costRunsHasNext = ref(false)
+const stepPage = ref(1)
+const stepHasNext = ref(false)
+const defaultHistoryStartedAt = new Date(2020, 0, 1, 0, 0, 0)
+
 const syncForm = reactive({
-  started_at: toDateTimeLocal(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)),
+  started_at: toDateTimeLocal(defaultHistoryStartedAt),
   ended_at: toDateTimeLocal(new Date())
 })
 
@@ -883,7 +961,8 @@ async function syncCosts() {
       supplier_id: selectedSupplierId.value
     })
     appStore.showSuccess(`当前供应商成本同步已提交 #${run.id}`)
-    await loadCostRuns()
+    costRunPage.value = 1
+    await loadCostRunsPage(1)
     await watchBackfillRun(run.id)
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '同步成本失败')
@@ -900,7 +979,8 @@ async function startHistoryBackfill() {
       ...syncPayload()
     })
     appStore.showSuccess(`历史回补已提交 #${run.id}`)
-    await loadCostRuns()
+    costRunPage.value = 1
+    await loadCostRunsPage(1)
     await watchBackfillRun(run.id)
   } catch (error) {
     backfilling.value = false
@@ -921,6 +1001,7 @@ function syncPayload() {
 
 async function watchBackfillRun(runID: string) {
   stopBackfillPolling()
+  stepPage.value = 1
   await refreshBackfillRun(runID, { scheduleNext: true, notifyTerminal: true })
 }
 
@@ -930,6 +1011,7 @@ async function refreshBackfillRun(runID: string, options: { scheduleNext?: boole
   try {
     const detail = await getSchedulerRunDetail(runID)
     activeBackfillRun.value = detail
+    await loadBackfillSteps(runID, stepPage.value)
     if (isTerminalRunStatus(detail.run.status)) {
       backfilling.value = false
       syncing.value = false
@@ -958,17 +1040,37 @@ async function refreshBackfillRun(runID: string, options: { scheduleNext?: boole
 }
 
 async function loadCostRuns() {
-  const runs = await listSchedulerRuns({ limit: 50 })
-  costRuns.value = runs
-    .filter((run) => run.task_type === 'supplier.costs.reconcile' || run.task_type === 'reconcile_supplier_costs')
-    .sort((a, b) => new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime())
+  await loadCostRunsPage(costRunPage.value)
+}
+
+async function loadCostRunsPage(page: number) {
+  const normalizedPage = Math.max(1, page)
+  loadingRuns.value = true
+  try {
+    const runs = await listSchedulerRuns({
+      limit: costRunPageSize + 1,
+      offset: (normalizedPage - 1) * costRunPageSize,
+      task_type: schedulerCostTaskType
+    })
+    costRunsHasNext.value = runs.length > costRunPageSize
+    costRuns.value = runs.slice(0, costRunPageSize)
+    costRunPage.value = normalizedPage
+  } finally {
+    loadingRuns.value = false
+  }
+}
+
+async function changeRunPage(page: number) {
+  await loadCostRunsPage(page)
 }
 
 async function openCostRun(runID: string, showError = true) {
   try {
     stopBackfillPolling()
+    stepPage.value = 1
     const detail = await getSchedulerRunDetail(runID)
     activeBackfillRun.value = detail
+    await loadBackfillSteps(runID, 1)
     if (!isTerminalRunStatus(detail.run.status)) {
       backfillRunTimer = window.setTimeout(() => {
         void refreshBackfillRun(runID, { scheduleNext: true, notifyTerminal: false })
@@ -977,6 +1079,34 @@ async function openCostRun(runID: string, showError = true) {
   } catch (error) {
     if (showError) appStore.showError((error as { message?: string }).message || '读取运行详情失败')
   }
+}
+
+async function loadBackfillSteps(runID: string, page: number) {
+  const normalizedPage = Math.max(1, page)
+  loadingSteps.value = true
+  try {
+    const rows = await listSchedulerSteps({
+      run_id: runID,
+      limit: stepPageSize + 1,
+      offset: (normalizedPage - 1) * stepPageSize
+    })
+    stepHasNext.value = rows.length > stepPageSize
+    stepPage.value = normalizedPage
+    if (activeBackfillRun.value?.run.id === runID) {
+      activeBackfillRun.value = {
+        ...activeBackfillRun.value,
+        steps: rows.slice(0, stepPageSize)
+      }
+    }
+  } finally {
+    loadingSteps.value = false
+  }
+}
+
+async function changeStepPage(page: number) {
+  const runID = activeBackfillRun.value?.run.id
+  if (!runID) return
+  await loadBackfillSteps(runID, page)
 }
 
 async function retryStep(stepID: number) {
@@ -1004,6 +1134,71 @@ async function cancelStep(stepID: number) {
     appStore.showError((error as { message?: string }).message || '取消 step 失败')
   } finally {
     cancellingStepId.value = null
+  }
+}
+
+async function cancelCurrentRun() {
+  const runID = activeBackfillRun.value?.run.id
+  if (!runID || cancellingRun.value) return
+  cancellingRun.value = true
+  try {
+    stopBackfillPolling()
+    await cancelSchedulerRun(runID)
+    await refreshBackfillRun(runID, { scheduleNext: false, notifyTerminal: false })
+    await loadCostRuns()
+    backfilling.value = false
+    syncing.value = false
+    appStore.showSuccess('Run 已取消')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '取消 run 失败')
+  } finally {
+    cancellingRun.value = false
+  }
+}
+
+async function deleteRun(runID: string) {
+  if (!runID || deletingRunId.value) return
+  const confirmed = window.confirm(`确认删除 Run ${runID} 的历史记录？只会删除 scheduler run/step/attempt，不会删除成本台账。`)
+  if (!confirmed) return
+  deletingRunId.value = runID
+  try {
+    if (activeBackfillRun.value?.run.id === runID) {
+      stopBackfillPolling()
+    }
+    const result = await deleteSchedulerRun(runID)
+    if (activeBackfillRun.value?.run.id === runID) {
+      activeBackfillRun.value = null
+      stepPage.value = 1
+      stepHasNext.value = false
+    }
+    await loadCostRuns()
+    appStore.showSuccess(`已删除 Run ${runID}：${result.deleted_steps} 个 step`)
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '删除 run 失败')
+  } finally {
+    deletingRunId.value = null
+  }
+}
+
+async function clearFinishedCostRuns() {
+  if (clearingRuns.value) return
+  const confirmed = window.confirm('确认清空所有已结束的成本回补历史？queued/running 的任务不会删除，成本台账不会删除。')
+  if (!confirmed) return
+  clearingRuns.value = true
+  try {
+    stopBackfillPolling()
+    const result = await deleteSchedulerRuns({ task_type: schedulerCostTaskType })
+    const legacyResult = await deleteSchedulerRuns({ task_type: legacySchedulerCostTaskType })
+    activeBackfillRun.value = null
+    costRunPage.value = 1
+    stepPage.value = 1
+    stepHasNext.value = false
+    await loadCostRunsPage(1)
+    appStore.showSuccess(`已清空 ${result.deleted_runs + legacyResult.deleted_runs} 个 Run、${result.deleted_steps + legacyResult.deleted_steps} 个 Step`)
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '清空历史失败')
+  } finally {
+    clearingRuns.value = false
   }
 }
 

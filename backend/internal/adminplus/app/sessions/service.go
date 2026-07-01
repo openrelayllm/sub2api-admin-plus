@@ -356,6 +356,7 @@ func sessionSummaryFromBundle(bundle map[string]any) map[string]any {
 		"has_new_api_user_header": newAPIUserHeader != "" || strings.EqualFold(stringValue(bundle, "auth_header_name"), "New-Api-User"),
 		"cookie_count":            cookieCount,
 		"user_id":                 stringValue(context, "user_id"),
+		"role":                    firstNonEmpty(stringValue(context, "role"), stringValue(bundle, "role")),
 		"organization_id":         stringValue(context, "organization_id"),
 		"project_id":              stringValue(context, "project_id"),
 		"account_id":              stringValue(context, "account_id"),

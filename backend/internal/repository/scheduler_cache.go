@@ -24,6 +24,7 @@ const (
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
+	schedulerAccountCacheTTL               = 24 * time.Hour
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
@@ -270,8 +271,8 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 		if err != nil {
 			return err
 		}
-		pipe.Set(ctx, keys[i], updated, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(ids[i], 10)), metaPayload, 0)
+		pipe.Set(ctx, keys[i], updated, schedulerAccountCacheTTL)
+		pipe.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(ids[i], 10)), metaPayload, schedulerAccountCacheTTL)
 	}
 	_, err = pipe.Exec(ctx)
 	return err
@@ -389,8 +390,8 @@ func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.A
 		}
 
 		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
+		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, schedulerAccountCacheTTL)
+		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, schedulerAccountCacheTTL)
 		pending++
 		if pending >= c.writeChunkSize {
 			if err := flush(); err != nil {

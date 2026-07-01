@@ -145,7 +145,10 @@ func (r *Router) ReadFundingTransactions(ctx context.Context, in ports.SessionPr
 
 func (r *Router) ReadEntitlementTransactions(ctx context.Context, in ports.SessionProbeInput, request ports.ReadEntitlementTransactionsInput) (*ports.ReadEntitlementTransactionsResult, error) {
 	if providerTypeFromBundle(in.Bundle) == "new_api" {
-		return nil, capabilityMissing("SUPPLIER_ENTITLEMENT_CAPABILITY_MISSING", "new api entitlement transaction reading is not implemented")
+		if r == nil || r.newapi == nil {
+			return nil, internalError()
+		}
+		return r.newapi.ReadEntitlementTransactions(ctx, in, request)
 	}
 	if r == nil || r.sub2api == nil {
 		return nil, internalError()

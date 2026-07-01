@@ -126,6 +126,7 @@ func (c *Client) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*p
 	if err != nil {
 		return nil, err
 	}
+	applyProfileToSessionBundle(bundle, probe)
 	return &ports.DirectLoginResult{
 		SupplierID:    in.SupplierID,
 		Origin:        origin,

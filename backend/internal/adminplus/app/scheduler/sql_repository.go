@@ -103,21 +103,27 @@ func (r *SQLRepository) SaveRun(ctx context.Context, run adminplusdomain.Schedul
 	return err
 }
 
-func (r *SQLRepository) ListRuns(ctx context.Context, limit int) ([]adminplusdomain.SchedulerRunSummary, error) {
+func (r *SQLRepository) ListRuns(ctx context.Context, limit int, offset int, taskType string) ([]adminplusdomain.SchedulerRunSummary, error) {
 	if r == nil || r.db == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_SCHEDULER_DB_NOT_CONFIGURED", "admin plus scheduler database is not configured")
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	taskType = strings.TrimSpace(taskType)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, legacy_run_id, trigger_type, task_type, status, requested_at, started_at, finished_at,
 			supplier_count, total_steps, succeeded_steps, failed_steps, skipped_steps, duration_ms,
 			error_code, error_message, request_snapshot, result_snapshot
 		FROM admin_plus_scheduler_runs
+		WHERE ($3 = '' OR task_type = $3)
 		ORDER BY requested_at DESC, id DESC
 		LIMIT $1
-	`, limit)
+		OFFSET $2
+	`, limit, offset, taskType)
 	if err != nil {
 		return nil, err
 	}
@@ -148,12 +154,15 @@ func (r *SQLRepository) GetRun(ctx context.Context, runID string) (*adminplusdom
 	return scanRunSummary(row)
 }
 
-func (r *SQLRepository) ListSteps(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerStepRecord, error) {
+func (r *SQLRepository) ListSteps(ctx context.Context, runID string, limit int, offset int) ([]adminplusdomain.SchedulerStepRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_SCHEDULER_DB_NOT_CONFIGURED", "admin plus scheduler database is not configured")
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, run_id, supplier_id, supplier_name, task_type, action, status, schedule_key,
@@ -163,7 +172,8 @@ func (r *SQLRepository) ListSteps(ctx context.Context, runID string, limit int) 
 		WHERE ($1 = '' OR run_id = $1)
 		ORDER BY id ASC
 		LIMIT $2
-	`, runID, limit)
+		OFFSET $3
+	`, runID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +187,133 @@ func (r *SQLRepository) ListSteps(ctx context.Context, runID string, limit int) 
 		out = append(out, *step)
 	}
 	return out, rows.Err()
+}
+
+func (r *SQLRepository) DeleteRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerCleanupResult, error) {
+	if r == nil || r.db == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_SCHEDULER_DB_NOT_CONFIGURED", "admin plus scheduler database is not configured")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var status string
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM admin_plus_scheduler_runs WHERE id = $1 FOR UPDATE`, runID).Scan(&status); err != nil {
+		return nil, err
+	}
+	if status == "queued" || status == "running" {
+		err = infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_RUN_ACTIVE_DELETE_FORBIDDEN", "cancel scheduler run before deleting it")
+		return nil, err
+	}
+	result := &adminplusdomain.SchedulerCleanupResult{RunID: runID}
+	if exec, execErr := tx.ExecContext(ctx, `DELETE FROM admin_plus_scheduler_attempts WHERE run_id = $1`, runID); execErr != nil {
+		err = execErr
+		return nil, err
+	} else {
+		result.DeletedAttempts, _ = exec.RowsAffected()
+	}
+	if exec, execErr := tx.ExecContext(ctx, `DELETE FROM admin_plus_scheduler_steps WHERE run_id = $1`, runID); execErr != nil {
+		err = execErr
+		return nil, err
+	} else {
+		result.DeletedSteps, _ = exec.RowsAffected()
+	}
+	if exec, execErr := tx.ExecContext(ctx, `DELETE FROM admin_plus_scheduler_runs WHERE id = $1`, runID); execErr != nil {
+		err = execErr
+		return nil, err
+	} else {
+		result.DeletedRuns, _ = exec.RowsAffected()
+	}
+	if result.DeletedRuns == 0 {
+		err = sql.ErrNoRows
+		return nil, err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *SQLRepository) DeleteRuns(ctx context.Context, taskType string) (*adminplusdomain.SchedulerCleanupResult, error) {
+	if r == nil || r.db == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_SCHEDULER_DB_NOT_CONFIGURED", "admin plus scheduler database is not configured")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	taskType = strings.TrimSpace(taskType)
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id
+		FROM admin_plus_scheduler_runs
+		WHERE ($1 = '' OR task_type = $1)
+		  AND status NOT IN ('queued', 'running')
+	`, taskType)
+	if err != nil {
+		return nil, err
+	}
+	runIDs := make([]string, 0)
+	for rows.Next() {
+		var runID string
+		if scanErr := rows.Scan(&runID); scanErr != nil {
+			_ = rows.Close()
+			err = scanErr
+			return nil, err
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		err = closeErr
+		return nil, err
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	result := &adminplusdomain.SchedulerCleanupResult{RunID: "bulk"}
+	if taskType != "" {
+		result.RunID = "task_type:" + taskType
+	}
+	if len(runIDs) == 0 {
+		err = tx.Commit()
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	if exec, execErr := tx.ExecContext(ctx, `DELETE FROM admin_plus_scheduler_attempts WHERE run_id = ANY($1)`, pq.Array(runIDs)); execErr != nil {
+		err = execErr
+		return nil, err
+	} else {
+		result.DeletedAttempts, _ = exec.RowsAffected()
+	}
+	if exec, execErr := tx.ExecContext(ctx, `DELETE FROM admin_plus_scheduler_steps WHERE run_id = ANY($1)`, pq.Array(runIDs)); execErr != nil {
+		err = execErr
+		return nil, err
+	} else {
+		result.DeletedSteps, _ = exec.RowsAffected()
+	}
+	if exec, execErr := tx.ExecContext(ctx, `DELETE FROM admin_plus_scheduler_runs WHERE id = ANY($1)`, pq.Array(runIDs)); execErr != nil {
+		err = execErr
+		return nil, err
+	} else {
+		result.DeletedRuns, _ = exec.RowsAffected()
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *SQLRepository) ListAttempts(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerAttemptRecord, error) {
@@ -421,17 +558,19 @@ func (r *SQLRepository) ClaimStep(ctx context.Context, workerID string, lease ti
 	}
 	row := r.db.QueryRowContext(ctx, `
 		WITH picked AS (
-			SELECT id
-			FROM admin_plus_scheduler_steps
+			SELECT step.id
+			FROM admin_plus_scheduler_steps AS step
+			JOIN admin_plus_scheduler_runs AS run ON run.id = step.run_id
 			WHERE (
-				status IN ('queued', 'retryable_failed')
-				OR (status = 'running' AND locked_until IS NOT NULL AND locked_until < NOW())
+				step.status IN ('queued', 'retryable_failed')
+				OR (step.status = 'running' AND step.locked_until IS NOT NULL AND step.locked_until < NOW())
 			)
-			  AND next_attempt_at <= NOW()
-			  AND attempts < max_attempts
-			ORDER BY next_attempt_at ASC, id ASC
+			  AND run.status IN ('queued', 'running', 'retryable_failed', 'partial_succeeded', 'manual_required')
+			  AND step.next_attempt_at <= NOW()
+			  AND step.attempts < step.max_attempts
+			ORDER BY step.next_attempt_at ASC, step.id ASC
 			LIMIT 1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF step SKIP LOCKED
 		),
 		updated AS (
 			UPDATE admin_plus_scheduler_steps AS step
@@ -479,6 +618,7 @@ func (r *SQLRepository) CompleteStep(ctx context.Context, stepID int64, status s
 			SELECT id, run_id, supplier_id, task_type, locked_by, attempts, started_at, request_snapshot
 			FROM admin_plus_scheduler_steps
 			WHERE id = $1
+			  AND status = 'running'
 		),
 		updated_step AS (
 			UPDATE admin_plus_scheduler_steps AS step

@@ -1,12 +1,14 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -29,6 +31,8 @@ func buildSessionBundle(supplierID int64, origin string, apiBaseURL string, user
 		"username":       stringFromAny(loginData["username"]),
 		"display_name":   stringFromAny(loginData["display_name"]),
 		"group":          stringFromAny(loginData["group"]),
+		"role":           newAPIIntText(loginData["role"]),
+		"status":         newAPIIntText(loginData["status"]),
 	}
 	bundle := map[string]any{
 		"provider_type":     "new_api",
@@ -266,4 +270,87 @@ func stringFromAny(value any) string {
 		return strings.TrimSpace(s)
 	}
 	return ""
+}
+
+func newAPIRoleFromBundle(bundle map[string]any) (int64, bool) {
+	contextValue := mapValue(bundle, "context")
+	for _, value := range []any{
+		contextValue["role"],
+		bundle["role"],
+		contextValue["user_role"],
+		bundle["user_role"],
+	} {
+		if role := int64FromAny(value); role != 0 {
+			return role, true
+		}
+	}
+	return 0, false
+}
+
+func newAPIIntText(value any) string {
+	if text := stringFromAny(value); text != "" {
+		return text
+	}
+	if n := int64FromAny(value); n != 0 {
+		return strconv.FormatInt(n, 10)
+	}
+	return ""
+}
+
+func applyProfileToSessionBundle(bundle map[string]any, probe *ports.SessionProbeResult) {
+	if bundle == nil || probe == nil || probe.Profile == nil {
+		return
+	}
+	contextValue := mapValue(bundle, "context")
+	if contextValue == nil {
+		contextValue = map[string]any{}
+		bundle["context"] = contextValue
+	}
+	if strings.TrimSpace(probe.Profile.Role) != "" {
+		contextValue["role"] = strings.TrimSpace(probe.Profile.Role)
+	}
+	if strings.TrimSpace(probe.Profile.Status) != "" {
+		contextValue["status"] = strings.TrimSpace(probe.Profile.Status)
+	}
+}
+
+func newAPIAdminSessionRequired(currentRole int64, roleKnown bool) error {
+	metadata := map[string]string{
+		"required_role": "10",
+		"suggestion":    "请先在供应商设置中执行一键登录，并使用 new-api 管理员或 root 账号重新登录。",
+	}
+	if roleKnown {
+		metadata["current_role"] = strconv.FormatInt(currentRole, 10)
+	}
+	return infraerrors.New(
+		http.StatusConflict,
+		"SUPPLIER_NEW_API_ADMIN_SESSION_REQUIRED",
+		"new-api 历史全量数据需要管理员/root 会话；普通用户会话只能读取自己的受限数据",
+	).WithMetadata(metadata)
+}
+
+func isNewAPIAdminPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	reason := strings.ToUpper(strings.TrimSpace(infraerrors.Reason(err)))
+	if reason == "SUPPLIER_SESSION_PERMISSION_DENIED" {
+		return true
+	}
+	code := infraerrors.Code(err)
+	return code == http.StatusUnauthorized || code == http.StatusForbidden
+}
+
+func waitForProviderPage(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

@@ -31,7 +31,6 @@ const (
 	defaultWindowMinutes = 5
 	dailyBucketLayout    = "20060102"
 	windowBucketLayout   = "200601021504"
-	costBackfillWindow   = 6 * time.Hour
 
 	actionDirectSync    = "direct_sync"
 	actionExtensionTask = "extension_task"
@@ -79,10 +78,12 @@ type Service struct {
 
 type Repository interface {
 	SaveRun(ctx context.Context, run adminplusdomain.SchedulerRunSummary, steps []adminplusdomain.ScheduledTask) error
-	ListRuns(ctx context.Context, limit int) ([]adminplusdomain.SchedulerRunSummary, error)
+	ListRuns(ctx context.Context, limit int, offset int, taskType string) ([]adminplusdomain.SchedulerRunSummary, error)
 	GetRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerRunSummary, error)
-	ListSteps(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerStepRecord, error)
+	ListSteps(ctx context.Context, runID string, limit int, offset int) ([]adminplusdomain.SchedulerStepRecord, error)
 	ListAttempts(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerAttemptRecord, error)
+	DeleteRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerCleanupResult, error)
+	DeleteRuns(ctx context.Context, taskType string) (*adminplusdomain.SchedulerCleanupResult, error)
 	RetryStep(ctx context.Context, stepID int64, retryAt time.Time) (*adminplusdomain.SchedulerStepRecord, error)
 	CancelStep(ctx context.Context, stepID int64, cancelledAt time.Time) (*adminplusdomain.SchedulerStepRecord, error)
 	CancelRun(ctx context.Context, runID string, cancelledAt time.Time) (*adminplusdomain.SchedulerRunSummary, error)
@@ -273,22 +274,19 @@ func (s *Service) EnqueueCostHistoryBackfill(ctx context.Context, in CostBackfil
 		if in.SupplierID > 0 && supplier.ID != in.SupplierID {
 			continue
 		}
-		stepRequests := costBackfillStepRequests(in)
-		for index, stepRequest := range stepRequests {
-			item := adminplusdomain.ScheduledTask{
-				SupplierID:   supplier.ID,
-				SupplierName: supplier.Name,
-				TaskType:     adminplusdomain.ExtensionTaskTypeReconcileCosts,
-				Action:       actionDirectSync,
-				ScheduleKey:  costBackfillScheduleKey(supplier.ID, in.Now, stepRequest, index),
-				Request:      cloneMap(stepRequest),
-			}
-			if reason := ineligibleReason(supplier, item.TaskType); reason != "" {
-				item.Reason = reason
-				skipped++
-			}
-			items = append(items, item)
+		item := adminplusdomain.ScheduledTask{
+			SupplierID:   supplier.ID,
+			SupplierName: supplier.Name,
+			TaskType:     adminplusdomain.ExtensionTaskTypeReconcileCosts,
+			Action:       actionDirectSync,
+			ScheduleKey:  fmt.Sprintf("scheduler:%s:supplier:%d:%s", adminplusdomain.ExtensionTaskTypeReconcileCosts, supplier.ID, in.Now.Format(windowBucketLayout)),
+			Request:      cloneMap(request),
 		}
+		if reason := ineligibleReason(supplier, item.TaskType); reason != "" {
+			item.Reason = reason
+			skipped++
+		}
+		items = append(items, item)
 	}
 	requestedAt := in.Now.UTC()
 	summary := adminplusdomain.SchedulerRunSummary{
@@ -462,7 +460,7 @@ func (s *Service) Status() adminplusdomain.SchedulerStatus {
 
 func (s *Service) CenterStatus(ctx context.Context) adminplusdomain.SchedulerCenterStatus {
 	settings := s.Settings(ctx)
-	runs := s.ListRuns(ctx, 20)
+	runs := s.ListRuns(ctx, 20, 0, "")
 	plans := s.ListPlans(ctx)
 	now := s.now().UTC()
 	var lastRunAt *time.Time
@@ -594,12 +592,16 @@ func (s *Service) UpdatePlanConfig(ctx context.Context, planID string, config ad
 	return &enriched[0], nil
 }
 
-func (s *Service) ListRuns(ctx context.Context, limit int) []adminplusdomain.SchedulerRunSummary {
+func (s *Service) ListRuns(ctx context.Context, limit int, offset int, taskType string) []adminplusdomain.SchedulerRunSummary {
 	if limit <= 0 {
 		limit = 20
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	taskType = strings.TrimSpace(taskType)
 	if s.repo != nil {
-		runs, err := s.repo.ListRuns(ctx, limit)
+		runs, err := s.repo.ListRuns(ctx, limit, offset, taskType)
 		if err == nil {
 			return runs
 		}
@@ -609,11 +611,19 @@ func (s *Service) ListRuns(ctx context.Context, limit int) []adminplusdomain.Sch
 	if len(s.recentRuns) == 0 {
 		return []adminplusdomain.SchedulerRunSummary{}
 	}
-	if len(s.recentRuns) < limit {
-		limit = len(s.recentRuns)
+	if offset >= len(s.recentRuns) {
+		return []adminplusdomain.SchedulerRunSummary{}
 	}
 	out := make([]adminplusdomain.SchedulerRunSummary, 0, limit)
+	skipped := 0
 	for i := len(s.recentRuns) - 1; i >= 0 && len(out) < limit; i-- {
+		if taskType != "" && s.recentRuns[i].TaskType != taskType {
+			continue
+		}
+		if skipped < offset {
+			skipped++
+			continue
+		}
 		out = append(out, s.recentRuns[i])
 	}
 	return out
@@ -632,7 +642,7 @@ func (s *Service) GetRunDetail(ctx context.Context, runID string) (*adminplusdom
 		if err != nil {
 			return nil, err
 		}
-		steps, err := s.repo.ListSteps(ctx, runID, 500)
+		steps, err := s.repo.ListSteps(ctx, runID, 100, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -643,7 +653,7 @@ func (s *Service) GetRunDetail(ctx context.Context, runID string) (*adminplusdom
 		attachStepAttempts(steps, attempts)
 		return &adminplusdomain.SchedulerRunDetail{Run: *run, Steps: steps}, nil
 	}
-	for _, run := range s.ListRuns(ctx, 100) {
+	for _, run := range s.ListRuns(ctx, 100, 0, "") {
 		if run.ID == runID {
 			return &adminplusdomain.SchedulerRunDetail{Run: run, Steps: []adminplusdomain.SchedulerStepRecord{}}, nil
 		}
@@ -651,11 +661,33 @@ func (s *Service) GetRunDetail(ctx context.Context, runID string) (*adminplusdom
 	return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_RUN_NOT_FOUND", "scheduler run not found")
 }
 
-func (s *Service) ListSteps(ctx context.Context, runID string, limit int) ([]adminplusdomain.SchedulerStepRecord, error) {
+func (s *Service) ListSteps(ctx context.Context, runID string, limit int, offset int) ([]adminplusdomain.SchedulerStepRecord, error) {
 	if s.repo == nil {
 		return []adminplusdomain.SchedulerStepRecord{}, nil
 	}
-	return s.repo.ListSteps(ctx, strings.TrimSpace(runID), limit)
+	return s.repo.ListSteps(ctx, strings.TrimSpace(runID), limit, offset)
+}
+
+func (s *Service) DeleteRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerCleanupResult, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "ADMIN_PLUS_SCHEDULER_RUN_ID_REQUIRED", "scheduler run id is required")
+	}
+	if s.repo == nil {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_REPOSITORY_REQUIRED", "scheduler run cleanup requires persistent scheduler repository")
+	}
+	result, err := s.repo.DeleteRun(ctx, runID)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusNotFound, "ADMIN_PLUS_SCHEDULER_RUN_NOT_FOUND", "scheduler run not found")
+	}
+	return result, err
+}
+
+func (s *Service) DeleteRuns(ctx context.Context, taskType string) (*adminplusdomain.SchedulerCleanupResult, error) {
+	if s.repo == nil {
+		return nil, infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_REPOSITORY_REQUIRED", "scheduler run cleanup requires persistent scheduler repository")
+	}
+	return s.repo.DeleteRuns(ctx, strings.TrimSpace(taskType))
 }
 
 func attachStepAttempts(steps []adminplusdomain.SchedulerStepRecord, attempts []adminplusdomain.SchedulerAttemptRecord) {
@@ -953,74 +985,6 @@ func costBackfillRequestSnapshot(in CostBackfillInput) map[string]any {
 	}
 }
 
-func costBackfillStepRequests(in CostBackfillInput) []map[string]any {
-	startedAt := normalizeTimePtr(in.StartedAt)
-	endedAt := normalizeTimePtr(in.EndedAt)
-	if startedAt == nil || endedAt == nil || !startedAt.Before(*endedAt) {
-		return []map[string]any{costBackfillRequestSnapshot(in)}
-	}
-	if endedAt.Sub(*startedAt) <= costBackfillWindow {
-		return []map[string]any{costBackfillRequestSnapshot(in)}
-	}
-	windows := splitTimeWindow(*startedAt, *endedAt, costBackfillWindow)
-	out := make([]map[string]any, 0, len(windows))
-	for index, window := range windows {
-		stepInput := in
-		stepStartedAt := window.startedAt
-		stepEndedAt := window.endedAt
-		stepInput.StartedAt = &stepStartedAt
-		stepInput.EndedAt = &stepEndedAt
-		stepInput.IncludeBalanceSnapshot = in.IncludeBalanceSnapshot && index == len(windows)-1
-		request := costBackfillRequestSnapshot(stepInput)
-		request["window_index"] = index + 1
-		request["window_total"] = len(windows)
-		request["window_seconds"] = int64(costBackfillWindow.Seconds())
-		out = append(out, request)
-	}
-	return out
-}
-
-func costBackfillScheduleKey(supplierID int64, now time.Time, request map[string]any, index int) string {
-	startedAt := strings.ReplaceAll(strings.ReplaceAll(stringValueAny(request["started_at"]), ":", ""), "-", "")
-	endedAt := strings.ReplaceAll(strings.ReplaceAll(stringValueAny(request["ended_at"]), ":", ""), "-", "")
-	windowPart := strings.TrimSpace(startedAt + "-" + endedAt)
-	if windowPart == "-" {
-		windowPart = fmt.Sprintf("%03d", index+1)
-	}
-	return fmt.Sprintf("scheduler:%s:supplier:%d:%s:%s", adminplusdomain.ExtensionTaskTypeReconcileCosts, supplierID, now.Format(windowBucketLayout), windowPart)
-}
-
-type costBackfillTimeWindow struct {
-	startedAt time.Time
-	endedAt   time.Time
-}
-
-func splitTimeWindow(startedAt time.Time, endedAt time.Time, size time.Duration) []costBackfillTimeWindow {
-	if size <= 0 {
-		size = costBackfillWindow
-	}
-	out := []costBackfillTimeWindow{}
-	cursor := startedAt.UTC()
-	end := endedAt.UTC()
-	for cursor.Before(end) {
-		next := cursor.Add(size)
-		if next.After(end) {
-			next = end
-		}
-		out = append(out, costBackfillTimeWindow{startedAt: cursor, endedAt: next})
-		cursor = next
-	}
-	return out
-}
-
-func normalizeTimePtr(value *time.Time) *time.Time {
-	if value == nil || value.IsZero() {
-		return nil
-	}
-	utc := value.UTC()
-	return &utc
-}
-
 func costSyncInputFromSnapshot(supplierID int64, snapshot map[string]any) costsapp.SyncInput {
 	return costsapp.SyncInput{
 		SupplierID:                     supplierID,
@@ -1165,7 +1129,12 @@ func (s *Service) ProcessNext(ctx context.Context, workerID string) (bool, error
 		return false, err
 	}
 	finishedAt := s.now().UTC()
-	status, total, reason, result := s.executeClaimedStep(ctx, step, finishedAt)
+	stepCtx, cancelStep := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go s.cancelClaimedStepWhenRunStops(stepCtx, step.RunID, cancelStep, monitorDone)
+	status, total, reason, result := s.executeClaimedStep(stepCtx, step, finishedAt)
+	close(monitorDone)
+	cancelStep()
 	if err := s.repo.CompleteStep(ctx, step.ID, status, total, reason, result, finishedAt); err != nil {
 		return true, err
 	}
@@ -1173,6 +1142,41 @@ func (s *Service) ProcessNext(ctx context.Context, workerID string) (bool, error
 		return true, err
 	}
 	return true, nil
+}
+
+func (s *Service) cancelClaimedStepWhenRunStops(ctx context.Context, runID string, cancel context.CancelFunc, done <-chan struct{}) {
+	if s == nil || s.repo == nil || strings.TrimSpace(runID) == "" || cancel == nil {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run, err := s.repo.GetRun(ctx, runID)
+			if err != nil || run == nil {
+				continue
+			}
+			if schedulerRunAllowsClaimedStep(run.Status) {
+				continue
+			}
+			cancel()
+			return
+		}
+	}
+}
+
+func schedulerRunAllowsClaimedStep(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "running", "retryable_failed", "partial_succeeded", "manual_required":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) EnqueueDuePlan(ctx context.Context) (bool, error) {
@@ -1605,7 +1609,7 @@ func (s *Service) attachPlanStats(ctx context.Context, plans []adminplusdomain.S
 			return plans
 		}
 	}
-	runs := s.ListRuns(context.Background(), 100)
+	runs := s.ListRuns(context.Background(), 100, 0, "")
 	for idx := range plans {
 		for runIdx := range runs {
 			run := runs[runIdx]
@@ -2054,7 +2058,8 @@ func syncFailureOutcome(code string) string {
 		"LOGIN_MFA_REQUIRED",
 		"BROWSER_FALLBACK_REQUIRED",
 		"BROWSER_CHALLENGE_REQUIRED",
-		"SUPPLIER_SESSION_PERMISSION_DENIED":
+		"SUPPLIER_SESSION_PERMISSION_DENIED",
+		"SUPPLIER_NEW_API_ADMIN_SESSION_REQUIRED":
 		return "manual_required"
 	default:
 		return "failed"
@@ -2067,6 +2072,8 @@ func syncFailureSuggestion(code string) string {
 		return "重新一键登录或使用 Chrome 插件采集会话后重试。"
 	case "SUPPLIER_SESSION_PERMISSION_DENIED":
 		return "供应商会话无权读取该接口，请重新登录、检查账号权限或改用插件采集最新会话。"
+	case "SUPPLIER_NEW_API_ADMIN_SESSION_REQUIRED":
+		return "new-api 历史全量需要管理员/root 会话，请先执行一键登录并使用管理员账号重新登录后重试。"
 	case "SUPPLIER_SESSION_PROBE_FAILED":
 		return "供应商接口超时或不可达，请检查供应商地址、网络出口和前置防护后重试。"
 	case "SUPPLIER_SESSION_PROBE_HTML", "SUPPLIER_SESSION_PROBE_BAD_STATUS", "SUPPLIER_DIRECT_LOGIN_UPSTREAM_HTML", "SUPPLIER_DIRECT_LOGIN_UPSTREAM_ORIGIN_ERROR":
@@ -2098,7 +2105,8 @@ func isSessionRefreshableCode(code string) bool {
 	case "SUPPLIER_SESSION_NOT_FOUND",
 		"SUPPLIER_SESSION_EXPIRED",
 		"SUPPLIER_SESSION_DECRYPT_FAILED",
-		"SUPPLIER_SESSION_PERMISSION_DENIED":
+		"SUPPLIER_SESSION_PERMISSION_DENIED",
+		"SUPPLIER_NEW_API_ADMIN_SESSION_REQUIRED":
 		return true
 	default:
 		return false
@@ -2120,6 +2128,7 @@ func isManualRequiredLoginCode(code string) bool {
 	case "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED",
 		"SUPPLIER_DIRECT_LOGIN_API_BASE_URL_REQUIRED",
 		"SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED",
+		"SUPPLIER_NEW_API_ADMIN_SESSION_REQUIRED",
 		"SUPPLIER_DIRECT_LOGIN_UNSUPPORTED",
 		"LOGIN_CREDENTIAL_INVALID",
 		"LOGIN_CAPTCHA_REQUIRED",

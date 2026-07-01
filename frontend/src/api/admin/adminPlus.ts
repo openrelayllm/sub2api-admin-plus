@@ -1958,6 +1958,13 @@ export interface SchedulerRunDetail {
   steps: SchedulerStepRecord[]
 }
 
+export interface SchedulerCleanupResult {
+  run_id: string
+  deleted_runs: number
+  deleted_steps: number
+  deleted_attempts: number
+}
+
 export interface SchedulerSupplierStatus {
   supplier_id: number
   supplier_name: string
@@ -2678,13 +2685,28 @@ export async function createSchedulerRun(payload: {
   return data
 }
 
-export async function listSchedulerRuns(params?: { limit?: number }): Promise<SchedulerRunSummary[]> {
+export async function listSchedulerRuns(params?: { limit?: number; offset?: number; task_type?: string }): Promise<SchedulerRunSummary[]> {
   const { data } = await apiClient.get<SchedulerRunSummary[]>('/admin-plus/scheduler/runs', { params })
   return data
 }
 
 export async function getSchedulerRunDetail(id: string): Promise<SchedulerRunDetail> {
   const { data } = await apiClient.get<SchedulerRunDetail>(`/admin-plus/scheduler/runs/${id}`)
+  return data
+}
+
+export async function listSchedulerSteps(params?: { run_id?: string; limit?: number; offset?: number }): Promise<SchedulerStepRecord[]> {
+  const { data } = await apiClient.get<SchedulerStepRecord[]>('/admin-plus/scheduler/steps', { params })
+  return data
+}
+
+export async function deleteSchedulerRun(id: string): Promise<SchedulerCleanupResult> {
+  const { data } = await apiClient.delete<SchedulerCleanupResult>(`/admin-plus/scheduler/runs/${id}`)
+  return data
+}
+
+export async function deleteSchedulerRuns(params?: { task_type?: string }): Promise<SchedulerCleanupResult> {
+  const { data } = await apiClient.delete<SchedulerCleanupResult>('/admin-plus/scheduler/runs', { params })
   return data
 }
 
@@ -3442,6 +3464,9 @@ export const adminPlusAPI = {
   createSchedulerRun,
   listSchedulerRuns,
   getSchedulerRunDetail,
+  listSchedulerSteps,
+  deleteSchedulerRun,
+  deleteSchedulerRuns,
   cancelSchedulerRun,
   retrySchedulerRunFailedSteps,
   retrySchedulerStep,
