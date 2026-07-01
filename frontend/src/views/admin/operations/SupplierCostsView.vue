@@ -363,11 +363,12 @@
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">结果</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">时间</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">错误/原因</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">操作</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-900">
                   <tr v-if="activeBackfillRun.steps.length === 0">
-                    <td colspan="6" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-dark-400">暂无 step 明细</td>
+                    <td colspan="7" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-dark-400">暂无 step 明细</td>
                   </tr>
                   <tr v-for="step in activeBackfillRun.steps" :key="step.id">
                     <td class="px-4 py-3 font-mono text-xs text-gray-500 dark:text-dark-400">{{ step.id }}</td>
@@ -379,8 +380,55 @@
                       <div v-if="step.finished_at" class="mt-1 text-xs text-gray-400 dark:text-dark-500">完成 {{ formatDateTime(step.finished_at) }}</div>
                     </td>
                     <td class="max-w-[260px] px-4 py-3 text-sm text-gray-500 dark:text-dark-400">
-                      <span class="block truncate" :title="step.reason || ''">{{ step.reason || '-' }}</span>
+                      <button
+                        v-if="step.reason"
+                        type="button"
+                        class="block max-w-full text-left hover:text-gray-900 dark:hover:text-gray-100"
+                        @click="selectedReasonStep = step"
+                      >
+                        <span class="block truncate" :title="step.reason">{{ stepReasonSummary(step.reason) }}</span>
+                        <span class="mt-1 block text-xs font-medium text-blue-700 dark:text-blue-300">查看详情</span>
+                      </button>
+                      <span v-else>-</span>
                     </td>
+                    <td class="px-4 py-3">
+                      <div class="flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-secondary btn-sm" :disabled="retryingStepId === step.id || !stepRetryable(step.status)" @click="retryStep(step.id)">重试</button>
+                        <button type="button" class="btn btn-secondary btn-sm" :disabled="cancellingStepId === step.id || !stepCancellable(step.status)" @click="cancelStep(step.id)">取消</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-dark-700">
+              <table class="w-full min-w-[860px] divide-y divide-gray-200 dark:divide-dark-700">
+                <thead class="bg-gray-50 dark:bg-dark-800">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">Run</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">状态</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">供应商</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">Step</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500 dark:text-dark-400">请求时间</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-900">
+                  <tr v-if="costRuns.length === 0">
+                    <td colspan="5" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-dark-400">暂无成本对账运行记录</td>
+                  </tr>
+                  <tr
+                    v-for="run in costRuns"
+                    :key="run.id"
+                    class="cursor-pointer hover:bg-gray-50 dark:hover:bg-dark-800"
+                    :class="activeBackfillRun?.run.id === run.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''"
+                    @click="openCostRun(run.id)"
+                  >
+                    <td class="px-4 py-3 font-mono text-xs text-gray-500 dark:text-dark-400">{{ run.id }}</td>
+                    <td class="px-4 py-3"><span class="badge" :class="runStatusClass(run.status)">{{ runStatusLabel(run.status) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-dark-400">{{ run.supplier_count }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-dark-400">{{ run.succeeded_steps }}/{{ run.total_steps }} 成功，{{ run.failed_steps }} 失败</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(run.requested_at) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -415,44 +463,110 @@
         </aside>
       </section>
     </div>
+
+    <BaseDialog
+      :show="Boolean(selectedReasonStep)"
+      :title="selectedReasonStep ? `错误详情 - Step ${selectedReasonStep.id}` : '错误详情'"
+      width="wide"
+      @close="selectedReasonStep = null"
+    >
+      <div v-if="selectedReasonStep" class="space-y-5">
+        <div class="grid gap-3 md:grid-cols-3">
+          <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+            <p class="text-xs text-gray-500 dark:text-dark-400">供应商</p>
+            <p class="mt-2 text-sm font-medium text-gray-900 dark:text-white">
+              {{ selectedReasonStep.supplier_name || supplierName(selectedReasonStep.supplier_id) }}
+            </p>
+          </div>
+          <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+            <p class="text-xs text-gray-500 dark:text-dark-400">状态</p>
+            <span class="badge mt-2" :class="runStatusClass(selectedReasonStep.status)">{{ runStatusLabel(selectedReasonStep.status) }}</span>
+          </div>
+          <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+            <p class="text-xs text-gray-500 dark:text-dark-400">Attempt</p>
+            <p class="mt-2 text-sm font-medium text-gray-900 dark:text-white">{{ selectedReasonStep.attempts }}/{{ selectedReasonStep.max_attempts }}</p>
+          </div>
+        </div>
+
+        <dl class="grid gap-3 md:grid-cols-2">
+          <div v-for="row in selectedReasonRows" :key="row.label" class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+            <dt class="text-xs text-gray-500 dark:text-dark-400">{{ row.label }}</dt>
+            <dd class="mt-2 break-words text-sm font-medium text-gray-900 dark:text-gray-100">{{ row.value || '-' }}</dd>
+          </div>
+        </dl>
+
+        <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+          <p class="text-xs text-gray-500 dark:text-dark-400">完整错误</p>
+          <pre class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-3 text-xs text-gray-700 dark:bg-dark-800 dark:text-dark-200">{{ selectedRawReason }}</pre>
+        </div>
+
+        <div v-if="selectedReasonStep.result_snapshot || selectedReasonStep.request_snapshot" class="grid gap-3 md:grid-cols-2">
+          <div v-if="selectedReasonStep.request_snapshot" class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+            <p class="text-xs text-gray-500 dark:text-dark-400">请求快照</p>
+            <pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-3 text-xs text-gray-700 dark:bg-dark-800 dark:text-dark-200">{{ formatReasonSnapshot(selectedReasonStep.request_snapshot) }}</pre>
+          </div>
+          <div v-if="selectedReasonStep.result_snapshot" class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+            <p class="text-xs text-gray-500 dark:text-dark-400">结果快照</p>
+            <pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-3 text-xs text-gray-700 dark:bg-dark-800 dark:text-dark-200">{{ formatReasonSnapshot(selectedReasonStep.result_snapshot) }}</pre>
+          </div>
+        </div>
+      </div>
+    </BaseDialog>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import {
   backfillSupplierCosts,
+  cancelSchedulerStep,
   getSchedulerRunDetail,
   getSupplierCostLedgerOverview,
   getSupplierCostSummary,
-  getSupplierProvisionJob,
   listSupplierCostLedger,
   listSupplierCostSnapshots,
   listSupplierEntitlementTransactions,
   listSupplierFundingTransactions,
+  listSchedulerRuns,
   listSuppliers,
-  syncSupplierCosts,
+  retrySchedulerStep,
   type SchedulerRunDetail,
+  type SchedulerRunSummary,
+  type SchedulerStepRecord,
   type Supplier,
   type SupplierCostLedgerEntry,
   type SupplierCostLedgerOverview,
   type SupplierCostLedgerOverviewItem,
   type SupplierCostSnapshot,
-  type SupplierCostSyncResultSnapshot,
   type SupplierEntitlementTransaction,
-  type SupplierFundingTransaction,
-  type SupplierProvisionJob,
-  type SupplierProvisionStatus
+  type SupplierFundingTransaction
 } from '@/api/admin/adminPlus'
 import {
   supplierBalanceDeltaCents,
   supplierDisplayUsageCents,
   supplierRechargeTotalCents
 } from './supplierCostPresentation'
-import { runStatusClass, runStatusLabel } from '../scheduler/presentation'
+import {
+  actionLabel,
+  codeFromReasonText,
+  firstText,
+  formatReasonSnapshot,
+  metadataSummary,
+  outcomeLabel,
+  parseStepReason,
+  plainStepReason,
+  runStatusClass,
+  runStatusLabel,
+  stageLabel,
+  stepCancellable,
+  stepReasonSummary,
+  stepRetryable,
+  suggestionFromCode
+} from '../scheduler/presentation'
 
 type TopTab = 'overview' | 'suppliers' | 'detail' | 'backfill'
 type DetailTab = 'summary' | 'funding' | 'entitlements' | 'ledger'
@@ -474,10 +588,11 @@ const ledger = ref<SupplierCostLedgerEntry[]>([])
 const selectedSupplierId = ref(0)
 const activeTopTab = ref<TopTab>('overview')
 const activeDetailTab = ref<DetailTab>('summary')
-const activeSyncJob = ref<SupplierProvisionJob | null>(null)
-const lastSync = ref<SupplierCostSyncResultSnapshot | null>(null)
 const activeBackfillRun = ref<SchedulerRunDetail | null>(null)
-let syncJobTimer: number | undefined
+const costRuns = ref<SchedulerRunSummary[]>([])
+const retryingStepId = ref<number | null>(null)
+const cancellingStepId = ref<number | null>(null)
+const selectedReasonStep = ref<SchedulerStepRecord | null>(null)
 let backfillRunTimer: number | undefined
 
 const syncForm = reactive({
@@ -507,12 +622,43 @@ const currentBalanceDelta = computed(() => supplierBalanceDeltaCents(currentSnap
 const balanceDeltaClass = computed(() => deltaClass(currentBalanceDelta.value))
 const ledgerOverviewItems = computed<SupplierCostLedgerOverviewItem[]>(() => ledgerOverview.value?.items || [])
 const syncStatusLabel = computed(() => {
-  if (activeSyncJob.value) return syncJobCaption(activeSyncJob.value)
-  if (syncing.value) return '成本同步任务已提交'
-  if (lastSync.value) return `上次同步：充值 ${lastSync.value.funding_transactions || 0}，兑换 ${lastSync.value.entitlement_transactions || 0}，用量 ${lastSync.value.usage_cost_lines || 0}`
+  if (syncing.value) return '成本同步任务已提交到后台'
+  if (activeBackfillRun.value) return runCaption(activeBackfillRun.value.run)
   if (!selectedSupplierId.value) return '选择供应商后同步成本'
   return '等待同步'
 })
+const selectedFailureReason = computed(() => parseStepReason(selectedReasonStep.value?.reason))
+const selectedRawReason = computed(() => selectedReasonStep.value?.reason || '-')
+const selectedReasonRows = computed(() => {
+  const step = selectedReasonStep.value
+  const reason = selectedFailureReason.value
+  if (!step) return []
+  const code = firstText(reason.login_code, reason.code, codeFromReasonText(step.reason || ''))
+  return [
+    { label: '阶段', value: stageLabel(reason.stage) },
+    { label: '动作', value: actionLabel(reason.action || step.action) },
+    { label: '结果', value: outcomeLabel(reason.outcome || step.status) },
+    { label: '自动登录尝试', value: loginAttemptLabel(reason) },
+    { label: '人工协助', value: manualRequiredLabel(reason, step.status) },
+    { label: '错误码', value: code },
+    { label: '错误信息', value: firstText(reason.login_message, reason.message, plainStepReason(step.reason || '')) },
+    { label: '建议操作', value: reason.suggestion || suggestionFromCode(code) },
+    { label: '上游诊断', value: metadataSummary(reason.metadata) },
+    { label: '下次重试', value: formatDateTime(step.next_attempt_at) }
+  ]
+})
+
+function loginAttemptLabel(reason: ReturnType<typeof parseStepReason>): string {
+  if (reason.metadata?.login_attempted === 'true') return '已尝试一键登录'
+  if (reason.metadata?.login_attempted === 'false') return '未尝试，缺少登录配置'
+  if (reason.action === 'direct_login') return '已进入一键登录'
+  return '未记录'
+}
+
+function manualRequiredLabel(reason: ReturnType<typeof parseStepReason>, status: string): string {
+  if (reason.outcome === 'manual_required' || status === 'manual_required') return '需要人工协助'
+  return '不需要，后台可重试'
+}
 
 function formatMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
@@ -606,34 +752,16 @@ function ledgerBadgeClass(value: string): string {
   return 'badge-success'
 }
 
-function syncJobStatusLabel(status?: SupplierProvisionStatus): string {
-  if (status === 'queued') return '排队中'
-  if (status === 'running') return '执行中'
-  if (status === 'succeeded') return '已完成'
-  if (status === 'partial_succeeded') return '部分完成'
-  if (status === 'retryable_failed') return '等待重试'
-  if (status === 'manual_required') return '需人工处理'
-  if (status === 'dead') return '失败'
-  if (status === 'cancelled') return '已取消'
-  return '未知'
-}
-
-function syncJobCaption(job: SupplierProvisionJob): string {
-  const prefix = `成本同步任务 #${job.id} ${syncJobStatusLabel(job.status)}`
-  if (job.error_message) return `${prefix}：${job.error_message}`
-  if (job.status === 'succeeded') return `${prefix}，正在刷新成本数据`
-  if (job.status === 'retryable_failed') return `${prefix}，第 ${job.attempts}/${job.max_attempts} 次失败后等待重试`
-  if (job.status === 'running') return `${prefix}，Worker 正在采集供应商事实`
-  if (job.status === 'queued') return `${prefix}，等待 Worker 执行`
-  return prefix
-}
-
-function isTerminalSyncJobStatus(status: SupplierProvisionStatus): boolean {
-  return ['succeeded', 'partial_succeeded', 'manual_required', 'dead', 'cancelled'].includes(status)
-}
-
 function isTerminalRunStatus(status: string): boolean {
   return ['succeeded', 'partial_succeeded', 'retryable_failed', 'manual_required', 'dead', 'cancelled', 'skipped'].includes(status)
+}
+
+function runCaption(run: SchedulerRunSummary): string {
+  const prefix = `成本对账 run #${run.id} ${runStatusLabel(run.status)}`
+  if (run.error_message) return `${prefix}：${run.error_message}`
+  if (run.status === 'running') return `${prefix}，Worker 正在分批采集`
+  if (run.status === 'queued') return `${prefix}，等待 Worker 执行`
+  return prefix
 }
 
 function stepResultLabel(snapshot?: Record<string, unknown>, fallback = 0): string {
@@ -671,8 +799,13 @@ async function loadCurrentTab() {
     } else if (activeTopTab.value === 'detail') {
       await ensureSelectedSupplier()
       await loadDetailIfNeeded(true)
-    } else if (activeTopTab.value === 'backfill' && activeBackfillRun.value) {
-      await refreshBackfillRun(activeBackfillRun.value.run.id)
+    } else if (activeTopTab.value === 'backfill') {
+      await loadCostRuns()
+      if (activeBackfillRun.value) {
+        await refreshBackfillRun(activeBackfillRun.value.run.id, { scheduleNext: true, notifyTerminal: false })
+      } else if (costRuns.value[0]) {
+        await openCostRun(costRuns.value[0].id, false)
+      }
     }
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '加载成本对账失败')
@@ -723,9 +856,6 @@ async function loadDetailIfNeeded(force = false) {
 }
 
 function handleSupplierChange() {
-  stopSyncJobPolling()
-  activeSyncJob.value = null
-  lastSync.value = null
   detailLoadedSupplierId.value = 0
   if (activeTopTab.value === 'detail' && selectedSupplierId.value) {
     void loadCurrentTab()
@@ -744,12 +874,17 @@ async function syncCosts() {
     appStore.showError('请选择供应商')
     return
   }
-  stopSyncJobPolling()
+  stopBackfillPolling()
   syncing.value = true
+  activeTopTab.value = 'backfill'
   try {
-    const job = await syncSupplierCosts(selectedSupplierId.value, syncPayload())
-    appStore.showSuccess(`成本同步任务已提交 #${job.job_id}`)
-    await watchSyncJob(job.job_id)
+    const run = await backfillSupplierCosts({
+      ...syncPayload(),
+      supplier_id: selectedSupplierId.value
+    })
+    appStore.showSuccess(`当前供应商成本同步已提交 #${run.id}`)
+    await loadCostRuns()
+    await watchBackfillRun(run.id)
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '同步成本失败')
     syncing.value = false
@@ -765,6 +900,7 @@ async function startHistoryBackfill() {
       ...syncPayload()
     })
     appStore.showSuccess(`历史回补已提交 #${run.id}`)
+    await loadCostRuns()
     await watchBackfillRun(run.id)
   } catch (error) {
     backfilling.value = false
@@ -783,71 +919,92 @@ function syncPayload() {
   }
 }
 
-async function watchSyncJob(jobID: number) {
-  stopSyncJobPolling()
-  await refreshSyncJob(jobID)
-}
-
-async function refreshSyncJob(jobID: number) {
-  try {
-    const job = await getSupplierProvisionJob(jobID)
-    activeSyncJob.value = job
-    if (isTerminalSyncJobStatus(job.status)) {
-      syncing.value = false
-      if (job.result_snapshot) {
-        lastSync.value = job.result_snapshot as unknown as SupplierCostSyncResultSnapshot
-      }
-      await Promise.all([loadDetailIfNeeded(true), overviewLoaded.value ? loadLedgerOverview() : Promise.resolve()])
-      if (snapshotsLoaded.value) await loadSnapshots()
-      if (job.status === 'succeeded' || job.status === 'partial_succeeded') {
-        appStore.showSuccess('成本同步完成')
-      } else if (job.error_message) {
-        appStore.showError(job.error_message)
-      }
-      return
-    }
-    syncJobTimer = window.setTimeout(() => {
-      void refreshSyncJob(jobID)
-    }, 2000)
-  } catch (error) {
-    syncing.value = false
-    appStore.showError((error as { message?: string }).message || '读取成本同步任务失败')
-  }
-}
-
 async function watchBackfillRun(runID: string) {
   stopBackfillPolling()
-  await refreshBackfillRun(runID)
+  await refreshBackfillRun(runID, { scheduleNext: true, notifyTerminal: true })
 }
 
-async function refreshBackfillRun(runID: string) {
+async function refreshBackfillRun(runID: string, options: { scheduleNext?: boolean; notifyTerminal?: boolean } = {}) {
+  const scheduleNext = options.scheduleNext !== false
+  const notifyTerminal = options.notifyTerminal === true
   try {
     const detail = await getSchedulerRunDetail(runID)
     activeBackfillRun.value = detail
     if (isTerminalRunStatus(detail.run.status)) {
       backfilling.value = false
+      syncing.value = false
+      await loadCostRuns()
       if (snapshotsLoaded.value) await loadSnapshots()
       if (overviewLoaded.value) await loadLedgerOverview()
+      if (!notifyTerminal) {
+        return
+      }
       if (detail.run.status === 'succeeded' || detail.run.status === 'partial_succeeded') {
-        appStore.showSuccess('历史回补完成')
+        appStore.showSuccess('成本对账后台任务完成')
       } else if (detail.run.error_message) {
         appStore.showError(detail.run.error_message)
       }
       return
     }
+    if (!scheduleNext) return
     backfillRunTimer = window.setTimeout(() => {
-      void refreshBackfillRun(runID)
+      void refreshBackfillRun(runID, { scheduleNext: true, notifyTerminal: true })
     }, 2500)
   } catch (error) {
     backfilling.value = false
+    syncing.value = false
     appStore.showError((error as { message?: string }).message || '读取历史回补状态失败')
   }
 }
 
-function stopSyncJobPolling() {
-  if (!syncJobTimer) return
-  window.clearTimeout(syncJobTimer)
-  syncJobTimer = undefined
+async function loadCostRuns() {
+  const runs = await listSchedulerRuns({ limit: 50 })
+  costRuns.value = runs
+    .filter((run) => run.task_type === 'supplier.costs.reconcile' || run.task_type === 'reconcile_supplier_costs')
+    .sort((a, b) => new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime())
+}
+
+async function openCostRun(runID: string, showError = true) {
+  try {
+    stopBackfillPolling()
+    const detail = await getSchedulerRunDetail(runID)
+    activeBackfillRun.value = detail
+    if (!isTerminalRunStatus(detail.run.status)) {
+      backfillRunTimer = window.setTimeout(() => {
+        void refreshBackfillRun(runID, { scheduleNext: true, notifyTerminal: false })
+      }, 2500)
+    }
+  } catch (error) {
+    if (showError) appStore.showError((error as { message?: string }).message || '读取运行详情失败')
+  }
+}
+
+async function retryStep(stepID: number) {
+  retryingStepId.value = stepID
+  try {
+    await retrySchedulerStep(stepID)
+    if (activeBackfillRun.value) await refreshBackfillRun(activeBackfillRun.value.run.id, { scheduleNext: true, notifyTerminal: false })
+    await loadCostRuns()
+    appStore.showSuccess('Step 已重新排队')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '重试 step 失败')
+  } finally {
+    retryingStepId.value = null
+  }
+}
+
+async function cancelStep(stepID: number) {
+  cancellingStepId.value = stepID
+  try {
+    await cancelSchedulerStep(stepID)
+    if (activeBackfillRun.value) await refreshBackfillRun(activeBackfillRun.value.run.id, { scheduleNext: true, notifyTerminal: false })
+    await loadCostRuns()
+    appStore.showSuccess('Step 已取消')
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '取消 step 失败')
+  } finally {
+    cancellingStepId.value = null
+  }
 }
 
 function stopBackfillPolling() {
@@ -858,7 +1015,6 @@ function stopBackfillPolling() {
 
 onMounted(loadCurrentTab)
 onBeforeUnmount(() => {
-  stopSyncJobPolling()
   stopBackfillPolling()
 })
 </script>

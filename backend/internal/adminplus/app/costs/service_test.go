@@ -2,12 +2,14 @@ package costs
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -188,6 +190,48 @@ func TestServiceSyncCountsAutoRedeemEntitlementsWhenFundingIsMissing(t *testing.
 	require.Equal(t, int64(0), result.Snapshot.CompletedFundingAmountCents)
 	require.Equal(t, int64(5000), result.Snapshot.EntitlementAmountCents)
 	require.Equal(t, int64(5000), result.Snapshot.ExpectedBalanceCents)
+}
+
+func TestServiceSyncKeepsGoingWhenOptionalCostCapabilitiesAreMissing(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC)
+	balanceCents := int64(12000)
+	session := &stubCostSessionReader{input: ports.SessionProbeInput{
+		SupplierID: 7,
+		Bundle: map[string]any{
+			"provider_type": "new_api",
+			"system_type":   "new_api",
+		},
+	}}
+	funding := &stubCostFundingReader{err: infraerrors.New(http.StatusConflict, "SUPPLIER_FUNDING_CAPABILITY_MISSING", "supplier session cannot read funding transactions")}
+	entitlements := &stubCostEntitlementReader{err: infraerrors.New(http.StatusConflict, "SUPPLIER_ENTITLEMENT_CAPABILITY_MISSING", "supplier session cannot read entitlement transactions")}
+	balance := &stubCostBalanceSyncer{result: &balancesapp.SyncFromSessionResult{
+		SystemType: "new_api",
+		Snapshot: &adminplusdomain.BalanceSnapshot{
+			SupplierID:    7,
+			BalanceCents:  balanceCents,
+			Currency:      "USD",
+			CapturedAt:    now,
+			RuntimeStatus: adminplusdomain.SupplierRuntimeStatusActive,
+		},
+	}}
+	svc := NewServiceWithDependencies(repo, session, funding, entitlements, nil, balance, nil)
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.Sync(context.Background(), SyncInput{
+		SupplierID:                     7,
+		IncludeFundingTransactions:     true,
+		IncludeEntitlementTransactions: true,
+		IncludeBalanceSnapshot:         true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "new_api", result.ProviderType)
+	require.Equal(t, "new_api", result.SystemType)
+	require.Equal(t, "supplier session cannot read funding transactions", result.Diagnostics["funding_transactions"])
+	require.Equal(t, "supplier session cannot read entitlement transactions", result.Diagnostics["entitlement_transactions"])
+	require.True(t, result.Capabilities["balance_snapshot"])
+	require.Equal(t, int64(7), balance.request.SupplierID)
 }
 
 func TestServiceSyncAppliesSupplierRechargeMultiplierToFundingCost(t *testing.T) {
@@ -577,20 +621,28 @@ func (r *stubCostSessionReader) DecryptedProbeInput(_ context.Context, supplierI
 type stubCostFundingReader struct {
 	result  *ports.ReadFundingTransactionsResult
 	request ports.ReadFundingTransactionsInput
+	err     error
 }
 
 func (r *stubCostFundingReader) ReadFundingTransactions(_ context.Context, _ ports.SessionProbeInput, request ports.ReadFundingTransactionsInput) (*ports.ReadFundingTransactionsResult, error) {
 	r.request = request
+	if r.err != nil {
+		return nil, r.err
+	}
 	return r.result, nil
 }
 
 type stubCostEntitlementReader struct {
 	result  *ports.ReadEntitlementTransactionsResult
 	request ports.ReadEntitlementTransactionsInput
+	err     error
 }
 
 func (r *stubCostEntitlementReader) ReadEntitlementTransactions(_ context.Context, _ ports.SessionProbeInput, request ports.ReadEntitlementTransactionsInput) (*ports.ReadEntitlementTransactionsResult, error) {
 	r.request = request
+	if r.err != nil {
+		return nil, r.err
+	}
 	return r.result, nil
 }
 

@@ -31,6 +31,7 @@ const (
 	defaultWindowMinutes = 5
 	dailyBucketLayout    = "20060102"
 	windowBucketLayout   = "200601021504"
+	costBackfillWindow   = 6 * time.Hour
 
 	actionDirectSync    = "direct_sync"
 	actionExtensionTask = "extension_task"
@@ -155,6 +156,7 @@ type stepFailureInput struct {
 	Stage    string
 	Action   string
 	Err      error
+	Metadata map[string]string
 }
 
 func ProvideService(
@@ -271,19 +273,22 @@ func (s *Service) EnqueueCostHistoryBackfill(ctx context.Context, in CostBackfil
 		if in.SupplierID > 0 && supplier.ID != in.SupplierID {
 			continue
 		}
-		item := adminplusdomain.ScheduledTask{
-			SupplierID:   supplier.ID,
-			SupplierName: supplier.Name,
-			TaskType:     adminplusdomain.ExtensionTaskTypeReconcileCosts,
-			Action:       actionDirectSync,
-			ScheduleKey:  fmt.Sprintf("scheduler:%s:supplier:%d:%s", adminplusdomain.ExtensionTaskTypeReconcileCosts, supplier.ID, in.Now.Format(windowBucketLayout)),
-			Request:      cloneMap(request),
+		stepRequests := costBackfillStepRequests(in)
+		for index, stepRequest := range stepRequests {
+			item := adminplusdomain.ScheduledTask{
+				SupplierID:   supplier.ID,
+				SupplierName: supplier.Name,
+				TaskType:     adminplusdomain.ExtensionTaskTypeReconcileCosts,
+				Action:       actionDirectSync,
+				ScheduleKey:  costBackfillScheduleKey(supplier.ID, in.Now, stepRequest, index),
+				Request:      cloneMap(stepRequest),
+			}
+			if reason := ineligibleReason(supplier, item.TaskType); reason != "" {
+				item.Reason = reason
+				skipped++
+			}
+			items = append(items, item)
 		}
-		if reason := ineligibleReason(supplier, item.TaskType); reason != "" {
-			item.Reason = reason
-			skipped++
-		}
-		items = append(items, item)
 	}
 	requestedAt := in.Now.UTC()
 	summary := adminplusdomain.SchedulerRunSummary{
@@ -948,6 +953,74 @@ func costBackfillRequestSnapshot(in CostBackfillInput) map[string]any {
 	}
 }
 
+func costBackfillStepRequests(in CostBackfillInput) []map[string]any {
+	startedAt := normalizeTimePtr(in.StartedAt)
+	endedAt := normalizeTimePtr(in.EndedAt)
+	if startedAt == nil || endedAt == nil || !startedAt.Before(*endedAt) {
+		return []map[string]any{costBackfillRequestSnapshot(in)}
+	}
+	if endedAt.Sub(*startedAt) <= costBackfillWindow {
+		return []map[string]any{costBackfillRequestSnapshot(in)}
+	}
+	windows := splitTimeWindow(*startedAt, *endedAt, costBackfillWindow)
+	out := make([]map[string]any, 0, len(windows))
+	for index, window := range windows {
+		stepInput := in
+		stepStartedAt := window.startedAt
+		stepEndedAt := window.endedAt
+		stepInput.StartedAt = &stepStartedAt
+		stepInput.EndedAt = &stepEndedAt
+		stepInput.IncludeBalanceSnapshot = in.IncludeBalanceSnapshot && index == len(windows)-1
+		request := costBackfillRequestSnapshot(stepInput)
+		request["window_index"] = index + 1
+		request["window_total"] = len(windows)
+		request["window_seconds"] = int64(costBackfillWindow.Seconds())
+		out = append(out, request)
+	}
+	return out
+}
+
+func costBackfillScheduleKey(supplierID int64, now time.Time, request map[string]any, index int) string {
+	startedAt := strings.ReplaceAll(strings.ReplaceAll(stringValueAny(request["started_at"]), ":", ""), "-", "")
+	endedAt := strings.ReplaceAll(strings.ReplaceAll(stringValueAny(request["ended_at"]), ":", ""), "-", "")
+	windowPart := strings.TrimSpace(startedAt + "-" + endedAt)
+	if windowPart == "-" {
+		windowPart = fmt.Sprintf("%03d", index+1)
+	}
+	return fmt.Sprintf("scheduler:%s:supplier:%d:%s:%s", adminplusdomain.ExtensionTaskTypeReconcileCosts, supplierID, now.Format(windowBucketLayout), windowPart)
+}
+
+type costBackfillTimeWindow struct {
+	startedAt time.Time
+	endedAt   time.Time
+}
+
+func splitTimeWindow(startedAt time.Time, endedAt time.Time, size time.Duration) []costBackfillTimeWindow {
+	if size <= 0 {
+		size = costBackfillWindow
+	}
+	out := []costBackfillTimeWindow{}
+	cursor := startedAt.UTC()
+	end := endedAt.UTC()
+	for cursor.Before(end) {
+		next := cursor.Add(size)
+		if next.After(end) {
+			next = end
+		}
+		out = append(out, costBackfillTimeWindow{startedAt: cursor, endedAt: next})
+		cursor = next
+	}
+	return out
+}
+
+func normalizeTimePtr(value *time.Time) *time.Time {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	utc := value.UTC()
+	return &utc
+}
+
 func costSyncInputFromSnapshot(supplierID int64, snapshot map[string]any) costsapp.SyncInput {
 	return costsapp.SyncInput{
 		SupplierID:                     supplierID,
@@ -1265,6 +1338,9 @@ func (s *Service) syncSupplierTaskWithSessionRefresh(ctx context.Context, suppli
 		return
 	}
 	s.syncSupplierTask(ctx, supplier, taskType, now, item)
+	if item.Reason != "" && refreshed {
+		item.Reason = withStepFailureMetadata(item.Reason, map[string]string{"login_attempted": "true"})
+	}
 	if item.Reason == "" || refreshed || !isSessionRefreshableReason(item.Reason) {
 		return
 	}
@@ -1274,6 +1350,9 @@ func (s *Service) syncSupplierTaskWithSessionRefresh(ctx context.Context, suppli
 	item.Total = 0
 	if s.refreshSupplierSession(ctx, supplier, taskType, item, "session_refresh_after_sync", previousReason) {
 		s.syncSupplierTask(ctx, supplier, taskType, now, item)
+		if item.Reason != "" {
+			item.Reason = withStepFailureMetadata(item.Reason, map[string]string{"login_attempted": "true"})
+		}
 	}
 }
 
@@ -1298,6 +1377,9 @@ func (s *Service) refreshSupplierSession(ctx context.Context, supplier *adminplu
 			Outcome:    "manual_required",
 			Suggestion: "开启供应商登录并配置账号密码或 access token 后重试。",
 			RawError:   trimLimit(previousReason, 900),
+			Metadata: map[string]string{
+				"login_attempted": "false",
+			},
 		})
 		return false
 	}
@@ -1320,7 +1402,7 @@ func (s *Service) refreshSupplierSession(ctx context.Context, supplier *adminplu
 			LoginMessage: firstNonEmpty(infraerrors.Message(loginErr), "supplier direct login failed"),
 			Suggestion:   loginFailureSuggestion(loginErr),
 			RawError:     trimLimit(loginErr.Error(), 900),
-			Metadata:     errorMetadata(loginErr),
+			Metadata:     mergeMetadata(errorMetadata(loginErr), map[string]string{"login_attempted": "true"}),
 		})
 		return false
 	}
@@ -1332,6 +1414,9 @@ func (s *Service) refreshSupplierSession(ctx context.Context, supplier *adminplu
 			Action:     "direct_login",
 			Outcome:    "failed",
 			Suggestion: "自动登录没有返回可用会话，请手动一键登录或使用插件采集会话。",
+			Metadata: map[string]string{
+				"login_attempted": "true",
+			},
 		})
 		return false
 	}
@@ -1864,7 +1949,7 @@ func encodeSyncFailure(in stepFailureInput) string {
 	}
 	code := infraerrors.Reason(err)
 	message := infraerrors.Message(err)
-	metadata := map[string]string(nil)
+	metadata := cloneStringMap(in.Metadata)
 	if appErr := infraerrors.FromError(err); appErr != nil {
 		if appErr.Reason != "" {
 			code = appErr.Reason
@@ -1872,7 +1957,7 @@ func encodeSyncFailure(in stepFailureInput) string {
 		if appErr.Message != "" && appErr.Message != infraerrors.UnknownMessage {
 			message = appErr.Message
 		}
-		metadata = errorMetadata(err)
+		metadata = mergeMetadata(metadata, errorMetadata(err))
 	}
 	if strings.TrimSpace(code) == "" {
 		code = firstNonEmpty(reasonCodeFromText(err.Error()), "SCHEDULER_STEP_FAILED")
@@ -1904,6 +1989,43 @@ func errorMetadata(err error) map[string]string {
 	return out
 }
 
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeMetadata(base map[string]string, extra map[string]string) map[string]string {
+	if len(extra) == 0 {
+		return cloneStringMap(base)
+	}
+	out := cloneStringMap(base)
+	if out == nil {
+		out = make(map[string]string, len(extra))
+	}
+	for key, value := range extra {
+		out[key] = value
+	}
+	return out
+}
+
+func withStepFailureMetadata(reason string, metadata map[string]string) string {
+	if strings.TrimSpace(reason) == "" || len(metadata) == 0 {
+		return reason
+	}
+	var payload stepFailureReason
+	if json.Unmarshal([]byte(strings.TrimSpace(reason)), &payload) != nil {
+		return reason
+	}
+	payload.Metadata = mergeMetadata(payload.Metadata, metadata)
+	return encodeStepFailure(payload)
+}
+
 func syncFailureDefaultMessage(taskType adminplusdomain.ExtensionTaskType) string {
 	switch taskType {
 	case adminplusdomain.ExtensionTaskTypeFetchBalance:
@@ -1927,15 +2049,12 @@ func syncFailureDefaultMessage(taskType adminplusdomain.ExtensionTaskType) strin
 
 func syncFailureOutcome(code string) string {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
-	case "SUPPLIER_SESSION_NOT_FOUND",
-		"SUPPLIER_SESSION_EXPIRED",
-		"SUPPLIER_SESSION_DECRYPT_FAILED",
-		"SUPPLIER_SESSION_PERMISSION_DENIED",
-		"LOGIN_CREDENTIAL_INVALID",
+	case "LOGIN_CREDENTIAL_INVALID",
 		"LOGIN_CAPTCHA_REQUIRED",
 		"LOGIN_MFA_REQUIRED",
 		"BROWSER_FALLBACK_REQUIRED",
-		"BROWSER_CHALLENGE_REQUIRED":
+		"BROWSER_CHALLENGE_REQUIRED",
+		"SUPPLIER_SESSION_PERMISSION_DENIED":
 		return "manual_required"
 	default:
 		return "failed"
@@ -1955,7 +2074,7 @@ func syncFailureSuggestion(code string) string {
 	case "LOGIN_CREDENTIAL_INVALID":
 		return "供应商登录凭据无效，请更新账号密码或 token 后重试。"
 	case "LOGIN_CAPTCHA_REQUIRED", "BROWSER_CHALLENGE_REQUIRED", "BROWSER_FALLBACK_REQUIRED":
-		return "供应商要求浏览器验证，请使用一键登录或插件采集会话。"
+		return "供应商要求浏览器验证，请人工完成浏览器验证或使用插件采集会话。"
 	case "LOGIN_MFA_REQUIRED":
 		return "供应商要求二次验证，请人工完成登录或使用插件采集会话。"
 	default:
@@ -1990,7 +2109,7 @@ func loginFailureOutcome(err error) string {
 	if isManualRequiredLoginCode(infraerrors.Reason(err)) {
 		return "manual_required"
 	}
-	if code := infraerrors.Code(err); code == http.StatusConflict || code == http.StatusUnauthorized || code == http.StatusForbidden {
+	if code := infraerrors.Code(err); code == http.StatusUnauthorized || code == http.StatusForbidden {
 		return "manual_required"
 	}
 	return "failed"
@@ -1999,6 +2118,9 @@ func loginFailureOutcome(err error) string {
 func isManualRequiredLoginCode(code string) bool {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
 	case "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED",
+		"SUPPLIER_DIRECT_LOGIN_API_BASE_URL_REQUIRED",
+		"SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED",
+		"SUPPLIER_DIRECT_LOGIN_UNSUPPORTED",
 		"LOGIN_CREDENTIAL_INVALID",
 		"LOGIN_CAPTCHA_REQUIRED",
 		"LOGIN_MFA_REQUIRED",
@@ -2013,12 +2135,18 @@ func isManualRequiredLoginCode(code string) bool {
 
 func loginFailureSuggestion(err error) string {
 	switch strings.ToUpper(strings.TrimSpace(infraerrors.Reason(err))) {
+	case "SUPPLIER_DIRECT_LOGIN_API_BASE_URL_REQUIRED":
+		return "补充供应商 API 地址后重试。"
 	case "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED":
 		return "补充供应商登录账号密码或 access token 后重试。"
+	case "SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED":
+		return "供应商后台模式需要管理员账号，请换用管理员凭据后重试。"
+	case "SUPPLIER_DIRECT_LOGIN_UNSUPPORTED":
+		return "该供应商类型暂不支持后端直登，请使用插件采集会话后重试。"
 	case "LOGIN_CREDENTIAL_INVALID":
 		return "供应商登录凭据无效，请更新账号密码或 token 后重试。"
 	case "LOGIN_CAPTCHA_REQUIRED", "BROWSER_CHALLENGE_REQUIRED", "BROWSER_FALLBACK_REQUIRED":
-		return "供应商要求浏览器验证，请使用一键登录或插件采集会话后重试。"
+		return "供应商要求浏览器验证，请人工完成浏览器验证或使用插件采集会话后重试。"
 	case "LOGIN_MFA_REQUIRED":
 		return "供应商要求二次验证，请人工完成登录或使用插件采集会话。"
 	case "PASSWORD_LOGIN_DISABLED":

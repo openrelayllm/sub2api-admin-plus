@@ -114,7 +114,7 @@ export function attachSupplierBulkAndLifecycle(ctx: any) {
     try {
       const balance = await getSupplierCurrentBalance(supplier.id, { refresh: true })
       currentBalanceStore[supplier.id] = balance
-      await loadSuppliers()
+      updateSupplierBalanceRow(supplier.id, balance)
       if (balance.fallback) {
         appStore.showWarning(`${supplier.name}: ${normalizeBalanceErrorMessage(balance.refresh_error_message)}`, 7000)
         return
@@ -124,6 +124,18 @@ export function attachSupplierBulkAndLifecycle(ctx: any) {
 	  appStore.showError(`${supplier.name}: ${normalizeBalanceErrorMessage(error) || errorMessage(error, '读取当前额度失败')}`, 8000)
 	} finally {
       rowBalanceRefreshingID.value = null
+    }
+  }
+
+  function updateSupplierBalanceRow(supplierID: number, balance: { balance_cents: number; currency?: string; captured_at?: string; runtime_status?: SupplierRuntimeStatus }) {
+    const index = suppliers.value.findIndex((item) => item.id === supplierID)
+    if (index < 0) return
+    suppliers.value[index] = {
+      ...suppliers.value[index],
+      balance_cents: balance.balance_cents,
+      balance_currency: balance.currency || suppliers.value[index].balance_currency,
+      balance_updated_at: balance.captured_at || suppliers.value[index].balance_updated_at,
+      runtime_status: balance.runtime_status || suppliers.value[index].runtime_status
     }
   }
 

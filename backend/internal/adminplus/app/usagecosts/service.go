@@ -11,6 +11,8 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+const maxUsageCostLineImportBatch = 1000
+
 type ImportUsageCostLineInput struct {
 	SupplierID          int64
 	Source              string
@@ -94,7 +96,7 @@ func (s *Service) ImportUsageCostLines(ctx context.Context, lines []ImportUsageC
 	if len(lines) == 0 {
 		return nil, badRequest("USAGE_COST_LINES_REQUIRED", "usage cost lines are required")
 	}
-	if len(lines) > 1000 {
+	if len(lines) > maxUsageCostLineImportBatch {
 		return nil, badRequest("USAGE_COST_LINES_TOO_MANY", "usage cost lines must be 1000 or less")
 	}
 	created := make([]*adminplusdomain.SupplierUsageCostLine, 0, len(lines))
@@ -178,13 +180,17 @@ func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) 
 			RawPayload:          line.RawPayload,
 		})
 	}
-	items := make([]*adminplusdomain.SupplierUsageCostLine, 0)
-	if len(lines) > 0 {
-		imported, err := s.ImportUsageCostLines(ctx, lines)
+	items := make([]*adminplusdomain.SupplierUsageCostLine, 0, len(lines))
+	for start := 0; start < len(lines); start += maxUsageCostLineImportBatch {
+		end := start + maxUsageCostLineImportBatch
+		if end > len(lines) {
+			end = len(lines)
+		}
+		imported, err := s.ImportUsageCostLines(ctx, lines[start:end])
 		if err != nil {
 			return nil, err
 		}
-		items = imported
+		items = append(items, imported...)
 	}
 	syncedAt := readResult.CapturedAt.UTC()
 	if syncedAt.IsZero() {

@@ -699,13 +699,17 @@ func (r *SQLRepository) RefreshRunStatus(ctx context.Context, runID string, fini
 				WHEN counts.cancelled > 0 THEN 'cancelled'
 				ELSE run.status
 			END,
-			finished_at = CASE WHEN counts.active = 0 THEN $2 ELSE run.finished_at END,
+			finished_at = CASE
+				WHEN counts.active > 0 THEN NULL
+				WHEN counts.total = 0 THEN run.finished_at
+				ELSE $2
+			END,
 			duration_ms = CASE
 				WHEN counts.active = 0 AND run.started_at IS NOT NULL THEN EXTRACT(EPOCH FROM ($2 - run.started_at))::bigint * 1000
 				ELSE run.duration_ms
 			END,
-			error_code = CASE WHEN counts.failed > 0 THEN 'SCHEDULER_STEP_FAILED' ELSE '' END,
-			error_message = CASE WHEN counts.failed > 0 THEN '存在失败或跳过的调度步骤' ELSE '' END,
+			error_code = CASE WHEN counts.failed > 0 AND counts.active = 0 THEN 'SCHEDULER_STEP_FAILED' ELSE '' END,
+			error_message = CASE WHEN counts.failed > 0 AND counts.active = 0 THEN '存在失败或跳过的调度步骤' ELSE '' END,
 			updated_at = NOW()
 		FROM counts
 		WHERE run.id = $1

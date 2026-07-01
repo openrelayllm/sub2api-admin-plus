@@ -461,9 +461,13 @@ func TestServiceEnqueueCostHistoryBackfillUsesStepSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "queued", summary.Status)
 	require.Equal(t, "supplier.costs.reconcile", summary.TaskType)
-	require.Len(t, repo.steps, 1)
+	require.Greater(t, len(repo.steps), 1)
 	require.Equal(t, adminplusdomain.ExtensionTaskTypeReconcileCosts, repo.steps[0].TaskType)
 	require.Equal(t, "2025-01-01T00:00:00Z", repo.steps[0].RequestSnapshot["started_at"])
+	require.Equal(t, "2025-01-01T06:00:00Z", repo.steps[0].RequestSnapshot["ended_at"])
+	require.Equal(t, false, repo.steps[0].RequestSnapshot["include_balance_snapshot"])
+	require.Equal(t, true, repo.steps[len(repo.steps)-1].RequestSnapshot["include_balance_snapshot"])
+	require.Equal(t, len(repo.steps), summary.TotalSteps)
 
 	processed, err := service.ProcessNext(context.Background(), "worker-test")
 
@@ -471,11 +475,67 @@ func TestServiceEnqueueCostHistoryBackfillUsesStepSnapshot(t *testing.T) {
 	require.True(t, processed)
 	require.Equal(t, 1, costSyncer.calls)
 	require.Equal(t, startedAt, *costSyncer.input.StartedAt)
-	require.Equal(t, endedAt, *costSyncer.input.EndedAt)
+	require.Equal(t, startedAt.Add(costBackfillWindow), *costSyncer.input.EndedAt)
 	require.True(t, costSyncer.input.IncludeFundingTransactions)
 	require.Equal(t, "succeeded", repo.steps[0].Status)
 	require.Equal(t, 14, repo.steps[0].ResultCount)
 	require.Equal(t, 2, repo.steps[0].ResultSnapshot["funding_transactions"])
+}
+
+func TestServiceProcessNextRefreshesMissingSessionBeforeCostBackfill(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	repo := newFakeSchedulerRepository()
+	costSyncer := &stubCostSyncer{}
+	sessionRefresher := &stubSessionRefresher{
+		probeErrors: []error{infraerrors.New(http.StatusNotFound, "SUPPLIER_SESSION_NOT_FOUND", "supplier browser session not found")},
+		loginResult: &sessionsapp.LoginResult{Session: &adminplusdomain.SupplierBrowserSession{
+			SupplierID:     1,
+			SessionSource:  adminplusdomain.SupplierSessionSourceDirectLogin,
+			Origin:         "https://relay-a.example.com",
+			APIBaseURL:     "https://relay-a.example.com",
+			SessionSummary: map[string]any{"session_source": "direct_login"},
+			CapturedAt:     time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC),
+		}},
+	}
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil).
+		WithSessionRefresher(sessionRefresher).
+		WithCostSyncer(costSyncer)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+	startedAt := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	endedAt := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+
+	createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:                 "relay-a",
+		Kind:                 adminplusdomain.SupplierKindRelay,
+		Type:                 adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:        adminplusdomain.SupplierRuntimeStatusActive,
+		HealthStatus:         adminplusdomain.SupplierHealthStatusNormal,
+		DashboardURL:         "https://relay-a.example.com",
+		BrowserLoginEnabled:  true,
+		BrowserLoginUsername: "ops@example.com",
+		BrowserLoginPassword: "secret",
+		BalanceCents:         500_00,
+		BalanceCurrency:      "USD",
+	})
+	_, err := service.EnqueueCostHistoryBackfill(context.Background(), CostBackfillInput{
+		StartedAt:              &startedAt,
+		EndedAt:                &endedAt,
+		IncludeUsageCostLines:  true,
+		IncludeBalanceSnapshot: true,
+	})
+	require.NoError(t, err)
+
+	processed, err := service.ProcessNext(context.Background(), "worker-test")
+
+	require.NoError(t, err)
+	require.True(t, processed)
+	require.Equal(t, 1, sessionRefresher.loginCalls)
+	require.Equal(t, 1, costSyncer.calls)
+	require.Equal(t, "succeeded", repo.steps[0].Status)
+	require.Empty(t, repo.steps[0].Reason)
 }
 
 func TestServiceProcessNextRefreshesMissingSessionBeforeBalanceSync(t *testing.T) {
@@ -572,6 +632,51 @@ func TestServiceProcessNextMarksManualRequiredWhenAutoLoginNeedsBrowser(t *testi
 	require.Equal(t, "manual_required", repo.steps[0].Status)
 	require.Contains(t, repo.steps[0].Reason, "BROWSER_CHALLENGE_REQUIRED")
 	require.Contains(t, repo.steps[0].Reason, "插件采集会话")
+}
+
+func TestServiceProcessNextKeepsAutoLoginUpstreamFailureRetryable(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	balanceSyncer := &stubBalanceSyncer{total: 1}
+	sessionRefresher := &stubSessionRefresher{
+		probeErrors: []error{infraerrors.New(http.StatusNotFound, "SUPPLIER_SESSION_NOT_FOUND", "supplier browser session not found")},
+		loginErr:    infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_UPSTREAM_ORIGIN_ERROR", "supplier upstream origin is unavailable"),
+	}
+	repo := newFakeSchedulerRepository()
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, balanceSyncer, nil, nil, nil).
+		WithSessionRefresher(sessionRefresher)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+
+	createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:                 "relay-upstream",
+		Kind:                 adminplusdomain.SupplierKindRelay,
+		Type:                 adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:        adminplusdomain.SupplierRuntimeStatusActive,
+		HealthStatus:         adminplusdomain.SupplierHealthStatusNormal,
+		DashboardURL:         "https://relay-upstream.example.com",
+		BrowserLoginEnabled:  true,
+		BrowserLoginUsername: "ops@example.com",
+		BrowserLoginPassword: "secret",
+		BalanceCents:         500_00,
+		BalanceCurrency:      "USD",
+	})
+	_, err := service.EnqueueRun(context.Background(), RunInput{
+		Mode:      "manual",
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchBalance},
+	})
+	require.NoError(t, err)
+
+	processed, err := service.ProcessNext(context.Background(), "worker-test")
+
+	require.NoError(t, err)
+	require.True(t, processed)
+	require.Equal(t, 1, sessionRefresher.loginCalls)
+	require.Equal(t, 0, balanceSyncer.calls)
+	require.Equal(t, "retryable_failed", repo.steps[0].Status)
+	require.Contains(t, repo.steps[0].Reason, "SUPPLIER_DIRECT_LOGIN_UPSTREAM_ORIGIN_ERROR")
+	require.Contains(t, repo.steps[0].Reason, `"login_attempted":"true"`)
 }
 
 func TestServiceProcessNextRefreshesSessionOnceAfterSyncExpired(t *testing.T) {
@@ -896,13 +1001,19 @@ func (s *stubUsageCostSyncer) SyncFromSession(_ context.Context, in usagecostsap
 }
 
 type stubCostSyncer struct {
-	calls int
-	input costsapp.SyncInput
+	calls  int
+	input  costsapp.SyncInput
+	errors []error
 }
 
 func (s *stubCostSyncer) Sync(_ context.Context, in costsapp.SyncInput) (*costsapp.SyncResult, error) {
 	s.calls++
 	s.input = in
+	if len(s.errors) > 0 {
+		err := s.errors[0]
+		s.errors = s.errors[1:]
+		return nil, err
+	}
 	return &costsapp.SyncResult{
 		SupplierID:              in.SupplierID,
 		ProviderType:            "sub2api",

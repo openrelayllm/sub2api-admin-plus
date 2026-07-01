@@ -3,6 +3,7 @@ package costs
 import (
 	"context"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	usagecostsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/usagecosts"
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 type SyncInput struct {
@@ -171,26 +173,32 @@ func (s *Service) Sync(ctx context.Context, in SyncInput) (*SyncResult, error) {
 				EndedAt:    endedAt,
 			})
 			if err != nil {
-				return nil, err
-			}
-			result.ProviderType = firstNonEmpty(read.ProviderType, result.ProviderType)
-			result.SystemType = read.SystemType
-			result.Origin = read.Origin
-			result.APIBaseURL = read.APIBaseURL
-			result.Capabilities["funding_transactions"] = true
-			for _, item := range read.Items {
-				stored, _, err := s.repo.UpsertFundingTransaction(ctx, fundingFromProvider(in.SupplierID, read.ProviderType, item, rechargeMultiplier, result.SyncedAt))
-				if err != nil {
+				if costOptionalCapabilityMissing(err) {
+					result.Diagnostics["funding_transactions"] = infraerrors.Message(err)
+				} else {
 					return nil, err
 				}
-				result.FundingTransactions++
-				if stored != nil {
-					if created, ok, err := s.repo.UpsertLedgerEntry(ctx, ledgerFromFunding(stored)); err != nil {
+			}
+			if read != nil {
+				result.ProviderType = firstNonEmpty(read.ProviderType, result.ProviderType)
+				result.SystemType = read.SystemType
+				result.Origin = read.Origin
+				result.APIBaseURL = read.APIBaseURL
+				result.Capabilities["funding_transactions"] = true
+				for _, item := range read.Items {
+					stored, _, err := s.repo.UpsertFundingTransaction(ctx, fundingFromProvider(in.SupplierID, read.ProviderType, item, rechargeMultiplier, result.SyncedAt))
+					if err != nil {
 						return nil, err
-					} else if ok && created != nil {
-						ledgerEntries++
 					}
-					currencies[normalizeCurrency(stored.Currency)] = struct{}{}
+					result.FundingTransactions++
+					if stored != nil {
+						if created, ok, err := s.repo.UpsertLedgerEntry(ctx, ledgerFromFunding(stored)); err != nil {
+							return nil, err
+						} else if ok && created != nil {
+							ledgerEntries++
+						}
+						currencies[normalizeCurrency(stored.Currency)] = struct{}{}
+					}
 				}
 			}
 		}
@@ -206,38 +214,44 @@ func (s *Service) Sync(ctx context.Context, in SyncInput) (*SyncResult, error) {
 				EndedAt:    endedAt,
 			})
 			if err != nil {
-				return nil, err
-			}
-			result.ProviderType = firstNonEmpty(read.ProviderType, result.ProviderType)
-			result.SystemType = firstNonEmpty(read.SystemType, result.SystemType)
-			result.Origin = firstNonEmpty(read.Origin, result.Origin)
-			result.APIBaseURL = firstNonEmpty(read.APIBaseURL, result.APIBaseURL)
-			result.Capabilities["entitlement_transactions"] = true
-			for _, item := range read.Items {
-				stored, _, err := s.repo.UpsertEntitlementTransaction(ctx, entitlementFromProvider(in.SupplierID, read.ProviderType, item, result.SyncedAt))
-				if err != nil {
+				if costOptionalCapabilityMissing(err) {
+					result.Diagnostics["entitlement_transactions"] = infraerrors.Message(err)
+				} else {
 					return nil, err
 				}
-				result.EntitlementTransactions++
-				if stored == nil {
-					continue
-				}
-				ledgerEntry := ledgerFromEntitlement(stored)
-				if stored.SourceFamily == "payment_auto_redeem" {
-					ledgerEntry = nil
-				}
-				if ledgerEntry == nil {
-					if err := s.repo.DeleteLedgerEntryForSource(ctx, stored.SupplierID, stored.ProviderType, "entitlement_credit", "entitlement_transaction", stored.ID); err != nil {
+			}
+			if read != nil {
+				result.ProviderType = firstNonEmpty(read.ProviderType, result.ProviderType)
+				result.SystemType = firstNonEmpty(read.SystemType, result.SystemType)
+				result.Origin = firstNonEmpty(read.Origin, result.Origin)
+				result.APIBaseURL = firstNonEmpty(read.APIBaseURL, result.APIBaseURL)
+				result.Capabilities["entitlement_transactions"] = true
+				for _, item := range read.Items {
+					stored, _, err := s.repo.UpsertEntitlementTransaction(ctx, entitlementFromProvider(in.SupplierID, read.ProviderType, item, result.SyncedAt))
+					if err != nil {
 						return nil, err
 					}
-				} else {
-					if created, ok, err := s.repo.UpsertLedgerEntry(ctx, ledgerEntry); err != nil {
-						return nil, err
-					} else if ok && created != nil {
-						ledgerEntries++
+					result.EntitlementTransactions++
+					if stored == nil {
+						continue
 					}
+					ledgerEntry := ledgerFromEntitlement(stored)
+					if stored.SourceFamily == "payment_auto_redeem" {
+						ledgerEntry = nil
+					}
+					if ledgerEntry == nil {
+						if err := s.repo.DeleteLedgerEntryForSource(ctx, stored.SupplierID, stored.ProviderType, "entitlement_credit", "entitlement_transaction", stored.ID); err != nil {
+							return nil, err
+						}
+					} else {
+						if created, ok, err := s.repo.UpsertLedgerEntry(ctx, ledgerEntry); err != nil {
+							return nil, err
+						} else if ok && created != nil {
+							ledgerEntries++
+						}
+					}
+					currencies[normalizeCurrency(stored.Currency)] = struct{}{}
 				}
-				currencies[normalizeCurrency(stored.Currency)] = struct{}{}
 			}
 		}
 	}
@@ -295,6 +309,17 @@ func (s *Service) Sync(ctx context.Context, in SyncInput) (*SyncResult, error) {
 		result.Diagnostics = nil
 	}
 	return result, nil
+}
+
+func costOptionalCapabilityMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	reason := infraerrors.Reason(err)
+	if strings.HasSuffix(reason, "_CAPABILITY_MISSING") {
+		return true
+	}
+	return infraerrors.Code(err) == http.StatusConflict && (strings.Contains(reason, "FUNDING") || strings.Contains(reason, "ENTITLEMENT"))
 }
 
 func (s *Service) notifyCostReconcileAnomaly(_ context.Context, _ *adminplusdomain.SupplierCostSnapshot) {

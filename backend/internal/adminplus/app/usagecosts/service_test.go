@@ -3,6 +3,7 @@ package usagecosts
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -138,6 +139,46 @@ func TestServiceSyncFromSessionImportsProviderUsageCostLines(t *testing.T) {
 	require.Equal(t, "USD", result.Items[0].Currency)
 	require.Equal(t, int64(1500), result.Items[0].TotalTokens)
 	require.Equal(t, int64(1), result.Items[0].ID)
+}
+
+func TestServiceSyncFromSessionImportsProviderUsageCostLinesInBatches(t *testing.T) {
+	repo := NewMemoryRepository()
+	startedAt := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	lines := make([]ports.ProviderUsageCostLine, 0, maxUsageCostLineImportBatch+1)
+	for index := 0; index < maxUsageCostLineImportBatch+1; index++ {
+		lines = append(lines, ports.ProviderUsageCostLine{
+			ExternalUsageCostID: "bill-batch-" + strconv.Itoa(index),
+			ExternalRequestID:   "req-batch-" + strconv.Itoa(index),
+			APIKeyName:          "ops-key",
+			Model:               "gpt-5-mini",
+			Endpoint:            "/v1/responses",
+			RequestType:         "responses",
+			BillingMode:         "token",
+			Currency:            "usd",
+			CostCents:           1,
+			InputTokens:         1,
+			StartedAt:           startedAt.Add(time.Duration(index) * time.Second),
+			RawPayload:          map[string]any{"id": index},
+		})
+	}
+	session := &stubUsageCostSessionReader{input: ports.SessionProbeInput{SupplierID: 7}}
+	reader := &stubUsageCostAdapter{result: &ports.ReadUsageCostsResult{
+		SupplierID: 7,
+		SystemType: "sub2api",
+		CapturedAt: startedAt.Add(time.Hour),
+		Lines:      lines,
+	}}
+	svc := NewServiceWithDependencies(repo, session, reader)
+
+	result, err := svc.SyncFromSession(context.Background(), SyncFromSessionInput{
+		SupplierID: 7,
+		StartedAt:  startedAt,
+		EndedAt:    startedAt.Add(time.Hour),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, maxUsageCostLineImportBatch+1)
+	require.Equal(t, maxUsageCostLineImportBatch+1, result.Total)
 }
 
 func TestServiceSyncFromSessionAllowsEmptyProviderUsageCostLines(t *testing.T) {
