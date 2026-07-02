@@ -665,7 +665,17 @@ func (s *Service) ListSteps(ctx context.Context, runID string, limit int, offset
 	if s.repo == nil {
 		return []adminplusdomain.SchedulerStepRecord{}, nil
 	}
-	return s.repo.ListSteps(ctx, strings.TrimSpace(runID), limit, offset)
+	runID = strings.TrimSpace(runID)
+	steps, err := s.repo.ListSteps(ctx, runID, limit, offset)
+	if err != nil || runID == "" || len(steps) == 0 {
+		return steps, err
+	}
+	attempts, err := s.repo.ListAttempts(ctx, runID, 2000)
+	if err != nil {
+		return nil, err
+	}
+	attachStepAttempts(steps, attempts)
+	return steps, nil
 }
 
 func (s *Service) DeleteRun(ctx context.Context, runID string) (*adminplusdomain.SchedulerCleanupResult, error) {

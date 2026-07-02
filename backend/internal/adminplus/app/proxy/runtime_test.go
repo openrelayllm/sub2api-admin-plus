@@ -119,17 +119,17 @@ proxy-groups:
 		"runtime-secret",
 	)
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		_, err := os.Stat(logPath)
-		return err == nil
-	}, time.Second, 10*time.Millisecond)
-
-	content, err := os.ReadFile(logPath)
-	require.NoError(t, err)
 	slotDir := filepath.Dir(result.ConfigPath)
-	require.Contains(t, string(content), "-d "+slotDir)
-	require.Contains(t, string(content), "home="+slotDir)
-	require.Contains(t, string(content), "xdg="+slotDir)
+	require.Eventually(t, func() bool {
+		content, err := os.ReadFile(logPath)
+		if err != nil {
+			return false
+		}
+		text := string(content)
+		return strings.Contains(text, "-d "+slotDir) &&
+			strings.Contains(text, "home="+slotDir) &&
+			strings.Contains(text, "xdg="+slotDir)
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestMihomoLogSummaryReturnsLastWarningOrError(t *testing.T) {

@@ -54,12 +54,12 @@
               </td>
               <td class="max-w-[280px] px-4 py-3 text-sm text-gray-500 dark:text-dark-400">
                 <button
-                  v-if="step.reason"
+                  v-if="stepHasDiagnostics(step)"
                   type="button"
                   class="block max-w-full text-left hover:text-gray-900 dark:hover:text-gray-100"
                   @click="selectedStep = step"
                 >
-                  <span class="block truncate" :title="step.reason">{{ reasonSummary(step.reason) }}</span>
+                  <span class="block truncate" :title="stepDiagnosticSummary(step)">{{ stepDiagnosticSummary(step) }}</span>
                   <span class="mt-1 block text-xs font-medium text-blue-700 dark:text-blue-300">查看详情</span>
                 </button>
                 <span v-else>-</span>
@@ -160,7 +160,18 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import type { SchedulerRunDetail, SchedulerStepRecord } from '@/api/admin/adminPlus'
-import { formatDateTime, runStatusClass, runStatusLabel, stepCancellable, stepRetryable, taskLabel } from './presentation'
+import {
+  formatDateTime,
+  latestStepAttempt,
+  runStatusClass,
+  runStatusLabel,
+  stepCancellable,
+  stepDiagnosticSummary,
+  stepHasDiagnostics,
+  stepRawDiagnostics,
+  stepRetryable,
+  taskLabel
+} from './presentation'
 
 const props = defineProps<{
   show: boolean
@@ -194,19 +205,22 @@ interface StepFailureReason {
 }
 
 const selectedFailure = computed(() => parseReason(selectedStep.value?.reason))
-const selectedRawReason = computed(() => selectedStep.value?.reason || '-')
+const selectedLatestAttempt = computed(() => latestStepAttempt(selectedStep.value))
+const selectedRawReason = computed(() => stepRawDiagnostics(selectedStep.value))
 const selectedOperationLogs = computed(() => selectedStep.value?.operation_logs || [])
 const selectedReasonRows = computed(() => {
   const step = selectedStep.value
   const reason = selectedFailure.value
   if (!step) return []
+  const latestAttempt = selectedLatestAttempt.value
+  const code = firstText(reason.login_code, reason.code, latestAttempt?.error_code, codeFromText(latestAttempt?.error_message || ''), codeFromText(step.reason || ''))
   return [
     { label: '阶段', value: stageLabel(reason.stage) },
-    { label: '动作', value: actionLabel(reason.action) },
-    { label: '结果', value: outcomeLabel(reason.outcome) },
-    { label: '错误码', value: firstText(reason.login_code, reason.code, codeFromText(step.reason || '')) },
-    { label: '错误信息', value: firstText(reason.login_message, reason.message, plainReason(step.reason || '')) },
-    { label: '建议操作', value: reason.suggestion || suggestionFromCode(firstText(reason.login_code, reason.code, codeFromText(step.reason || ''))) },
+    { label: '动作', value: actionLabel(reason.action || step.action) },
+    { label: '结果', value: outcomeLabel(reason.outcome || step.status) },
+    { label: '错误码', value: code },
+    { label: '错误信息', value: firstText(reason.login_message, reason.message, latestAttempt?.error_message, plainReason(step.reason || '')) },
+    { label: '建议操作', value: reason.suggestion || suggestionFromCode(code) },
     { label: '上游诊断', value: metadataSummary(reason.metadata) },
     { label: 'Attempt', value: `${step.attempts}/${step.max_attempts}` },
     { label: '下次重试', value: formatDateTime(step.next_attempt_at) || '-' }
@@ -236,11 +250,6 @@ function parseReason(reason?: string): StepFailureReason {
     // Keep old plain-text scheduler reasons readable.
   }
   return {}
-}
-
-function reasonSummary(reason?: string): string {
-  const parsed = parseReason(reason)
-  return firstText(parsed.login_code, parsed.code, parsed.login_message, parsed.message, codeFromText(reason || ''), plainReason(reason || ''), '-')
 }
 
 function plainReason(reason: string): string {

@@ -128,18 +128,18 @@
 
 	          <template #cell-groups="{ row }">
 	            <div class="min-w-[220px]">
-	              <div class="flex flex-wrap gap-1">
+	              <div v-if="displayGroupNames(row).length > 0" class="flex flex-wrap gap-1">
 	                <GroupBadge
 	                  v-for="name in displayGroupNames(row)"
 	                  :key="name"
 	                  :name="name"
 	                  :platform="groupPlatform(row)"
-	                  :rate-multiplier="groupRate(row)"
-	                  always-show-rate
+	                  :show-rate="false"
 	                />
 	              </div>
+	              <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
 	              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
-	                <span>{{ providerLabel(groupProvider(row)) }}</span>
+	                <span v-if="supplierGroupLabel(row)">供应商分组：{{ supplierGroupLabel(row) }}</span>
 	                <span v-if="bindingsForAccount(row).length > 0">{{ bindingsForAccount(row).length }} 个供应商绑定</span>
 	                <span v-if="row.supplier_external_group_id" class="font-mono">#{{ row.supplier_external_group_id }}</span>
 	              </div>
@@ -257,6 +257,7 @@ import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LocalAccountTestModal from '@/components/admin-plus/LocalAccountTestModal.vue'
 import LocalAccountPurityModal from '@/components/admin-plus/LocalAccountPurityModal.vue'
+import { loadAllPagedItems } from '@/utils/loadAllPages'
 import SupplierAccountsToolbar from './SupplierAccountsToolbar.vue'
 import {
   accountStatusClass,
@@ -270,7 +271,6 @@ import {
   normalizeType,
   platformBadgeClass,
   platformLabel,
-  providerLabel,
   typeShortLabel
 } from './SupplierAccountsUtils'
 import type { Column } from '@/components/common/types'
@@ -468,16 +468,15 @@ function bindingsForAccount(row: SupplierAccount): SupplierAccount[] {
 }
 
 function groupFilterNames(row: SupplierAccount): string[] {
-  return [
-    ...(localAccount(row)?.group_names || []),
-    row.supplier_group_name || '',
-    row.rate_profile || ''
-  ].map((name) => name.trim()).filter(Boolean)
+  return localGroupNames(row)
+}
+
+function localGroupNames(row: SupplierAccount): string[] {
+  return (localAccount(row)?.group_names || []).map((name) => name.trim()).filter(Boolean)
 }
 
 function displayGroupNames(row: SupplierAccount): string[] {
-  const names = groupFilterNames(row)
-  return names.length > 0 ? names.slice(0, 4) : ['未分组']
+  return localGroupNames(row).slice(0, 4)
 }
 
 function lastUsedAt(row: SupplierAccount): string {
@@ -496,20 +495,16 @@ function capacityPercent(row: SupplierAccount): number {
   return Math.min(100, Math.round(((accountRuntime(row)?.current_concurrency || row.observed_max_concurrency || 0) / configured) * 100))
 }
 
-function groupProvider(row: SupplierAccount): string {
-  return row.supplier_group_provider?.trim() || row.rate_profile?.trim() || row.local_account_platform || 'mixed'
+function supplierGroupLabel(row: SupplierAccount): string {
+  return row.supplier_group_name?.trim() || row.rate_profile?.trim() || ''
 }
 
 function groupPlatform(row: SupplierAccount): GroupPlatform {
-  const provider = groupProvider(row).toLowerCase()
+  const provider = (localAccount(row)?.platform || row.local_account_platform || '').toLowerCase()
   if (provider.includes('anthropic') || provider.includes('claude')) return 'anthropic'
   if (provider.includes('gemini') || provider.includes('google')) return 'gemini'
   if (provider.includes('openai') || provider.includes('gpt')) return 'openai'
   return 'antigravity'
-}
-
-function groupRate(row: SupplierAccount): number {
-  return localAccount(row)?.rate_multiplier || 1
 }
 
 function isSchedulable(row: SupplierAccount): boolean {
@@ -620,8 +615,8 @@ function supportsPurity(row: SupplierAccount): boolean {
 }
 
 async function loadSuppliers() {
-  const result = await listSuppliers()
-  suppliers.value = result.items
+  const items = await loadAllPagedItems((page, page_size) => listSuppliers({ page, page_size }))
+  suppliers.value = items
   const querySupplierID = Number(route.query.supplier_id || 0)
   if (querySupplierID && suppliers.value.some((supplier) => supplier.id === querySupplierID)) {
     selectedSupplierId.value = querySupplierID
@@ -631,18 +626,17 @@ async function loadSuppliers() {
 }
 
 async function loadLocalAccounts() {
-  const result = await listLocalSub2APIAccounts({ page: 1, page_size: 5000 })
-  localAccountsByID.value = Object.fromEntries(result.items.map((account) => [account.id, account]))
+  const items = await loadAllPagedItems((page, page_size) => listLocalSub2APIAccounts({ page, page_size }))
+  localAccountsByID.value = Object.fromEntries(items.map((account) => [account.id, account]))
 }
 
 async function loadBindings() {
   loadingBindings.value = true
   try {
-    const allSupplierBindings: SupplierAccount[] = []
-    for (const supplier of suppliers.value) {
-      const result = await listSupplierAccounts(supplier.id, { page: 1, page_size: 1000 })
-      allSupplierBindings.push(...result.items)
-    }
+    const bindingPages = await Promise.all(
+      suppliers.value.map((supplier) => loadAllPagedItems((page, page_size) => listSupplierAccounts(supplier.id, { page, page_size })))
+    )
+    const allSupplierBindings = bindingPages.flat()
     supplierBindings.value = allSupplierBindings
     bindings.value = buildAccountRows(Object.values(localAccountsByID.value), allSupplierBindings)
     await loadAccountRuntime()
@@ -702,8 +696,8 @@ function buildAccountRows(accounts: LocalSub2APIAccount[], supplierRows: Supplie
 
 async function loadAccountRuntime() {
   try {
-    const result = await listLocalAccountRuntime({ page: 1, page_size: 5000 })
-    runtimeByAccountID.value = Object.fromEntries(result.items.map((item) => [item.account_id, item]))
+    const items = await loadAllPagedItems((page, page_size) => listLocalAccountRuntime({ page, page_size }))
+    runtimeByAccountID.value = Object.fromEntries(items.map((item) => [item.account_id, item]))
   } catch {
     runtimeByAccountID.value = {}
   }
@@ -714,17 +708,17 @@ async function loadUsageSummaries() {
   const todayStart = new Date(now)
   todayStart.setHours(0, 0, 0, 0)
   const last30dStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-  const [todayResult, last30dResult] = await Promise.all([
-    listLocalAccountUsageSummary({ from: todayStart.toISOString(), to: now.toISOString(), page: 1, page_size: 1000 }),
-    listLocalAccountUsageSummary({ from: last30dStart.toISOString(), to: now.toISOString(), page: 1, page_size: 1000 })
+  const [todayItems, last30dItems] = await Promise.all([
+    loadAllPagedItems((page, page_size) => listLocalAccountUsageSummary({ from: todayStart.toISOString(), to: now.toISOString(), page, page_size })),
+    loadAllPagedItems((page, page_size) => listLocalAccountUsageSummary({ from: last30dStart.toISOString(), to: now.toISOString(), page, page_size }))
   ])
   const next: Record<number, AccountUsageWindow> = {}
   for (const row of bindings.value) next[row.local_sub2api_account_id] = { today: emptyUsage(), last30d: emptyUsage() }
-  for (const item of todayResult.items) {
+  for (const item of todayItems) {
     if (!next[item.account_id]) next[item.account_id] = { today: emptyUsage(), last30d: emptyUsage() }
     next[item.account_id].today = normalizeUsageSummary(item)
   }
-  for (const item of last30dResult.items) {
+  for (const item of last30dItems) {
     if (!next[item.account_id]) next[item.account_id] = { today: emptyUsage(), last30d: emptyUsage() }
     next[item.account_id].last30d = normalizeUsageSummary(item)
   }

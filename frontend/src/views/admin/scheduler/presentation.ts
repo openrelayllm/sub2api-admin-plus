@@ -1,4 +1,9 @@
-import type { ExtensionTaskType, SchedulerPlan } from '@/api/admin/adminPlus'
+import type {
+  ExtensionTaskType,
+  SchedulerAttemptRecord,
+  SchedulerPlan,
+  SchedulerStepRecord
+} from '@/api/admin/adminPlus'
 
 export const schedulerWizardSteps = [
   '选择任务类型和成本级别',
@@ -185,6 +190,13 @@ export function runRetryable(status: string, failedSteps: number): boolean {
   return failedSteps > 0 || ['retryable_failed', 'partial_succeeded', 'manual_required', 'dead', 'skipped', 'cancelled'].includes(status)
 }
 
+export function stepHasDiagnostics(step?: SchedulerStepRecord | null): boolean {
+  if (!step) return false
+  const issueStatus = ['retryable_failed', 'manual_required', 'dead', 'skipped', 'cancelled'].includes(step.status)
+  const issueAttempt = step.operation_logs?.some((log) => log.status !== 'succeeded' || log.error_code || log.error_message)
+  return Boolean(step.reason || issueStatus || issueAttempt)
+}
+
 export interface StepFailureReason {
   stage?: string
   code?: string
@@ -214,6 +226,41 @@ export function parseStepReason(reason?: string): StepFailureReason {
 export function stepReasonSummary(reason?: string): string {
   const parsed = parseStepReason(reason)
   return firstText(parsed.login_code, parsed.code, parsed.login_message, parsed.message, codeFromReasonText(reason || ''), plainStepReason(reason || ''), '-')
+}
+
+export function latestStepAttempt(step?: SchedulerStepRecord | null): SchedulerAttemptRecord | null {
+  const logs = step?.operation_logs || []
+  if (logs.length === 0) return null
+  return logs.reduce((latest, current) => {
+    if (current.attempt_no !== latest.attempt_no) return current.attempt_no > latest.attempt_no ? current : latest
+    return current.id > latest.id ? current : latest
+  })
+}
+
+export function stepDiagnosticSummary(step?: SchedulerStepRecord | null): string {
+  if (!step) return '-'
+  const latest = latestStepAttempt(step)
+  return firstText(
+    step.reason ? stepReasonSummary(step.reason) : '',
+    latest?.error_code,
+    latest?.error_message,
+    codeFromReasonText(latest?.error_message || ''),
+    runStatusLabel(step.status),
+    '-'
+  )
+}
+
+export function stepRawDiagnostics(step?: SchedulerStepRecord | null): string {
+  if (!step) return '-'
+  const latest = latestStepAttempt(step)
+  return firstText(
+    step.reason,
+    latest?.error_message,
+    latest?.error_code,
+    step.result_snapshot ? formatReasonSnapshot(step.result_snapshot) : '',
+    runStatusLabel(step.status),
+    '-'
+  )
 }
 
 export function plainStepReason(reason: string): string {

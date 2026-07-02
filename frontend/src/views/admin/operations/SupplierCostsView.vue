@@ -413,12 +413,12 @@
                     </td>
                     <td class="max-w-[260px] px-4 py-3 text-sm text-gray-500 dark:text-dark-400">
                       <button
-                        v-if="step.reason"
+                        v-if="stepHasDiagnostics(step)"
                         type="button"
                         class="block max-w-full text-left hover:text-gray-900 dark:hover:text-gray-100"
                         @click="selectedReasonStep = step"
                       >
-                        <span class="block truncate" :title="step.reason">{{ stepReasonSummary(step.reason) }}</span>
+                        <span class="block truncate" :title="stepDiagnosticSummary(step)">{{ stepDiagnosticSummary(step) }}</span>
                         <span class="mt-1 block text-xs font-medium text-blue-700 dark:text-blue-300">查看详情</span>
                       </button>
                       <span v-else>-</span>
@@ -552,6 +552,31 @@
           </div>
         </dl>
 
+        <div class="rounded-lg border border-gray-200 dark:border-dark-700">
+          <div class="border-b border-gray-100 px-3 py-2 dark:border-dark-700">
+            <p class="text-xs font-medium text-gray-500 dark:text-dark-400">Attempt 日志</p>
+          </div>
+          <div v-if="selectedOperationLogs.length === 0" class="px-3 py-4 text-sm text-gray-500 dark:text-dark-400">暂无 attempt 日志</div>
+          <div v-else class="divide-y divide-gray-100 dark:divide-dark-700">
+            <div v-for="log in selectedOperationLogs" :key="log.id" class="grid gap-3 px-3 py-3 md:grid-cols-[120px_minmax(0,1fr)]">
+              <div class="space-y-1 text-xs text-gray-500 dark:text-dark-400">
+                <p class="font-mono">#{{ log.attempt_no }}</p>
+                <p>开始 {{ formatDateTime(log.started_at) || '-' }}</p>
+                <p>完成 {{ formatDateTime(log.finished_at) || '-' }}</p>
+                <p>{{ log.duration_ms }} ms</p>
+              </div>
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="badge" :class="runStatusClass(log.status)">{{ runStatusLabel(log.status) }}</span>
+                  <span v-if="log.error_code" class="font-mono text-xs text-rose-600 dark:text-rose-300">{{ log.error_code }}</span>
+                </div>
+                <p v-if="log.error_message" class="mt-2 break-words text-sm font-medium text-gray-900 dark:text-gray-100">{{ log.error_message }}</p>
+                <pre v-if="log.response_snapshot" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-3 text-xs text-gray-700 dark:bg-dark-800 dark:text-dark-200">{{ formatReasonSnapshot(log.response_snapshot) }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-700">
           <p class="text-xs text-gray-500 dark:text-dark-400">完整错误</p>
           <pre class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-3 text-xs text-gray-700 dark:bg-dark-800 dark:text-dark-200">{{ selectedRawReason }}</pre>
@@ -616,6 +641,7 @@ import {
   codeFromReasonText,
   firstText,
   formatReasonSnapshot,
+  latestStepAttempt,
   metadataSummary,
   outcomeLabel,
   parseStepReason,
@@ -626,8 +652,10 @@ import {
   runDeletable,
   stageLabel,
   stepCancellable,
-  stepReasonSummary,
+  stepDiagnosticSummary,
+  stepHasDiagnostics,
   stepRetryable,
+  stepRawDiagnostics,
   suggestionFromCode
 } from '../scheduler/presentation'
 
@@ -706,12 +734,15 @@ const syncStatusLabel = computed(() => {
   return '等待同步'
 })
 const selectedFailureReason = computed(() => parseStepReason(selectedReasonStep.value?.reason))
-const selectedRawReason = computed(() => selectedReasonStep.value?.reason || '-')
+const selectedLatestAttempt = computed(() => latestStepAttempt(selectedReasonStep.value))
+const selectedOperationLogs = computed(() => selectedReasonStep.value?.operation_logs || [])
+const selectedRawReason = computed(() => stepRawDiagnostics(selectedReasonStep.value))
 const selectedReasonRows = computed(() => {
   const step = selectedReasonStep.value
   const reason = selectedFailureReason.value
   if (!step) return []
-  const code = firstText(reason.login_code, reason.code, codeFromReasonText(step.reason || ''))
+  const latestAttempt = selectedLatestAttempt.value
+  const code = firstText(reason.login_code, reason.code, latestAttempt?.error_code, codeFromReasonText(latestAttempt?.error_message || ''), codeFromReasonText(step.reason || ''))
   return [
     { label: '阶段', value: stageLabel(reason.stage) },
     { label: '动作', value: actionLabel(reason.action || step.action) },
@@ -719,7 +750,7 @@ const selectedReasonRows = computed(() => {
     { label: '自动登录尝试', value: loginAttemptLabel(reason) },
     { label: '人工协助', value: manualRequiredLabel(reason, step.status) },
     { label: '错误码', value: code },
-    { label: '错误信息', value: firstText(reason.login_message, reason.message, plainStepReason(step.reason || '')) },
+    { label: '错误信息', value: firstText(reason.login_message, reason.message, latestAttempt?.error_message, plainStepReason(step.reason || '')) },
     { label: '建议操作', value: reason.suggestion || suggestionFromCode(code) },
     { label: '上游诊断', value: metadataSummary(reason.metadata) },
     { label: '下次重试', value: formatDateTime(step.next_attempt_at) }

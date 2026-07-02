@@ -427,6 +427,47 @@ func TestServiceEnqueueRunDefersExecutionUntilWorkerClaimsStep(t *testing.T) {
 	require.Equal(t, "succeeded", repo.runs[0].Status)
 }
 
+func TestServiceListStepsIncludesAttemptLogs(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	repo := newFakeSchedulerRepository()
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil)
+	finishedAt := time.Date(2026, 6, 20, 10, 5, 0, 0, time.UTC)
+	repo.steps = []adminplusdomain.SchedulerStepRecord{
+		{
+			ID:           33192,
+			RunID:        "plan-supplier.costs.reconcile-test",
+			SupplierID:   12,
+			SupplierName: "登录 - 何意味",
+			TaskType:     adminplusdomain.ExtensionTaskTypeReconcileCosts,
+			Action:       "sync_costs",
+			Status:       "retryable_failed",
+			MaxAttempts:  3,
+		},
+	}
+	repo.attempts = []adminplusdomain.SchedulerAttemptRecord{
+		{
+			ID:           1,
+			StepID:       33192,
+			RunID:        "plan-supplier.costs.reconcile-test",
+			SupplierID:   12,
+			TaskType:     adminplusdomain.ExtensionTaskTypeReconcileCosts,
+			Status:       "retryable_failed",
+			AttemptNo:    1,
+			FinishedAt:   finishedAt,
+			ErrorCode:    "SUPPLIER_SESSION_BAD_STATUS",
+			ErrorMessage: "supplier session endpoint returned non-success status",
+		},
+	}
+
+	steps, err := service.ListSteps(context.Background(), "plan-supplier.costs.reconcile-test", 100, 0)
+
+	require.NoError(t, err)
+	require.Len(t, steps, 1)
+	require.Len(t, steps[0].OperationLogs, 1)
+	require.Equal(t, "SUPPLIER_SESSION_BAD_STATUS", steps[0].OperationLogs[0].ErrorCode)
+}
+
 func TestServiceEnqueueCostHistoryBackfillUsesStepSnapshot(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
@@ -1067,6 +1108,7 @@ func checklistItemStatus(items []adminplusdomain.SchedulerSupplierChecklistItem,
 type fakeSchedulerRepository struct {
 	runs     []adminplusdomain.SchedulerRunSummary
 	steps    []adminplusdomain.SchedulerStepRecord
+	attempts []adminplusdomain.SchedulerAttemptRecord
 	plans    []adminplusdomain.SchedulerPlan
 	settings *adminplusdomain.SchedulerSettings
 	actions  []adminplusdomain.SchedulerAction
@@ -1074,8 +1116,9 @@ type fakeSchedulerRepository struct {
 
 func newFakeSchedulerRepository() *fakeSchedulerRepository {
 	return &fakeSchedulerRepository{
-		runs:  make([]adminplusdomain.SchedulerRunSummary, 0),
-		steps: make([]adminplusdomain.SchedulerStepRecord, 0),
+		runs:     make([]adminplusdomain.SchedulerRunSummary, 0),
+		steps:    make([]adminplusdomain.SchedulerStepRecord, 0),
+		attempts: make([]adminplusdomain.SchedulerAttemptRecord, 0),
 	}
 }
 
@@ -1167,8 +1210,18 @@ func (r *fakeSchedulerRepository) ListSteps(_ context.Context, runID string, lim
 	return out, nil
 }
 
-func (r *fakeSchedulerRepository) ListAttempts(_ context.Context, _ string, _ int) ([]adminplusdomain.SchedulerAttemptRecord, error) {
-	return []adminplusdomain.SchedulerAttemptRecord{}, nil
+func (r *fakeSchedulerRepository) ListAttempts(_ context.Context, runID string, limit int) ([]adminplusdomain.SchedulerAttemptRecord, error) {
+	out := make([]adminplusdomain.SchedulerAttemptRecord, 0)
+	for _, attempt := range r.attempts {
+		if runID != "" && attempt.RunID != runID {
+			continue
+		}
+		out = append(out, attempt)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (r *fakeSchedulerRepository) DeleteRun(_ context.Context, runID string) (*adminplusdomain.SchedulerCleanupResult, error) {

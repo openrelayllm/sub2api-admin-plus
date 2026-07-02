@@ -1,6 +1,7 @@
 import { enableSupplierChannelScheduling, getSupplierCostSummary, getSupplierCurrentBalance, getSupplierSession, listSupplierBestChannelChecks, listSupplierChannelChecks, listSupplierChannelMonitors, listLocalSub2APIAccounts, listSupplierAccounts, listSuppliers, pauseSupplierChannelScheduling, probeSupplierChannel } from '@/api/admin/adminPlus'
 import type { Ref } from 'vue'
 import type { LocalSub2APIAccount, Supplier, SupplierAccount, SupplierBrowserSession, SupplierChannelCheckSnapshot, SupplierChannelMonitorView, SupplierCostSnapshot, SupplierCurrentBalance } from '@/api/admin/adminPlus'
+import { loadAllPagedItems } from '@/utils/loadAllPages'
 import type { ScheduleListRow, LoadBestChannelChecksOptions } from './types'
 import { ctxFn, ctxValue } from './ctxProxy'
 export function attachSuppliersData(ctx: any) {
@@ -132,8 +133,7 @@ export function attachSuppliersData(ctx: any) {
     scheduleListLoading.value = true
     scheduleListError.value = ''
     try {
-      const supplierResult = await listSuppliers({ page: 1, page_size: 1000 })
-      const supplierItems = supplierResult.items || []
+      const supplierItems = await loadAllPagedItems((page, page_size) => listSuppliers({ page, page_size }))
       scheduleListSuppliers.value = supplierItems
       if (supplierItems.length === 0) {
         scheduleListBindings.value = []
@@ -142,14 +142,14 @@ export function attachSuppliersData(ctx: any) {
         return
       }
 
-      const [localResult, accountResults, channelResults] = await Promise.all([
-        listLocalSub2APIAccounts({ page: 1, page_size: 1000 }),
-        Promise.all(supplierItems.map((supplier) => listSupplierAccounts(supplier.id, { page: 1, page_size: 1000 }))),
+      const [localAccounts, supplierAccountPages, channelResults] = await Promise.all([
+        loadAllPagedItems((page, page_size) => listLocalSub2APIAccounts({ page, page_size })),
+        Promise.all(supplierItems.map((supplier) => loadAllPagedItems((page, page_size) => listSupplierAccounts(supplier.id, { page, page_size })))),
         Promise.all(supplierItems.map((supplier) => listSupplierChannelChecks(supplier.id, { page: 1, page_size: 300 })))
       ])
 
-      scheduleListBindings.value = accountResults.flatMap((result) => result.items)
-      scheduleListLocalAccounts.value = Object.fromEntries(localResult.items.map((account) => [account.id, account]))
+      scheduleListBindings.value = supplierAccountPages.flat()
+      scheduleListLocalAccounts.value = Object.fromEntries(localAccounts.map((account) => [account.id, account]))
 
       const nextChecks: Record<string, SupplierChannelCheckSnapshot | undefined> = {}
       for (const result of channelResults) {
