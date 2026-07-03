@@ -58,6 +58,16 @@ func RegisterAdminPlusRoutes(
 		adminPlus.GET("/supplier-channel-checks/best", h.AdminPlus.ChannelCheck.ListBest)
 		adminPlus.GET("/supplier-channel-checks/overview", h.AdminPlus.ChannelCheck.Overview)
 
+		accountRateSync := adminPlus.Group("/account-rate-sync")
+		{
+			accountRateSync.GET("/accounts", h.AdminPlus.AccountRateSync.List)
+			accountRateSync.POST("/sync", h.AdminPlus.AccountRateSync.Sync)
+			accountRateSync.POST("/rename-matched", h.AdminPlus.AccountRateSync.RenameMatched)
+			accountRateSync.POST("/accounts/:accountID/retry", h.AdminPlus.AccountRateSync.RetryAccount)
+			accountRateSync.POST("/history/:historyID/rename", h.AdminPlus.AccountRateSync.Rename)
+			accountRateSync.DELETE("/history", h.AdminPlus.AccountRateSync.ClearHistory)
+		}
+
 		siteDiscovery := adminPlus.Group("/site-discovery")
 		{
 			siteDiscovery.GET("/settings", h.AdminPlus.SiteDiscovery.GetSettings)

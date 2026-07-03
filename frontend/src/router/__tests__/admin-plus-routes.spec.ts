@@ -25,6 +25,8 @@ describe('adminPlusRoutes', () => {
       '/admin/ops',
       '/admin/suppliers',
       '/admin/supplier-bindings',
+      '/admin/supplier-rate-checks',
+      '/admin/account-rate-sync',
       '/admin/scheduler',
       '/admin/scheduler/notifications',
       '/admin/system-logs',
@@ -106,6 +108,8 @@ describe('adminPlusRoutes', () => {
         '/admin/dashboard',
         '/admin/suppliers',
         '/admin/supplier-bindings',
+        '/admin/supplier-rate-checks',
+        '/admin/account-rate-sync',
         '/admin/scheduler',
         '/admin/scheduler/notifications',
         '/admin/system-logs',
@@ -122,7 +126,7 @@ describe('adminPlusRoutes', () => {
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(16)
+    expect(adminRoutes).toHaveLength(18)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)
@@ -137,11 +141,11 @@ describe('adminPlusRoutes', () => {
         ['/admin/operations/suppliers', '/admin/suppliers'],
         ['/admin/operations/supplier-accounts', '/admin/supplier-bindings'],
         ['/admin/ops', '/admin/suppliers'],
-        ['/admin/monitoring/rates', '/admin/suppliers'],
+        ['/admin/monitoring/rates', '/admin/supplier-rate-checks'],
         ['/admin/monitoring/health', '/admin/suppliers'],
         ['/admin/monitoring/account-runtime', '/admin/suppliers'],
         ['/admin/operations/account-runtime', '/admin/suppliers'],
-        ['/admin/operations/rates', '/admin/suppliers'],
+        ['/admin/operations/rates', '/admin/supplier-rate-checks'],
         ['/admin/monitoring/balances', '/admin/suppliers'],
         ['/admin/operations/balances', '/admin/suppliers'],
         ['/admin/operations/health', '/admin/suppliers'],

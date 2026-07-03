@@ -15,6 +15,8 @@ describe('AppSidebar Admin Plus navigation', () => {
     expect(componentSource).toContain("path: '/admin/settings'")
     expect(componentSource).toContain("path: '/admin/suppliers'")
     expect(componentSource).toContain("path: '/admin/supplier-bindings'")
+    expect(componentSource).toContain("path: '/admin/supplier-rate-checks'")
+    expect(componentSource).toContain("path: '/admin/account-rate-sync'")
     expect(componentSource).toContain("path: '/admin/scheduler'")
     expect(componentSource).toContain("path: '/admin/collection/sessions'")
     expect(componentSource).toContain("path: '/admin/collection/site-discovery'")
@@ -57,6 +59,8 @@ describe('AppSidebar Admin Plus navigation', () => {
 
     expect(suppliersGroupMatch?.[1]).toContain("label: '供应商管理'")
     expect(suppliersGroupMatch?.[1]).toContain("label: '账号/Key 绑定'")
+    expect(suppliersGroupMatch?.[1]).toContain("label: '倍率检测'")
+    expect(suppliersGroupMatch?.[1]).toContain("label: '账号倍率同步'")
     expect(collectionGroupMatch?.[1]).toContain("label: '采集会话'")
     expect(collectionGroupMatch?.[1]).toContain("label: '渠道索引采集'")
     expect(collectionGroupMatch?.[1]).not.toContain("label: '插件任务'")

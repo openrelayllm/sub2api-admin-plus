@@ -4,6 +4,7 @@ import (
 	newapiprovider "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/newapi/provider"
 	providerrouter "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/providerrouter"
 	sub2apiprovider "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
+	accountratesyncapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/accountratesync"
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	bizlogsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/bizlogs"
@@ -53,6 +54,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ports.SessionEntitlementAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionKeyAdapter), new(*providerrouter.Router)),
 	actionsapp.ProviderSet,
+	accountratesyncapp.ProviderSet,
 	balancesapp.ProviderSet,
 	channelchecksapp.ProviderSet,
 	usagecostsapp.ProviderSet,

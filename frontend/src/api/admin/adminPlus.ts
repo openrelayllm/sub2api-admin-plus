@@ -573,6 +573,67 @@ export interface SetSupplierChannelSchedulingPayload {
   local_account_group_ids?: number[]
 }
 
+export type AccountRateSyncStatus = 'matched' | 'renamed' | 'not_found' | 'ambiguous' | 'failed'
+
+export interface AccountRateSyncHistory {
+  id: number
+  local_sub2api_account_id: number
+  local_account_name: string
+  local_account_platform: string
+  key_last4?: string
+  supplier_id?: number
+  supplier_name?: string
+  supplier_type?: string
+  supplier_group_id?: number
+  supplier_group_name?: string
+  supplier_key_id?: number
+  match_source?: string
+  effective_rate_multiplier: number
+  target_account_name?: string
+  status: AccountRateSyncStatus
+  error_code?: string
+  error_message?: string
+  renamed: boolean
+  old_account_name?: string
+  new_account_name?: string
+  synced_at: string
+  created_at: string
+}
+
+export interface AccountRateSyncRow {
+  local_sub2api_account_id: number
+  local_account_name: string
+  local_account_platform: string
+  local_account_status?: string
+  local_account_schedulable: boolean
+  key_last4?: string
+  history?: AccountRateSyncHistory
+  status: AccountRateSyncStatus
+  supplier_id?: number
+  supplier_name?: string
+  supplier_type?: string
+  supplier_group_id?: number
+  supplier_group_name?: string
+  supplier_key_id?: number
+  match_source?: string
+  effective_rate_multiplier: number
+  target_account_name?: string
+  renamed: boolean
+  error_code?: string
+  error_message?: string
+  synced_at?: string
+}
+
+export interface AccountRateSyncResult {
+  items: AccountRateSyncRow[]
+  total: number
+  matched: number
+  renamed: number
+  not_found: number
+  ambiguous: number
+  failed: number
+}
+
 export interface LoginSupplierSessionPayload {
   origin?: string
   api_base_url?: string
@@ -2473,6 +2534,36 @@ export async function pauseSupplierChannelScheduling(supplierId: number, supplie
   return data
 }
 
+export async function listAccountRateSyncRows(params?: { protocol?: SupplierChannelCheckProtocol; limit?: number }): Promise<AdminPlusListResponse<AccountRateSyncRow>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<AccountRateSyncRow>>('/admin-plus/account-rate-sync/accounts', { params })
+  return data
+}
+
+export async function syncAccountRateRows(payload?: { protocol?: SupplierChannelCheckProtocol; limit?: number }): Promise<AccountRateSyncResult> {
+  const { data } = await apiClient.post<AccountRateSyncResult>('/admin-plus/account-rate-sync/sync', payload || {})
+  return data
+}
+
+export async function retryAccountRateSyncRow(accountId: number): Promise<AccountRateSyncRow> {
+  const { data } = await apiClient.post<AccountRateSyncRow>(`/admin-plus/account-rate-sync/accounts/${accountId}/retry`)
+  return data
+}
+
+export async function renameAccountRateSyncRow(historyId: number): Promise<AccountRateSyncRow> {
+  const { data } = await apiClient.post<AccountRateSyncRow>(`/admin-plus/account-rate-sync/history/${historyId}/rename`)
+  return data
+}
+
+export async function renameMatchedAccountRateSyncRows(payload?: { protocol?: SupplierChannelCheckProtocol; limit?: number }): Promise<AccountRateSyncResult> {
+  const { data } = await apiClient.post<AccountRateSyncResult>('/admin-plus/account-rate-sync/rename-matched', payload || {})
+  return data
+}
+
+export async function clearAccountRateSyncHistory(): Promise<{ deleted: number }> {
+  const { data } = await apiClient.delete<{ deleted: number }>('/admin-plus/account-rate-sync/history')
+  return data
+}
+
 export async function getSupplierCurrentBalance(id: number, params?: { refresh?: boolean; low_balance_threshold_cents?: number }): Promise<SupplierCurrentBalance> {
   const { data } = await apiClient.get<SupplierCurrentBalance>(`/admin-plus/suppliers/${id}/balance/current`, { params })
   return data
@@ -3491,6 +3582,12 @@ export const adminPlusAPI = {
   syncSupplierChannelChecks,
   enableSupplierChannelScheduling,
   pauseSupplierChannelScheduling,
+  listAccountRateSyncRows,
+  syncAccountRateRows,
+  retryAccountRateSyncRow,
+  renameAccountRateSyncRow,
+  renameMatchedAccountRateSyncRows,
+  clearAccountRateSyncHistory,
   upsertSupplierBrowserSession,
   listSupplierGroups,
   listSupplierGroupChangeEvents,

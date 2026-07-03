@@ -12,6 +12,7 @@ import (
 	provider2 "github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/newapi/provider"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/providerrouter"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/adapters/sub2api/provider"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/accountratesync"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/bizlogs"
@@ -235,6 +236,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	backupHandler := adminplus.NewBackupHandler(backupService, notificationsService, opsService, settingRepository)
 	usageCostHandler := adminplus.NewUsageCostHandler(usagecostsService)
 	channelCheckHandler := adminplus.NewChannelCheckHandlerWithProvisionJobs(channelchecksService, provisionjobsService)
+	accountRateSyncSQLRepository := accountratesync.NewSQLRepository(db, readDB)
+	accountRateSyncService := accountratesync.NewService(accountRateSyncSQLRepository, adminService)
+	accountRateSyncHandler := adminplus.NewAccountRateSyncHandler(accountRateSyncService)
 	extensionSQLRepository := extension.NewSQLRepository(db)
 	sessionCipher := extension.UseSessionCipher(secretEncryptor)
 	sitediscoverySQLRepository := sitediscovery.NewSQLRepository(db)
@@ -282,7 +286,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	tlsFingerprintProfileService := service.NewTLSFingerprintProfileService(tlsFingerprintProfileRepository, tlsFingerprintProfileCache)
 	accountTestService := service.NewAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService)
 	sub2APIHandler := adminplus.NewSub2APIHandlerWithAccountTest(sub2apiService, accountTestService)
-	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, extensionHandler, siteDiscoveryHandler, siteCatalogHandler, publicProxyAIHandler, purityHandler, mailVerificationHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler, proxyHandler, backupHandler)
+	adminPlusHandlers := handler.ProvideAdminPlusHandlers(supplierHandler, supplierGroupHandler, supplierKeyHandler, provisionJobHandler, rateHandler, balanceHandler, healthHandler, notificationHandler, usageCostHandler, costHandler, channelCheckHandler, accountRateSyncHandler, extensionHandler, siteDiscoveryHandler, siteCatalogHandler, publicProxyAIHandler, purityHandler, mailVerificationHandler, sessionHandler, schedulerHandler, actionHandler, sub2APIHandler, proxyHandler, backupHandler)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	handlers := handler.ProvideHandlers(authHandler, adminHandlers, adminPlusHandlers, handlerSettingHandler)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)

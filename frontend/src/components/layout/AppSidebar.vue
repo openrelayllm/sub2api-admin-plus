@@ -284,7 +284,9 @@ const adminNavItems = computed((): NavItem[] => [
     icon: OperationsIcon,
     children: [
       { path: '/admin/suppliers', label: '供应商管理', icon: OperationsIcon },
-      { path: '/admin/supplier-bindings', label: '账号/Key 绑定', icon: OperationsIcon }
+      { path: '/admin/supplier-bindings', label: '账号/Key 绑定', icon: OperationsIcon },
+      { path: '/admin/supplier-rate-checks', label: '倍率检测', icon: OperationsIcon },
+      { path: '/admin/account-rate-sync', label: '账号倍率同步', icon: OperationsIcon }
     ]
   },
   {

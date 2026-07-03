@@ -68,6 +68,18 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     meta: adminMeta('账号/Key 绑定')
   },
   {
+    path: '/admin/supplier-rate-checks',
+    name: 'AdminPlusSupplierRateChecks',
+    component: () => import('@/views/admin/operations/SupplierRateChecksView.vue'),
+    meta: adminMeta('倍率检测')
+  },
+  {
+    path: '/admin/account-rate-sync',
+    name: 'AdminPlusAccountRateSync',
+    component: () => import('@/views/admin/operations/AccountRateSyncView.vue'),
+    meta: adminMeta('账号倍率同步')
+  },
+  {
     path: '/admin/scheduler',
     name: 'AdminPlusSchedulerCenter',
     component: () => import('@/views/admin/scheduler/SchedulerCenterView.vue'),
@@ -141,7 +153,7 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
   },
   {
     path: '/admin/monitoring/rates',
-    redirect: redirectWithQuery('/admin/suppliers')
+    redirect: redirectWithQuery('/admin/supplier-rate-checks')
   },
   {
     path: '/admin/monitoring/balances',
@@ -207,7 +219,7 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
   },
   {
     path: '/admin/operations/rates',
-    redirect: redirectWithQuery('/admin/suppliers')
+    redirect: redirectWithQuery('/admin/supplier-rate-checks')
   },
   {
     path: '/admin/operations/balances',

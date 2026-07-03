@@ -27,6 +27,7 @@ type AdminPlusHandlers struct {
 	UsageCost        *adminplushandler.UsageCostHandler
 	Cost             *adminplushandler.CostHandler
 	ChannelCheck     *adminplushandler.ChannelCheckHandler
+	AccountRateSync  *adminplushandler.AccountRateSyncHandler
 	Extension        *adminplushandler.ExtensionHandler
 	SiteDiscovery    *adminplushandler.SiteDiscoveryHandler
 	SiteCatalog      *adminplushandler.SiteCatalogHandler

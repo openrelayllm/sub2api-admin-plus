@@ -128,184 +128,6 @@
   </template>
 
   <template #table>
-    <div class="border-b border-gray-100 bg-white px-4 py-4 dark:border-dark-700 dark:bg-dark-800">
-      <div class="flex flex-wrap items-end justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <div class="inline-flex overflow-hidden rounded-md border border-gray-200 bg-gray-50 p-0.5 dark:border-dark-700 dark:bg-dark-900">
-            <button
-              type="button"
-              class="rounded px-3 py-1.5 text-sm font-medium"
-              :class="rateCheckProtocol === 'openai' ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-700 dark:text-primary-200' : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
-              @click="rateCheckProtocol = 'openai'"
-            >
-              OpenAI
-            </button>
-            <button
-              type="button"
-              class="rounded px-3 py-1.5 text-sm font-medium"
-              :class="rateCheckProtocol === 'anthropic' ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-700 dark:text-primary-200' : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
-              @click="rateCheckProtocol = 'anthropic'"
-            >
-              Anthropic
-            </button>
-          </div>
-          <span class="badge badge-gray">渠道 {{ rateCheckStats.total }}</span>
-          <span class="badge badge-success">通畅 {{ rateCheckStats.available }}</span>
-          <span class="badge badge-primary">调度 {{ rateCheckStats.scheduled }}</span>
-          <span class="badge" :class="rateCheckStats.changed > 0 ? 'badge-warning' : 'badge-gray'">变动 {{ rateCheckStats.changed }}</span>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-2">
-          <label class="block w-28">
-            <span class="input-label">范围</span>
-            <select v-model="rateCheckMode" class="input h-9">
-              <option value="best">最佳</option>
-              <option value="all">全部</option>
-            </select>
-          </label>
-          <label class="block min-w-[220px]">
-            <span class="input-label">本地分组</span>
-            <select v-model.number="rateCheckSelectedLocalGroupID" class="input h-9">
-              <option value="">选择本地分组</option>
-              <option
-                v-for="group in rateCheckLocalGroups"
-                :key="group.id"
-                :value="group.id"
-              >
-                {{ group.name }} #{{ group.id }}
-              </option>
-            </select>
-          </label>
-          <button type="button" class="btn btn-secondary h-9 px-2 md:px-3" :disabled="rateCheckSchedulerSubmitting" title="提交分组同步调度" @click="syncRateCheckGroups">
-            <Icon name="sync" size="sm" :class="{ 'animate-spin': rateCheckSchedulerSubmitting }" />
-            <span class="hidden md:inline">同步倍率</span>
-          </button>
-          <button type="button" class="btn btn-secondary h-9 px-2 md:px-3" :disabled="rateCheckSchedulerSubmitting" title="提交渠道通畅检测调度" @click="checkRateCheckChannels">
-            <Icon name="beaker" size="sm" :class="{ 'animate-spin': rateCheckSchedulerSubmitting }" />
-            <span class="hidden md:inline">检测通畅</span>
-          </button>
-          <button type="button" class="btn btn-secondary h-9 px-2 md:px-3" :disabled="rateCheckLoading" title="刷新倍率检测列表" @click="loadSupplierRateChecks">
-            <Icon name="refresh" size="sm" :class="{ 'animate-spin': rateCheckLoading }" />
-            <span class="hidden md:inline">刷新</span>
-          </button>
-        </div>
-      </div>
-
-      <div v-if="rateCheckError" class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
-        {{ rateCheckError }}
-      </div>
-
-      <div class="mt-3 overflow-x-auto">
-        <table class="min-w-full table-fixed text-left text-sm">
-          <thead class="text-xs text-gray-500 dark:text-dark-400">
-            <tr class="border-b border-gray-100 dark:border-dark-700">
-              <th class="w-[260px] py-2 pr-3 font-medium">渠道</th>
-              <th class="w-[110px] px-3 py-2 text-right font-medium">倍率</th>
-              <th class="w-[120px] px-3 py-2 font-medium">变动</th>
-              <th class="w-[170px] px-3 py-2 font-medium">通畅</th>
-              <th class="w-[210px] px-3 py-2 font-medium">本地分组</th>
-              <th class="w-[100px] px-3 py-2 font-medium">调度</th>
-              <th class="w-[168px] py-2 pl-3 text-right font-medium">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="rateCheckLoading && rateCheckRows.length === 0">
-              <td colspan="7" class="py-6 text-center text-sm text-gray-500 dark:text-dark-400">加载中...</td>
-            </tr>
-            <tr v-else-if="rateCheckRows.length === 0">
-              <td colspan="7" class="py-6 text-center text-sm text-gray-500 dark:text-dark-400">暂无 {{ rateCheckProtocolLabel(rateCheckProtocol) }} 渠道</td>
-            </tr>
-            <template v-else>
-              <tr
-                v-for="row in rateCheckRows"
-                :key="rateCheckRowKey(row)"
-                class="border-b border-gray-50 last:border-0 dark:border-dark-700/70"
-              >
-                <td class="py-2 pr-3">
-                  <div class="min-w-0">
-                    <div class="flex min-w-0 items-center gap-2">
-                      <span class="badge shrink-0" :class="row.protocol === 'anthropic' ? 'badge-purple' : 'badge-primary'">{{ rateCheckProtocolLabel(row.protocol) }}</span>
-                      <span class="truncate font-medium text-gray-900 dark:text-gray-100" :title="row.supplier_name">{{ row.supplier_name }}</span>
-                    </div>
-                    <div class="mt-1 flex min-w-0 items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
-                      <span class="truncate" :title="row.group_name">{{ row.group_name || '-' }}</span>
-                      <span class="font-mono">#{{ row.supplier_group_id }}</span>
-                    </div>
-                  </div>
-                </td>
-                <td class="px-3 py-2 text-right">
-                  <span :class="rateCheckRowRateClass(row)">{{ formatMultiplier(rateCheckRowCostMultiplier(row)) }}</span>
-                  <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ formatMultiplier(row.effective_rate_multiplier) }}</div>
-                </td>
-                <td class="px-3 py-2">
-                  <div class="text-sm font-medium" :class="rateCheckChangeClass(row)">{{ rateCheckChangeLabel(row) }}</div>
-                  <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ row.changed_at ? formatDateTime(row.changed_at) : '-' }}</div>
-                </td>
-                <td class="px-3 py-2">
-                  <span class="badge" :class="channelProbeStatusClass(row.probe_status)" :title="rateCheckProbeTitle(row)">{{ channelProbeStatusLabel(row.probe_status) }}</span>
-                  <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                    首 {{ formatLatency(row.first_token_ms) }} · 总 {{ formatLatency(row.duration_ms) }}
-                  </div>
-                </td>
-                <td class="px-3 py-2">
-                  <div v-if="rateCheckRowLocalGroupLabels(row).length > 0" class="flex max-w-[200px] flex-wrap gap-1">
-                    <span
-                      v-for="label in rateCheckRowLocalGroupLabels(row)"
-                      :key="`${rateCheckRowKey(row)}:${label}`"
-                      class="inline-flex max-w-[92px] rounded-md border border-primary-200 bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-700 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-200"
-                      :title="label"
-                    >
-                      <span class="truncate">{{ label }}</span>
-                    </span>
-                  </div>
-                  <span v-else class="badge badge-gray">未绑定</span>
-                </td>
-                <td class="px-3 py-2">
-                  <span class="badge" :class="row.local_account_schedulable ? 'badge-success' : 'badge-gray'">
-                    {{ row.local_account_schedulable ? '调度中' : '未调度' }}
-                  </span>
-                </td>
-                <td class="py-2 pl-3">
-                  <div class="flex justify-end gap-1">
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm h-8 w-8 px-0"
-                      :disabled="Boolean(rateCheckActionKey)"
-                      title="复测该渠道"
-                      @click="probeRateCheckRow(row)"
-                    >
-                      <Icon name="beaker" size="xs" :class="{ 'animate-spin': isRateCheckRowActionRunning(row, 'probe') }" />
-                      <span class="sr-only">复测</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm h-8 w-8 px-0"
-                      :disabled="Boolean(rateCheckActionKey) || !selectedRateCheckLocalGroupID()"
-                      title="加入选择的本地分组"
-                      @click="bindRateCheckRowToLocalGroup(row)"
-                    >
-                      <Icon name="link" size="xs" :class="{ 'animate-spin': isRateCheckRowActionRunning(row, 'bind') }" />
-                      <span class="sr-only">加入分组</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm h-8 w-8 px-0"
-                      :disabled="Boolean(rateCheckActionKey)"
-                      :title="row.local_account_schedulable ? '暂停调度' : '加入调度'"
-                      @click="row.local_account_schedulable ? pauseRateCheckRow(row) : scheduleRateCheckRow(row)"
-                    >
-                      <Icon :name="row.local_account_schedulable ? 'ban' : 'play'" size="xs" :class="{ 'animate-spin': isRateCheckRowActionRunning(row, row.local_account_schedulable ? 'pause' : 'schedule') }" />
-                      <span class="sr-only">{{ row.local_account_schedulable ? '暂停调度' : '加入调度' }}</span>
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
     <div
       v-if="selectedCount > 0"
       class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 bg-primary-50/60 px-4 py-3 text-sm dark:border-dark-700 dark:bg-primary-900/20"
@@ -754,16 +576,6 @@ const {
   rowActionsMenuSupplier,
   sessionStore,
   scheduleListLoading,
-  rateCheckLoading,
-  rateCheckSchedulerSubmitting,
-  rateCheckActionKey,
-  rateCheckError,
-  rateCheckRows,
-  rateCheckLocalGroups,
-  rateCheckProtocol,
-  rateCheckMode,
-  rateCheckSelectedLocalGroupID,
-  rateCheckStats,
   rowLoginSupplierID,
   rowChannelCheckSupplierID,
   rowBalanceRefreshingID,
@@ -820,16 +632,6 @@ const {
   supplierSwitchStateClass,
   channelProbeStatusLabel,
   channelProbeStatusClass,
-  rateCheckProtocolLabel,
-  rateCheckRowKey,
-  isRateCheckRowActionRunning,
-  selectedRateCheckLocalGroupID,
-  rateCheckRowCostMultiplier,
-  rateCheckRowRateClass,
-  rateCheckRowLocalGroupLabels,
-  rateCheckChangeLabel,
-  rateCheckChangeClass,
-  rateCheckProbeTitle,
   middleEllipsis,
   splitMiddleEllipsis,
   sessionBadgeText,
@@ -842,13 +644,6 @@ const {
   oneClickLoginTitle,
   hasCredential,
   loadSuppliers,
-  loadSupplierRateChecks,
-  syncRateCheckGroups,
-  checkRateCheckChannels,
-  bindRateCheckRowToLocalGroup,
-  scheduleRateCheckRow,
-  pauseRateCheckRow,
-  probeRateCheckRow,
   openScheduleListDialog,
   handlePageChange,
   handlePageSizeChange,
