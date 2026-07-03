@@ -52,8 +52,8 @@ func (c *Client) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*p
 	if c == nil || c.httpClient == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "ADMIN_PLUS_INTERNAL_ERROR", "new api provider adapter is not configured")
 	}
-	if nonBlankSecret(in.Token) && (strings.TrimSpace(in.Username) == "" || !nonBlankSecret(in.Password)) {
-		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "new api direct login requires username and password")
+	if nonBlankSecret(in.Token) {
+		return c.directLoginFromToken(ctx, in)
 	}
 	if strings.TrimSpace(in.Username) == "" || !nonBlankSecret(in.Password) {
 		return nil, infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "new api username and password are required")
@@ -141,6 +141,188 @@ func (c *Client) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*p
 			"login_response_keys":  rawKeys(envelope.Data),
 		},
 	}, nil
+}
+
+func (c *Client) directLoginFromToken(ctx context.Context, in ports.DirectLoginInput) (*ports.DirectLoginResult, error) {
+	apiBaseURL, origin, err := normalizeBaseURLs(in.APIBaseURL, in.Origin)
+	if err != nil {
+		return nil, err
+	}
+	accessToken, userID, err := parseNewAPIAccessTokenCredential(in.Token, in.Username, in.LoginContext)
+	if err != nil {
+		return nil, err
+	}
+	capturedAt := c.now().UTC()
+	bundle := buildAccessTokenSessionBundle(in.SupplierID, origin, apiBaseURL, userID, accessToken, capturedAt)
+	probe, err := c.ProbeSub2APIUserProfile(ctx, ports.SessionProbeInput{
+		SupplierID: in.SupplierID,
+		Origin:     origin,
+		APIBaseURL: apiBaseURL,
+		Bundle:     bundle,
+	})
+	if err != nil {
+		return nil, err
+	}
+	applyProfileToSessionBundle(bundle, probe)
+	return &ports.DirectLoginResult{
+		SupplierID:    in.SupplierID,
+		Origin:        origin,
+		APIBaseURL:    apiBaseURL,
+		SessionBundle: bundle,
+		CapturedAt:    capturedAt,
+		Diagnostics: map[string]any{
+			"login_method":         "access_token",
+			"token_present":        true,
+			"profile_status":       stringFromProbeStatus(probe),
+			"auth_header_required": "New-Api-User",
+		},
+	}, nil
+}
+
+func parseNewAPIAccessTokenCredential(rawToken string, username string, loginContext map[string]any) (string, string, error) {
+	token := strings.TrimSpace(rawToken)
+	userID := firstNonEmpty(
+		newAPIUserIDFromContext(loginContext),
+		numericText(username),
+	)
+	if token == "" {
+		return "", "", infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "new api access token is required")
+	}
+	token, userID = parseNewAPITokenHeaderBlock(token, userID)
+	if strings.HasPrefix(strings.TrimSpace(token), "{") {
+		if parsedToken, parsedUserID := parseNewAPITokenJSON(token); parsedToken != "" {
+			token = parsedToken
+			userID = firstNonEmpty(userID, parsedUserID)
+		}
+	}
+	if candidateToken, candidateUserID := parseNewAPIColonToken(token); candidateToken != "" {
+		token = candidateToken
+		userID = firstNonEmpty(userID, candidateUserID)
+	}
+	token = normalizeAccessTokenValue(token)
+	if token == "" {
+		return "", "", infraerrors.New(http.StatusConflict, "SUPPLIER_DIRECT_LOGIN_CREDENTIAL_REQUIRED", "new api access token is required")
+	}
+	if userID == "" {
+		return "", "", infraerrors.New(
+			http.StatusConflict,
+			"SUPPLIER_DIRECT_LOGIN_NEW_API_USER_REQUIRED",
+			"new api access token login requires New-Api-User; put the numeric user id in login username or provide token JSON with user_id and access_token",
+		)
+	}
+	return token, userID, nil
+}
+
+func parseNewAPITokenHeaderBlock(raw string, userID string) (string, string) {
+	token := raw
+	for _, line := range strings.Split(raw, "\n") {
+		name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "authorization":
+			if strings.TrimSpace(value) != "" {
+				token = strings.TrimSpace(value)
+			}
+		case "new-api-user", "new_api_user", "newapiuser":
+			userID = firstNonEmpty(userID, numericText(value))
+		}
+	}
+	return token, userID
+}
+
+func parseNewAPITokenJSON(raw string) (string, string) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(raw), &root); err != nil {
+		return "", ""
+	}
+	token := firstNonEmpty(
+		stringFromAny(root["access_token"]),
+		stringFromAny(root["accessToken"]),
+		stringFromAny(root["auth_token"]),
+		stringFromAny(root["token"]),
+		stringFromAny(root["authorization"]),
+	)
+	if token == "" {
+		if data, ok := root["data"].(string); ok {
+			token = data
+		} else if data, ok := root["data"].(map[string]any); ok {
+			token = firstNonEmpty(
+				stringFromAny(data["access_token"]),
+				stringFromAny(data["accessToken"]),
+				stringFromAny(data["auth_token"]),
+				stringFromAny(data["token"]),
+				stringFromAny(data["authorization"]),
+			)
+		}
+	}
+	userID := firstNonEmpty(
+		newAPIIntLikeText(root["user_id"]),
+		newAPIIntLikeText(root["userID"]),
+		newAPIIntLikeText(root["uid"]),
+		newAPIIntLikeText(root["new_api_user"]),
+		newAPIIntLikeText(root["newApiUser"]),
+		newAPIIntLikeText(root["New-Api-User"]),
+		newAPIIntLikeText(root["new-api-user"]),
+	)
+	if userID == "" {
+		if user, ok := root["user"].(map[string]any); ok {
+			userID = firstNonEmpty(newAPIIntLikeText(user["id"]), newAPIIntLikeText(user["user_id"]), newAPIIntLikeText(user["uid"]))
+		}
+	}
+	return token, userID
+}
+
+func parseNewAPIColonToken(raw string) (string, string) {
+	left, right, ok := strings.Cut(strings.TrimSpace(raw), ":")
+	if !ok {
+		return "", ""
+	}
+	if userID := numericText(left); userID != "" && strings.TrimSpace(right) != "" {
+		return strings.TrimSpace(right), userID
+	}
+	return "", ""
+}
+
+func normalizeAccessTokenValue(value string) string {
+	token := strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	return token
+}
+
+func newAPIUserIDFromContext(context map[string]any) string {
+	return firstNonEmpty(
+		newAPIIntLikeText(context["user_id"]),
+		newAPIIntLikeText(context["uid"]),
+		newAPIIntLikeText(context["new_api_user"]),
+		newAPIIntLikeText(context["newApiUser"]),
+		newAPIIntLikeText(context["New-Api-User"]),
+	)
+}
+
+func newAPIIntLikeText(value any) string {
+	if text := numericText(stringFromAny(value)); text != "" {
+		return text
+	}
+	if n := int64FromAny(value); n > 0 {
+		return strconv.FormatInt(n, 10)
+	}
+	return ""
+}
+
+func numericText(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	n, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(n, 10)
 }
 
 func (c *Client) doSessionJSON(ctx context.Context, method string, endpoint string, bundle map[string]any) ([]byte, error) {

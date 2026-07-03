@@ -54,6 +54,43 @@ func buildSessionBundle(supplierID int64, origin string, apiBaseURL string, user
 	return bundle
 }
 
+func buildAccessTokenSessionBundle(supplierID int64, origin string, apiBaseURL string, userID string, accessToken string, capturedAt time.Time) map[string]any {
+	userID = strings.TrimSpace(userID)
+	accessToken = strings.TrimSpace(accessToken)
+	requiredHeaders := map[string]any{
+		"New-Api-User": userID,
+	}
+	if origin != "" {
+		requiredHeaders["origin"] = origin
+		requiredHeaders["referer"] = strings.TrimRight(origin, "/") + "/"
+	}
+	contextValue := map[string]any{
+		"api_base_url":   apiBaseURL,
+		"login_method":   "access_token",
+		"session_source": "direct_login",
+		"provider_type":  "new_api",
+		"system_type":    "new_api",
+		"user_id":        userID,
+	}
+	tokens := map[string]any{"access_token": accessToken}
+	return map[string]any{
+		"provider_type":     "new_api",
+		"system_type":       "new_api",
+		"supplier_id":       supplierID,
+		"origin":            origin,
+		"api_base_url":      apiBaseURL,
+		"access_token":      accessToken,
+		"tokens":            tokens,
+		"cookies":           []any{},
+		"required_headers":  requiredHeaders,
+		"context":           contextValue,
+		"captured_at":       capturedAt.UTC().Format(time.RFC3339),
+		"session_source":    "direct_login",
+		"auth_header_name":  "New-Api-User",
+		"auth_header_value": userID,
+	}
+}
+
 func applySessionHeaders(req *http.Request, bundle map[string]any) {
 	applyBrowserCompatHeaders(req)
 	requiredHeaders := mapValue(bundle, "required_headers")
@@ -65,6 +102,9 @@ func applySessionHeaders(req *http.Request, bundle map[string]any) {
 	)
 	if userID != "" {
 		req.Header.Set("New-Api-User", userID)
+	}
+	if accessToken := firstNonEmpty(stringValue(bundle, "access_token"), stringValueAt(bundle, "tokens", "access_token")); accessToken != "" {
+		req.Header.Set("Authorization", accessToken)
 	}
 	if cookie := firstNonEmpty(stringValue(requiredHeaders, "cookie"), stringValue(bundle, "cookie"), cookieHeaderFromBundle(bundle)); cookie != "" {
 		req.Header.Set("Cookie", cookie)
@@ -311,6 +351,9 @@ func applyProfileToSessionBundle(bundle map[string]any, probe *ports.SessionProb
 	}
 	if strings.TrimSpace(probe.Profile.Status) != "" {
 		contextValue["status"] = strings.TrimSpace(probe.Profile.Status)
+	}
+	if strings.TrimSpace(probe.Profile.Username) != "" {
+		contextValue["username"] = strings.TrimSpace(probe.Profile.Username)
 	}
 }
 

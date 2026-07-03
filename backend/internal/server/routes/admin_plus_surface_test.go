@@ -252,6 +252,7 @@ func TestAdminPlusCurrentRoutesAreMounted(t *testing.T) {
 		"GET /api/v1/admin-plus/costs/ledger-overview",
 		"GET /api/v1/admin-plus/costs/suppliers",
 		"GET /api/v1/admin-plus/supplier-channel-checks/best",
+		"GET /api/v1/admin-plus/supplier-channel-checks/overview",
 		"GET /api/v1/admin-plus/site-discovery/registrations",
 		"GET /api/v1/admin-plus/site-discovery/registrations/:id/logs",
 		"POST /api/v1/admin-plus/site-discovery/registrations/:id/rerun",

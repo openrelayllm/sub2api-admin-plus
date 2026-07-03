@@ -110,7 +110,7 @@
         </label>
         <label class="block">
           <span class="input-label">临时 Token</span>
-          <input v-model="form.browser_login_token" type="password" class="input" autocomplete="off" :placeholder="editingSupplier ? '留空不修改' : ''" />
+          <input v-model="form.browser_login_token" type="password" class="input" autocomplete="off" :placeholder="browserLoginTokenPlaceholder(form.type)" />
         </label>
       </div>
     </div>
@@ -183,14 +183,24 @@ const {
 
 function browserLoginIdentityLabel(type: string): string {
   if (type === 'sub2api') return '登录邮箱'
-  if (type === 'new_api') return '登录用户名'
+  if (type === 'new_api') return '登录用户名 / User ID'
   return '登录账号'
 }
 
 function browserLoginIdentityPlaceholder(type: string): string {
-  if (editingSupplier) return '留空不修改'
+  if (isEditingSupplier()) return '留空不修改'
   if (type === 'sub2api') return 'ops@example.com'
-  if (type === 'new_api') return 'username'
+  if (type === 'new_api') return 'username，Token 登录时填数字 User ID'
   return ''
+}
+
+function browserLoginTokenPlaceholder(type: string): string {
+  if (isEditingSupplier()) return '留空不修改'
+  if (type === 'new_api') return '{"access_token":"...","user_id":42}'
+  return ''
+}
+
+function isEditingSupplier(): boolean {
+  return Boolean(editingSupplier?.value ?? editingSupplier)
 }
 </script>

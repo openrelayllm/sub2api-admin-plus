@@ -6,8 +6,8 @@ import { useAppStore } from '@/stores/app'
 import { supplierDisplayUsageCents, supplierRechargeTotalCents } from '../supplierCostPresentation'
 import type { Column } from '@/components/common/types'
 import type { AdminGroup } from '@/types'
-import type { LocalSub2APIAccount, Supplier, SupplierAccount, SupplierBrowserSession, SupplierChannelCheckSnapshot, SupplierChannelMonitorView, SupplierCostSnapshot, SupplierCurrentBalance, SupplierGroup, SupplierGroupChangeEvent, SupplierGroupStatus, SupplierHealthStatus, SupplierKey, SupplierProvisionJob, SupplierSessionProbeResult, SupplierKind, SupplierRuntimeStatus, SupplierType } from '@/api/admin/adminPlus'
-import type { ChannelStatusWindow, ScheduleListStatusFilter, ScheduleListLocalGroupFilter, ChannelProtocol } from './types'
+import type { LocalSub2APIAccount, Supplier, SupplierAccount, SupplierBrowserSession, SupplierChannelCheckOverviewRow, SupplierChannelCheckSnapshot, SupplierChannelMonitorView, SupplierCostSnapshot, SupplierCurrentBalance, SupplierGroup, SupplierGroupChangeEvent, SupplierGroupStatus, SupplierHealthStatus, SupplierKey, SupplierProvisionJob, SupplierSessionProbeResult, SupplierKind, SupplierRuntimeStatus, SupplierType } from '@/api/admin/adminPlus'
+import type { ChannelStatusWindow, ScheduleListStatusFilter, ScheduleListLocalGroupFilter, ChannelProtocol, RateCheckMode, RateCheckProtocol } from './types'
 
 export function createSuppliersState() {
   const appStore = useAppStore()
@@ -73,6 +73,9 @@ export function createSuppliersState() {
   const channelScheduleSubmitting = ref(false)
   const scheduleListLoading = ref(false)
   const scheduleListActionKey = ref('')
+  const rateCheckLoading = ref(false)
+  const rateCheckSchedulerSubmitting = ref(false)
+  const rateCheckActionKey = ref('')
   const repairAccountsLoading = ref(false)
   const sessionLoadError = ref('')
   const channelStatusError = ref('')
@@ -87,6 +90,7 @@ export function createSuppliersState() {
   const provisionJobError = ref('')
   const channelCheckError = ref('')
   const scheduleListError = ref('')
+  const rateCheckError = ref('')
   const repairError = ref('')
   const lastProbe = ref<SupplierSessionProbeResult | null>(null)
   const rowLoginSupplierID = ref<number | null>(null)
@@ -95,6 +99,8 @@ export function createSuppliersState() {
   const quickStatusSupplierID = ref<number | null>(null)
   const channelCheckActionKey = ref('')
   const localOpenAIGroups = ref<AdminGroup[]>([])
+  const rateCheckRows = ref<SupplierChannelCheckOverviewRow[]>([])
+  const rateCheckLocalGroups = ref<AdminGroup[]>([])
   const provisionJobTimer = ref<ReturnType<typeof window.setTimeout> | undefined>()
   const channelStatusAutoRefreshTimer = ref<ReturnType<typeof window.setInterval> | undefined>()
 
@@ -110,6 +116,9 @@ export function createSuppliersState() {
     health_status: '' as '' | SupplierHealthStatus
   })
   const channelProtocolFilter = ref<ChannelProtocol | ''>('openai')
+  const rateCheckProtocol = ref<RateCheckProtocol>('openai')
+  const rateCheckMode = ref<RateCheckMode>('best')
+  const rateCheckSelectedLocalGroupID = ref<number | ''>('')
   const pagination = reactive({
     page: 1,
     page_size: getPersistedPageSize(),
@@ -315,6 +324,9 @@ export function createSuppliersState() {
     channelScheduleSubmitting,
     scheduleListLoading,
     scheduleListActionKey,
+    rateCheckLoading,
+    rateCheckSchedulerSubmitting,
+    rateCheckActionKey,
     repairAccountsLoading,
     sessionLoadError,
     channelStatusError,
@@ -329,6 +341,7 @@ export function createSuppliersState() {
     provisionJobError,
     channelCheckError,
     scheduleListError,
+    rateCheckError,
     repairError,
     lastProbe,
     rowLoginSupplierID,
@@ -337,6 +350,8 @@ export function createSuppliersState() {
     quickStatusSupplierID,
     channelCheckActionKey,
     localOpenAIGroups,
+    rateCheckRows,
+    rateCheckLocalGroups,
     provisionJobTimer,
     channelStatusAutoRefreshTimer,
     ROW_ACTIONS_MENU_WIDTH,
@@ -344,6 +359,9 @@ export function createSuppliersState() {
     ROW_ACTIONS_MENU_MARGIN,
     filters,
     channelProtocolFilter,
+    rateCheckProtocol,
+    rateCheckMode,
+    rateCheckSelectedLocalGroupID,
     pagination,
     groupPagination,
     groupFilters,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,11 +18,12 @@ import (
 )
 
 const (
-	DefaultProbeModel       = "gpt-5.4-mini"
-	defaultCandidateLimit   = 3
-	maxCandidateLimit       = 20
-	defaultFirstTokenSlowMS = int64(3000)
-	defaultTotalSlowMS      = int64(30000)
+	DefaultProbeModel          = "gpt-5.4-mini"
+	DefaultAnthropicProbeModel = "claude-sonnet-4-6"
+	defaultCandidateLimit      = 3
+	maxCandidateLimit          = 20
+	defaultFirstTokenSlowMS    = int64(3000)
+	defaultTotalSlowMS         = int64(30000)
 )
 
 var openAIGroupKeywordPattern = regexp.MustCompile(`\b(pro|plus)\b`)
@@ -42,6 +44,66 @@ type CheckResult struct {
 	Total      int                                             `json:"total"`
 	Best       *adminplusdomain.SupplierChannelCheckSnapshot   `json:"best,omitempty"`
 	Items      []*adminplusdomain.SupplierChannelCheckSnapshot `json:"items"`
+}
+
+type OverviewFilter struct {
+	Protocol    string
+	Mode        string
+	SupplierIDs []int64
+}
+
+type OverviewResult struct {
+	Items []*SupplierChannelOverviewRow `json:"items"`
+	Total int                           `json:"total"`
+}
+
+type SupplierChannelOverviewRow struct {
+	SupplierID                 int64                                        `json:"supplier_id"`
+	SupplierName               string                                       `json:"supplier_name"`
+	SupplierType               adminplusdomain.SupplierType                 `json:"supplier_type"`
+	SupplierRuntimeStatus      adminplusdomain.SupplierRuntimeStatus        `json:"supplier_runtime_status"`
+	SupplierHealthStatus       adminplusdomain.SupplierHealthStatus         `json:"supplier_health_status"`
+	SupplierGroupID            int64                                        `json:"supplier_group_id"`
+	ExternalGroupID            string                                       `json:"external_group_id"`
+	GroupName                  string                                       `json:"group_name"`
+	Description                string                                       `json:"description,omitempty"`
+	ProviderFamily             string                                       `json:"provider_family"`
+	OfficialName               string                                       `json:"official_name,omitempty"`
+	ModelFamily                string                                       `json:"model_family,omitempty"`
+	ModelSpec                  string                                       `json:"model_spec,omitempty"`
+	Protocol                   string                                       `json:"protocol"`
+	EffectiveRateMultiplier    float64                                      `json:"effective_rate_multiplier"`
+	SupplierKeyID              int64                                        `json:"supplier_key_id,omitempty"`
+	SupplierAccountID          int64                                        `json:"supplier_account_id,omitempty"`
+	LocalSub2APIAccountID      int64                                        `json:"local_sub2api_account_id,omitempty"`
+	LocalAccountName           string                                       `json:"local_account_name,omitempty"`
+	LocalAccountPlatform       string                                       `json:"local_account_platform,omitempty"`
+	LocalAccountStatus         string                                       `json:"local_account_status,omitempty"`
+	LocalAccountSchedulable    bool                                         `json:"local_account_schedulable"`
+	LocalAccountGroupIDs       []int64                                      `json:"local_account_group_ids,omitempty"`
+	LocalAccountGroupNames     []string                                     `json:"local_account_group_names,omitempty"`
+	SnapshotID                 int64                                        `json:"snapshot_id,omitempty"`
+	ChannelMonitorID           int64                                        `json:"channel_monitor_id,omitempty"`
+	ChannelName                string                                       `json:"channel_name,omitempty"`
+	ChannelProvider            string                                       `json:"channel_provider,omitempty"`
+	PrimaryModel               string                                       `json:"primary_model,omitempty"`
+	RemoteStatus               string                                       `json:"remote_status"`
+	ProbeModel                 string                                       `json:"probe_model"`
+	ProbeStatus                adminplusdomain.SupplierChannelProbeStatus   `json:"probe_status"`
+	Recommended                bool                                         `json:"recommended"`
+	FirstTokenMS               int64                                        `json:"first_token_ms"`
+	DurationMS                 int64                                        `json:"duration_ms"`
+	StatusCode                 int                                          `json:"status_code"`
+	ErrorClass                 string                                       `json:"error_class,omitempty"`
+	ErrorMessage               string                                       `json:"error_message,omitempty"`
+	CapturedAt                 *time.Time                                   `json:"captured_at,omitempty"`
+	ChangeEventID              int64                                        `json:"change_event_id,omitempty"`
+	ChangeDirection            adminplusdomain.SupplierGroupChangeDirection `json:"change_direction,omitempty"`
+	OldEffectiveRateMultiplier *float64                                     `json:"old_effective_rate_multiplier,omitempty"`
+	NewEffectiveRateMultiplier float64                                      `json:"new_effective_rate_multiplier,omitempty"`
+	ChangePercent              *float64                                     `json:"change_percent,omitempty"`
+	LowRate                    bool                                         `json:"low_rate,omitempty"`
+	ChangedAt                  *time.Time                                   `json:"changed_at,omitempty"`
 }
 
 type Candidate struct {
@@ -68,6 +130,7 @@ type Candidate struct {
 
 type Repository interface {
 	ListCandidates(ctx context.Context, supplierID int64) ([]*Candidate, error)
+	ListOverviewRows(ctx context.Context, supplierIDs []int64) ([]*SupplierChannelOverviewRow, error)
 	CreateSnapshot(ctx context.Context, snapshot *adminplusdomain.SupplierChannelCheckSnapshot) (*adminplusdomain.SupplierChannelCheckSnapshot, error)
 	ListLatestSnapshots(ctx context.Context, supplierID int64, limit int) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error)
 	ListLatestSnapshotsBySupplierIDs(ctx context.Context, supplierIDs []int64) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error)
@@ -129,9 +192,6 @@ func (s *Service) Check(ctx context.Context, in CheckInput) (*CheckResult, error
 		candidateLimit = maxCandidateLimit
 	}
 	probeModel := strings.TrimSpace(in.ProbeModel)
-	if probeModel == "" {
-		probeModel = DefaultProbeModel
-	}
 
 	candidates, err := s.repo.ListCandidates(ctx, in.SupplierID)
 	if err != nil {
@@ -279,12 +339,174 @@ func (s *Service) ListBest(ctx context.Context, supplierIDs []int64) ([]*adminpl
 	return out, nil
 }
 
+func (s *Service) ListOverview(ctx context.Context, filter OverviewFilter) (*OverviewResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("supplier channel check service is not configured")
+	}
+	rows, err := s.repo.ListOverviewRows(ctx, normalizeSupplierIDs(filter.SupplierIDs))
+	if err != nil {
+		return nil, err
+	}
+	protocol := normalizeProtocolFilter(filter.Protocol)
+	mode := strings.ToLower(strings.TrimSpace(filter.Mode))
+	if mode == "" {
+		mode = "best"
+	}
+	out := make([]*SupplierChannelOverviewRow, 0, len(rows))
+	for _, row := range rows {
+		if !overviewRowEligible(row) {
+			continue
+		}
+		row.Protocol = NormalizeChannelProtocol(
+			row.ProviderFamily,
+			row.GroupName,
+			row.Description,
+			row.OfficialName,
+			row.ModelFamily,
+			row.ModelSpec,
+			row.ChannelName,
+			row.ChannelProvider,
+			row.PrimaryModel,
+			row.ProbeModel,
+		)
+		if protocol != "" && row.Protocol != protocol {
+			continue
+		}
+		normalizeOverviewProbeFields(row)
+		out = append(out, row)
+	}
+	if mode == "best" {
+		out = bestOverviewRows(out)
+	}
+	sortOverviewRows(out)
+	return &OverviewResult{Items: out, Total: len(out)}, nil
+}
+
+func normalizeOverviewProbeFields(row *SupplierChannelOverviewRow) {
+	if row == nil {
+		return
+	}
+	if row.ProbeStatus == "" {
+		row.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusUntested
+	}
+	if row.RemoteStatus == "" {
+		row.RemoteStatus = "unknown"
+	}
+	if row.ProbeModel == "" {
+		row.ProbeModel = defaultProbeModelForProtocol(row.Protocol)
+	}
+	if row.SnapshotID == 0 && row.LocalSub2APIAccountID <= 0 {
+		row.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusNoLocalAccount
+		row.ErrorClass = firstNonEmpty(row.ErrorClass, "local_account_missing")
+		row.ErrorMessage = firstNonEmpty(row.ErrorMessage, "local Sub2API account binding is missing")
+	}
+}
+
+func overviewRowEligible(row *SupplierChannelOverviewRow) bool {
+	if row == nil {
+		return false
+	}
+	if row.SupplierRuntimeStatus == adminplusdomain.SupplierRuntimeStatusDisabled {
+		return false
+	}
+	if row.SupplierHealthStatus != "" && row.SupplierHealthStatus != adminplusdomain.SupplierHealthStatusNormal {
+		return false
+	}
+	return row.EffectiveRateMultiplier > 0
+}
+
+func bestOverviewRows(rows []*SupplierChannelOverviewRow) []*SupplierChannelOverviewRow {
+	bestBySupplierProtocol := make(map[string]*SupplierChannelOverviewRow)
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		key := overviewGroupKey(row)
+		if current := bestBySupplierProtocol[key]; current == nil || overviewRowBetter(row, current) {
+			bestBySupplierProtocol[key] = row
+		}
+	}
+	out := make([]*SupplierChannelOverviewRow, 0, len(bestBySupplierProtocol))
+	for _, row := range bestBySupplierProtocol {
+		out = append(out, row)
+	}
+	return out
+}
+
+func overviewGroupKey(row *SupplierChannelOverviewRow) string {
+	if row == nil {
+		return ""
+	}
+	return strconv.FormatInt(row.SupplierID, 10) + ":" + row.Protocol
+}
+
+func overviewRowBetter(candidate *SupplierChannelOverviewRow, current *SupplierChannelOverviewRow) bool {
+	if current == nil {
+		return true
+	}
+	candidateAvailable := candidate.ProbeStatus == adminplusdomain.SupplierChannelProbeStatusAvailable
+	currentAvailable := current.ProbeStatus == adminplusdomain.SupplierChannelProbeStatusAvailable
+	if candidateAvailable != currentAvailable {
+		return candidateAvailable
+	}
+	if candidate.LocalAccountSchedulable != current.LocalAccountSchedulable {
+		return candidate.LocalAccountSchedulable
+	}
+	if candidate.EffectiveRateMultiplier != current.EffectiveRateMultiplier {
+		return candidate.EffectiveRateMultiplier < current.EffectiveRateMultiplier
+	}
+	if candidate.FirstTokenMS != current.FirstTokenMS {
+		if candidate.FirstTokenMS == 0 {
+			return false
+		}
+		if current.FirstTokenMS == 0 {
+			return true
+		}
+		return candidate.FirstTokenMS < current.FirstTokenMS
+	}
+	if candidate.DurationMS != current.DurationMS {
+		if candidate.DurationMS == 0 {
+			return false
+		}
+		if current.DurationMS == 0 {
+			return true
+		}
+		return candidate.DurationMS < current.DurationMS
+	}
+	return timePtrAfter(candidate.CapturedAt, current.CapturedAt)
+}
+
+func sortOverviewRows(rows []*SupplierChannelOverviewRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Protocol != rows[j].Protocol {
+			return channelProtocolPriority(rows[i].Protocol) < channelProtocolPriority(rows[j].Protocol)
+		}
+		if rows[i].EffectiveRateMultiplier != rows[j].EffectiveRateMultiplier {
+			return rows[i].EffectiveRateMultiplier < rows[j].EffectiveRateMultiplier
+		}
+		if rows[i].SupplierName != rows[j].SupplierName {
+			return rows[i].SupplierName < rows[j].SupplierName
+		}
+		return rows[i].SupplierGroupID < rows[j].SupplierGroupID
+	})
+}
+
+func timePtrAfter(candidate *time.Time, current *time.Time) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	return candidate.After(*current)
+}
+
 type supplierGroupKey struct {
 	supplierID int64
 	groupID    int64
 }
 
-func (s *Service) SetScheduling(ctx context.Context, supplierID int64, supplierGroupID int64, schedulable bool) (*adminplusdomain.SupplierChannelCheckSnapshot, error) {
+func (s *Service) SetScheduling(ctx context.Context, supplierID int64, supplierGroupID int64, schedulable bool, localAccountGroupIDs ...[]int64) (*adminplusdomain.SupplierChannelCheckSnapshot, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("supplier channel check service is not configured")
 	}
@@ -300,8 +522,9 @@ func (s *Service) SetScheduling(ctx context.Context, supplierID int64, supplierG
 		return nil, conflict("SUPPLIER_CHANNEL_CANDIDATE_NOT_FOUND", "supplier channel candidate not found")
 	}
 	candidate := candidates[0]
-	if schedulable && (candidate.LocalSub2APIAccountID <= 0 || len(candidate.LocalAccountGroupIDs) == 0) {
-		refreshed, err := s.ensureSchedulingPrerequisites(ctx, candidate)
+	requestedGroupIDs := normalizeSchedulingGroupIDs(localAccountGroupIDs...)
+	if shouldEnsureSchedulingPrerequisites(candidate, schedulable, requestedGroupIDs) {
+		refreshed, err := s.ensureSchedulingPrerequisites(ctx, candidate, requestedGroupIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -330,7 +553,7 @@ func (s *Service) SetScheduling(ctx context.Context, supplierID int64, supplierG
 	return s.repo.CreateSnapshot(ctx, snapshot)
 }
 
-func (s *Service) ensureSchedulingPrerequisites(ctx context.Context, candidate *Candidate) (*Candidate, error) {
+func (s *Service) ensureSchedulingPrerequisites(ctx context.Context, candidate *Candidate, localAccountGroupIDs []int64) (*Candidate, error) {
 	if candidate == nil {
 		return nil, conflict("SUPPLIER_CHANNEL_CANDIDATE_NOT_FOUND", "supplier channel candidate not found")
 	}
@@ -339,7 +562,8 @@ func (s *Service) ensureSchedulingPrerequisites(ctx context.Context, candidate *
 	}
 	_, err := s.bindingEnsurer.EnsureGroup(ctx, supplierkeysapp.EnsureGroupInput{
 		EnsureAllInput: supplierkeysapp.EnsureAllInput{
-			SupplierID: candidate.SupplierID,
+			SupplierID:           candidate.SupplierID,
+			LocalAccountGroupIDs: localAccountGroupIDs,
 		},
 		SupplierGroupID: candidate.SupplierGroupID,
 	})
@@ -374,16 +598,23 @@ func (s *Service) applyProbe(ctx context.Context, snapshot *adminplusdomain.Supp
 	}
 	model := strings.TrimSpace(probeModel)
 	if model == "" {
-		model = DefaultProbeModel
+		model = defaultProbeModelForProtocol(NormalizeChannelProtocol(candidate.ProviderFamily, candidate.GroupName))
 	}
-	result, err := s.healthService.ProbeOpenAIResponses(ctx, healthapp.ProbeInput{
+	input := healthapp.ProbeInput{
 		SupplierID:                   candidate.SupplierID,
 		SupplierAccountID:            candidate.SupplierAccountID,
 		Model:                        model,
 		FirstTokenThresholdMS:        firstThreshold,
 		TotalLatencyThresholdMS:      totalThreshold,
 		ConcurrencySaturationPercent: 100,
-	})
+	}
+	var result *healthapp.RecordSampleResult
+	var err error
+	if NormalizeChannelProtocol(candidate.ProviderFamily, candidate.GroupName) == "anthropic" {
+		result, err = s.healthService.ProbeAnthropicMessages(ctx, input)
+	} else {
+		result, err = s.healthService.ProbeOpenAIResponses(ctx, input)
+	}
 	snapshot.ProbeModel = model
 	if err != nil {
 		snapshot.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusProbeFailed
@@ -471,7 +702,7 @@ func baseSnapshot(candidate *Candidate, monitor *ports.ChannelMonitorView, captu
 		GroupName:               candidate.GroupName,
 		ProviderFamily:          candidate.ProviderFamily,
 		RemoteStatus:            "unknown",
-		ProbeModel:              DefaultProbeModel,
+		ProbeModel:              defaultProbeModelForProtocol(NormalizeChannelProtocol(candidate.ProviderFamily, candidate.GroupName)),
 		ProbeStatus:             adminplusdomain.SupplierChannelProbeStatusUntested,
 		EffectiveRateMultiplier: candidate.EffectiveRateMultiplier,
 		LocalAccountSchedulable: candidate.LocalAccountSchedulable,
@@ -636,29 +867,20 @@ func groupSnapshotsByProtocol(items []*adminplusdomain.SupplierChannelCheckSnaps
 	return out
 }
 
-func snapshotProtocolKey(item *adminplusdomain.SupplierChannelCheckSnapshot) string {
-	if item == nil {
-		return "other"
-	}
-	switch strings.ToLower(strings.TrimSpace(item.ProviderFamily)) {
+func NormalizeChannelProtocol(providerFamily string, hints ...string) string {
+	provider := strings.ToLower(strings.TrimSpace(providerFamily))
+	switch provider {
 	case "openai":
 		return "openai"
-	case "anthropic":
-		return "claude"
-	case "gemini":
+	case "anthropic", "claude":
+		return "anthropic"
+	case "gemini", "google":
 		return "gemini"
 	}
-	haystack := strings.ToLower(strings.Join([]string{
-		item.ProviderFamily,
-		item.GroupName,
-		item.ChannelName,
-		item.ChannelProvider,
-		item.PrimaryModel,
-		item.ProbeModel,
-	}, " "))
+	haystack := strings.ToLower(strings.Join(append([]string{providerFamily}, hints...), " "))
 	switch {
 	case strings.Contains(haystack, "anthropic") || strings.Contains(haystack, "claude"):
-		return "claude"
+		return "anthropic"
 	case strings.Contains(haystack, "gemini") || strings.Contains(haystack, "google"):
 		return "gemini"
 	case strings.Contains(haystack, "openai") ||
@@ -673,11 +895,44 @@ func snapshotProtocolKey(item *adminplusdomain.SupplierChannelCheckSnapshot) str
 	}
 }
 
+func normalizeProtocolFilter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all":
+		return ""
+	case "openai":
+		return "openai"
+	case "anthropic", "claude":
+		return "anthropic"
+	case "gemini", "google":
+		return "gemini"
+	default:
+		return "other"
+	}
+}
+
+func snapshotProtocolKey(item *adminplusdomain.SupplierChannelCheckSnapshot) string {
+	if item == nil {
+		return "other"
+	}
+	protocol := NormalizeChannelProtocol(
+		item.ProviderFamily,
+		item.GroupName,
+		item.ChannelName,
+		item.ChannelProvider,
+		item.PrimaryModel,
+		item.ProbeModel,
+	)
+	if protocol == "anthropic" {
+		return "claude"
+	}
+	return protocol
+}
+
 func channelProtocolPriority(protocol string) int {
 	switch protocol {
 	case "openai":
 		return 0
-	case "claude":
+	case "anthropic", "claude":
 		return 1
 	case "gemini":
 		return 2
@@ -725,6 +980,65 @@ func normalizeSupplierIDs(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+func normalizeSchedulingGroupIDs(groups ...[]int64) []int64 {
+	seen := map[int64]struct{}{}
+	out := make([]int64, 0)
+	for _, group := range groups {
+		for _, id := range group {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func shouldEnsureSchedulingPrerequisites(candidate *Candidate, schedulable bool, requestedGroupIDs []int64) bool {
+	if candidate == nil {
+		return false
+	}
+	if candidate.LocalSub2APIAccountID <= 0 {
+		return schedulable || len(requestedGroupIDs) > 0
+	}
+	if hasMissingLocalAccountGroupIDs(candidate.LocalAccountGroupIDs, requestedGroupIDs) {
+		return true
+	}
+	return schedulable && len(candidate.LocalAccountGroupIDs) == 0
+}
+
+func hasMissingLocalAccountGroupIDs(existing []int64, requested []int64) bool {
+	if len(requested) == 0 {
+		return false
+	}
+	set := make(map[int64]struct{}, len(existing))
+	for _, id := range existing {
+		if id > 0 {
+			set[id] = struct{}{}
+		}
+	}
+	for _, id := range requested {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := set[id]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultProbeModelForProtocol(protocol string) string {
+	if protocol == "anthropic" || protocol == "claude" {
+		return DefaultAnthropicProbeModel
+	}
+	return DefaultProbeModel
 }
 
 func normalizeKey(value string) string {

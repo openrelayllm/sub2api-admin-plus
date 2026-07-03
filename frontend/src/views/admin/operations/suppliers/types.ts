@@ -6,6 +6,8 @@ export type ChannelScheduleStepIcon = 'beaker' | 'key' | 'link' | 'play' | 'chec
 export type ScheduleListStatusFilter = '' | 'scheduled' | 'paused' | 'risky' | 'untested'
 export type ScheduleListLocalGroupFilter = '' | '__ungrouped__' | string
 export type ChannelProtocol = 'openai' | 'claude' | 'gemini' | 'other'
+export type RateCheckProtocol = 'openai' | 'anthropic'
+export type RateCheckMode = 'best' | 'all'
 
 export interface ChannelScheduleStep {
   key: string

@@ -43,6 +43,7 @@ type EnsureAllInput struct {
 	LocalAccountBaseURL     string
 	LocalAccountConcurrency int
 	LocalAccountPriority    int
+	LocalAccountGroupIDs    []int64
 	RuntimeStatus           adminplusdomain.SupplierRuntimeStatus
 	HealthStatus            adminplusdomain.SupplierHealthStatus
 	BalanceThresholdCents   int64
@@ -525,6 +526,7 @@ func (s *Service) ensureGroup(ctx context.Context, normalized EnsureAllInput, su
 		LocalAccountConcurrency:    normalized.LocalAccountConcurrency,
 		LocalAccountPriority:       normalized.LocalAccountPriority,
 		LocalAccountRateMultiplier: &rate,
+		LocalAccountGroupIDs:       normalized.LocalAccountGroupIDs,
 		RuntimeStatus:              normalized.RuntimeStatus,
 		HealthStatus:               normalized.HealthStatus,
 		BalanceThresholdCents:      normalized.BalanceThresholdCents,
@@ -789,6 +791,7 @@ func (s *Service) normalizeProvisionInput(in ProvisionKeyInput) (ProvisionKeyInp
 		in.LocalAccountName = trimLimit(in.LocalAccountName, 160)
 	}
 	in.LocalAccountBaseURL = baseURL
+	in.LocalAccountGroupIDs = mergeInt64IDs(nil, in.LocalAccountGroupIDs...)
 	in.LocalAccountConcurrency = concurrency
 	in.RuntimeStatus = runtimeStatus
 	in.HealthStatus = healthStatus
@@ -838,6 +841,7 @@ func (s *Service) normalizeEnsureAllInput(ctx context.Context, in EnsureAllInput
 		return EnsureAllInput{}, nil, badRequest("SUPPLIER_ACCOUNT_BALANCE_INVALID", "balance values cannot be negative")
 	}
 	in.LocalAccountBaseURL = baseURL
+	in.LocalAccountGroupIDs = mergeInt64IDs(nil, in.LocalAccountGroupIDs...)
 	in.RuntimeStatus = runtimeStatus
 	in.HealthStatus = healthStatus
 	in.BalanceCurrency = normalizeCurrency(in.BalanceCurrency)
@@ -1004,6 +1008,7 @@ func localAccountInputForKey(in EnsureAllInput, supplier *adminplusdomain.Suppli
 		platform = firstNonEmpty(key.LocalAccountPlatform, platform)
 		name = firstNonEmpty(key.LocalAccountName, name)
 	}
+	groupIDs = mergeInt64IDs(groupIDs, in.LocalAccountGroupIDs...)
 	return localAccountEnsureInput{
 		Supplier:       supplier,
 		Group:          group,
@@ -1160,6 +1165,7 @@ func provisionInputFromEnsureAll(in EnsureAllInput, group *adminplusdomain.Suppl
 		SupplierID:                 in.SupplierID,
 		LocalAccountConcurrency:    in.LocalAccountConcurrency,
 		LocalAccountPriority:       in.LocalAccountPriority,
+		LocalAccountGroupIDs:       in.LocalAccountGroupIDs,
 		LocalAccountRateMultiplier: &rate,
 		RuntimeStatus:              in.RuntimeStatus,
 		HealthStatus:               in.HealthStatus,

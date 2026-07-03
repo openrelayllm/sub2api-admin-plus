@@ -42,7 +42,8 @@ type syncSupplierChannelsRequest struct {
 }
 
 type setChannelSchedulingRequest struct {
-	SupplierGroupID int64 `json:"supplier_group_id"`
+	SupplierGroupID      int64   `json:"supplier_group_id"`
+	LocalAccountGroupIDs []int64 `json:"local_account_group_ids"`
 }
 
 func (h *ChannelCheckHandler) ListBest(c *gin.Context) {
@@ -52,6 +53,19 @@ func (h *ChannelCheckHandler) ListBest(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"items": items, "total": len(items)})
+}
+
+func (h *ChannelCheckHandler) Overview(c *gin.Context) {
+	ids := parseSupplierIDsQuery(c.Query("supplier_ids"))
+	result, err := h.service.ListOverview(c.Request.Context(), channelchecksapp.OverviewFilter{
+		Protocol:    c.Query("protocol"),
+		Mode:        c.Query("mode"),
+		SupplierIDs: ids,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *ChannelCheckHandler) List(c *gin.Context) {
@@ -140,7 +154,7 @@ func (h *ChannelCheckHandler) setScheduling(c *gin.Context, schedulable bool) {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
 	}
-	snapshot, err := h.service.SetScheduling(c.Request.Context(), supplierID, req.SupplierGroupID, schedulable)
+	snapshot, err := h.service.SetScheduling(c.Request.Context(), supplierID, req.SupplierGroupID, schedulable, req.LocalAccountGroupIDs)
 	if response.ErrorFrom(c, err) {
 		return
 	}

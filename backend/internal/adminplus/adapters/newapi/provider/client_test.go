@@ -86,6 +86,59 @@ func TestClientDirectLoginStoresCookieAndProbesSelfWithUserHeader(t *testing.T) 
 	require.Equal(t, "signed-session", cookie["value"])
 }
 
+func TestClientDirectLoginWithAccessTokenStoresAuthorizationAndUserHeader(t *testing.T) {
+	now := time.Date(2026, 6, 22, 10, 30, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/user/self", r.URL.Path)
+		require.Equal(t, "42", r.Header.Get("New-Api-User"))
+		require.Equal(t, "new-api-access-token", r.Header.Get("Authorization"))
+		require.Empty(t, r.Header.Get("Cookie"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":42,"username":"root","display_name":"Root","role":10,"status":1,"group":"default","quota":2500000,"used_quota":0,"request_count":1}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.now = func() time.Time { return now }
+	result, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Token:      `{"access_token":"new-api-access-token","user_id":42}`,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "new_api", result.SessionBundle["provider_type"])
+	require.Equal(t, "direct_login", result.SessionBundle["session_source"])
+	require.Equal(t, "new-api-access-token", result.SessionBundle["access_token"])
+	require.Equal(t, "New-Api-User", result.SessionBundle["auth_header_name"])
+	require.Equal(t, "42", result.SessionBundle["auth_header_value"])
+	require.Equal(t, "access_token", result.Diagnostics["login_method"])
+
+	headers, ok := result.SessionBundle["required_headers"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "42", headers["New-Api-User"])
+	contextValue, ok := result.SessionBundle["context"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "access_token", contextValue["login_method"])
+	require.Equal(t, "42", contextValue["user_id"])
+	require.Equal(t, "10", contextValue["role"])
+	require.Equal(t, "enabled", contextValue["status"])
+}
+
+func TestClientDirectLoginWithAccessTokenRequiresUserID(t *testing.T) {
+	client := NewClient(nil)
+	_, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     "https://newapi.example.com",
+		APIBaseURL: "https://newapi.example.com",
+		Token:      "new-api-access-token",
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "SUPPLIER_DIRECT_LOGIN_NEW_API_USER_REQUIRED", infraerrors.Reason(err))
+}
+
 func TestClientProbeSelfConvertsQuotaUnitsToUSD(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/user/self", r.URL.Path)

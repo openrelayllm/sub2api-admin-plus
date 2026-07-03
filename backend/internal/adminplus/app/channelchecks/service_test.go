@@ -247,10 +247,50 @@ func TestServiceListBestReturnsLowestCurrentCandidateWhenNoAvailable(t *testing.
 	require.Equal(t, adminplusdomain.SupplierChannelProbeStatusRequestError, items[0].ProbeStatus)
 }
 
+func TestServiceListOverviewReturnsBestRowsByProtocol(t *testing.T) {
+	repo := newFakeChannelCheckRepository()
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	repo.overview = []*SupplierChannelOverviewRow{
+		fakeOverviewRow(7, 101, "new_api", "gpt-plus", 0.3, adminplusdomain.SupplierChannelProbeStatusRequestError, false, now),
+		fakeOverviewRow(7, 102, "new_api", "gpt-pro", 0.5, adminplusdomain.SupplierChannelProbeStatusAvailable, true, now.Add(time.Second)),
+		fakeOverviewRow(8, 201, "new_api", "claude-sonnet", 0.2, adminplusdomain.SupplierChannelProbeStatusAvailable, false, now.Add(2*time.Second)),
+		fakeOverviewRow(8, 202, "new_api", "claude-opus", 0.1, adminplusdomain.SupplierChannelProbeStatusUntested, false, now.Add(3*time.Second)),
+	}
+	svc := NewService(repo, nil, nil, nil)
+
+	result, err := svc.ListOverview(context.Background(), OverviewFilter{Protocol: "anthropic", Mode: "best"})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Total)
+	require.Equal(t, int64(201), result.Items[0].SupplierGroupID)
+	require.Equal(t, "anthropic", result.Items[0].Protocol)
+}
+
+func TestServiceSetSchedulingPassesRequestedLocalGroupIDs(t *testing.T) {
+	repo := newFakeChannelCheckRepository()
+	repo.candidates = []*Candidate{fakeCandidate(7, 101, 0.7, 201, false)}
+	repo.candidates[0].LocalAccountGroupIDs = []int64{301}
+
+	ensurer := &fakeLocalBindingEnsurer{
+		after: func() {
+			repo.candidates[0].LocalAccountGroupIDs = []int64{301, 302}
+		},
+	}
+	svc := NewServiceWithBindingEnsurer(repo, nil, nil, nil, ensurer)
+
+	snapshot, err := svc.SetScheduling(context.Background(), 7, 101, true, []int64{302})
+
+	require.NoError(t, err)
+	require.True(t, snapshot.LocalAccountSchedulable)
+	require.Len(t, ensurer.calls, 1)
+	require.Equal(t, []int64{302}, ensurer.calls[0].LocalAccountGroupIDs)
+}
+
 type fakeChannelCheckRepository struct {
 	nextID           int64
 	candidates       []*Candidate
 	snapshots        []*adminplusdomain.SupplierChannelCheckSnapshot
+	overview         []*SupplierChannelOverviewRow
 	pausedAccountIDs []int64
 }
 
@@ -266,6 +306,45 @@ func (r *fakeChannelCheckRepository) ListCandidates(_ context.Context, supplierI
 			cp.LocalAccountGroupIDs = append([]int64(nil), candidate.LocalAccountGroupIDs...)
 			out = append(out, &cp)
 		}
+	}
+	return out, nil
+}
+
+func (r *fakeChannelCheckRepository) ListOverviewRows(_ context.Context, supplierIDs []int64) ([]*SupplierChannelOverviewRow, error) {
+	seen := make(map[int64]struct{}, len(supplierIDs))
+	for _, id := range supplierIDs {
+		seen[id] = struct{}{}
+	}
+	out := make([]*SupplierChannelOverviewRow, 0, len(r.overview))
+	for _, row := range r.overview {
+		if row == nil {
+			continue
+		}
+		if len(seen) > 0 {
+			if _, ok := seen[row.SupplierID]; !ok {
+				continue
+			}
+		}
+		cp := *row
+		cp.LocalAccountGroupIDs = append([]int64(nil), row.LocalAccountGroupIDs...)
+		cp.LocalAccountGroupNames = append([]string(nil), row.LocalAccountGroupNames...)
+		if row.CapturedAt != nil {
+			value := *row.CapturedAt
+			cp.CapturedAt = &value
+		}
+		if row.ChangedAt != nil {
+			value := *row.ChangedAt
+			cp.ChangedAt = &value
+		}
+		if row.OldEffectiveRateMultiplier != nil {
+			value := *row.OldEffectiveRateMultiplier
+			cp.OldEffectiveRateMultiplier = &value
+		}
+		if row.ChangePercent != nil {
+			value := *row.ChangePercent
+			cp.ChangePercent = &value
+		}
+		out = append(out, &cp)
 	}
 	return out, nil
 }
@@ -426,6 +505,26 @@ func fakeSnapshot(id int64, supplierID int64, groupID int64, provider string, gr
 		DurationMS:              1500,
 		CapturedAt:              capturedAt,
 		CreatedAt:               capturedAt,
+	}
+}
+
+func fakeOverviewRow(supplierID int64, groupID int64, provider string, groupName string, rate float64, probeStatus adminplusdomain.SupplierChannelProbeStatus, schedulable bool, capturedAt time.Time) *SupplierChannelOverviewRow {
+	return &SupplierChannelOverviewRow{
+		SupplierID:              supplierID,
+		SupplierName:            "supplier",
+		SupplierType:            adminplusdomain.SupplierTypeSub2API,
+		SupplierRuntimeStatus:   adminplusdomain.SupplierRuntimeStatusCandidate,
+		SupplierHealthStatus:    adminplusdomain.SupplierHealthStatusNormal,
+		SupplierGroupID:         groupID,
+		GroupName:               groupName,
+		ProviderFamily:          provider,
+		EffectiveRateMultiplier: rate,
+		LocalSub2APIAccountID:   groupID + 1000,
+		LocalAccountSchedulable: schedulable,
+		ProbeStatus:             probeStatus,
+		FirstTokenMS:            1000,
+		DurationMS:              1500,
+		CapturedAt:              &capturedAt,
 	}
 }
 

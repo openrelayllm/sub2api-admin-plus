@@ -493,6 +493,58 @@ export interface SupplierChannelCheckSnapshot {
   created_at: string
 }
 
+export type SupplierChannelCheckProtocol = 'openai' | 'anthropic' | 'gemini' | 'other'
+export type SupplierChannelCheckOverviewMode = 'best' | 'all'
+
+export interface SupplierChannelCheckOverviewRow {
+  supplier_id: number
+  supplier_name: string
+  supplier_type: SupplierType
+  supplier_runtime_status: SupplierRuntimeStatus
+  supplier_health_status: SupplierHealthStatus
+  supplier_group_id: number
+  external_group_id: string
+  group_name: string
+  description?: string
+  provider_family: string
+  official_name?: string
+  model_family?: string
+  model_spec?: string
+  protocol: SupplierChannelCheckProtocol
+  effective_rate_multiplier: number
+  supplier_key_id?: number
+  supplier_account_id?: number
+  local_sub2api_account_id?: number
+  local_account_name?: string
+  local_account_platform?: string
+  local_account_status?: string
+  local_account_schedulable: boolean
+  local_account_group_ids?: number[]
+  local_account_group_names?: string[]
+  snapshot_id?: number
+  channel_monitor_id?: number
+  channel_name?: string
+  channel_provider?: string
+  primary_model?: string
+  remote_status: string
+  probe_model: string
+  probe_status: SupplierChannelProbeStatus
+  recommended: boolean
+  first_token_ms: number
+  duration_ms: number
+  status_code: number
+  error_class?: string
+  error_message?: string
+  captured_at?: string
+  change_event_id?: number
+  change_direction?: SupplierGroupChangeEvent['direction']
+  old_effective_rate_multiplier?: number | null
+  new_effective_rate_multiplier?: number
+  change_percent?: number | null
+  low_rate?: boolean
+  changed_at?: string
+}
+
 export interface SupplierChannelCheckResult {
   supplier_id: number
   checked_at: string
@@ -515,6 +567,10 @@ export interface SyncSupplierChannelsPayload {
   probe_model?: string
   first_token_threshold_ms?: number
   total_latency_threshold_ms?: number
+}
+
+export interface SetSupplierChannelSchedulingPayload {
+  local_account_group_ids?: number[]
 }
 
 export interface LoginSupplierSessionPayload {
@@ -2370,6 +2426,20 @@ export async function listSupplierBestChannelChecks(supplierIds?: number[]): Pro
   return data
 }
 
+export async function listSupplierChannelCheckOverview(params?: {
+  protocol?: SupplierChannelCheckProtocol
+  mode?: SupplierChannelCheckOverviewMode
+  supplier_ids?: number[]
+}): Promise<AdminPlusListResponse<SupplierChannelCheckOverviewRow>> {
+  const query = {
+    protocol: params?.protocol,
+    mode: params?.mode,
+    supplier_ids: params?.supplier_ids && params.supplier_ids.length > 0 ? params.supplier_ids.join(',') : undefined
+  }
+  const { data } = await apiClient.get<AdminPlusListResponse<SupplierChannelCheckOverviewRow>>('/admin-plus/supplier-channel-checks/overview', { params: query })
+  return data
+}
+
 export async function listSupplierChannelChecks(supplierId: number, params?: AdminPlusPaginationParams): Promise<AdminPlusListResponse<SupplierChannelCheckSnapshot>> {
   const { data } = await apiClient.get<AdminPlusListResponse<SupplierChannelCheckSnapshot>>(`/admin-plus/suppliers/${supplierId}/channel-checks`, { params })
   return data
@@ -2387,16 +2457,18 @@ export async function syncSupplierChannelChecks(supplierId: number, payload?: Sy
   return data
 }
 
-export async function enableSupplierChannelScheduling(supplierId: number, supplierGroupId: number): Promise<SupplierChannelCheckSnapshot> {
+export async function enableSupplierChannelScheduling(supplierId: number, supplierGroupId: number, payload?: SetSupplierChannelSchedulingPayload): Promise<SupplierChannelCheckSnapshot> {
   const { data } = await apiClient.post<SupplierChannelCheckSnapshot>(`/admin-plus/suppliers/${supplierId}/channel-checks/scheduling/enable`, {
-    supplier_group_id: supplierGroupId
+    supplier_group_id: supplierGroupId,
+    local_account_group_ids: payload?.local_account_group_ids
   })
   return data
 }
 
-export async function pauseSupplierChannelScheduling(supplierId: number, supplierGroupId: number): Promise<SupplierChannelCheckSnapshot> {
+export async function pauseSupplierChannelScheduling(supplierId: number, supplierGroupId: number, payload?: SetSupplierChannelSchedulingPayload): Promise<SupplierChannelCheckSnapshot> {
   const { data } = await apiClient.post<SupplierChannelCheckSnapshot>(`/admin-plus/suppliers/${supplierId}/channel-checks/scheduling/pause`, {
-    supplier_group_id: supplierGroupId
+    supplier_group_id: supplierGroupId,
+    local_account_group_ids: payload?.local_account_group_ids
   })
   return data
 }
@@ -3413,6 +3485,7 @@ export const adminPlusAPI = {
   probeSupplierSession,
   listSupplierChannelMonitors,
   listSupplierBestChannelChecks,
+  listSupplierChannelCheckOverview,
   listSupplierChannelChecks,
   probeSupplierChannel,
   syncSupplierChannelChecks,

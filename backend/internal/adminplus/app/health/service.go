@@ -24,6 +24,7 @@ const (
 	defaultFirstTokenThresholdMS   = int64(3000)
 	defaultTotalLatencyThresholdMS = int64(30000)
 	defaultProbeModel              = "gpt-5.5"
+	defaultAnthropicProbeModel     = "claude-sonnet-4-6"
 	defaultProbeTimeout            = 45 * time.Second
 	defaultProbePrompt             = "Return exactly: ok"
 	maxProbeErrorBodyBytes         = 64 * 1024
@@ -334,6 +335,71 @@ func (s *Service) ProbeOpenAIResponses(ctx context.Context, in ProbeInput) (*Rec
 	})
 }
 
+func (s *Service) ProbeAnthropicMessages(ctx context.Context, in ProbeInput) (*RecordSampleResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("health service is not configured")
+	}
+	if in.SupplierID <= 0 {
+		return nil, badRequest("HEALTH_SUPPLIER_ID_INVALID", "invalid supplier id")
+	}
+	target, err := s.repo.GetProbeTarget(ctx, in.SupplierID, in.SupplierAccountID)
+	if err != nil {
+		return nil, err
+	}
+	model := strings.TrimSpace(in.Model)
+	if model == "" {
+		model = defaultAnthropicProbeModel
+	}
+	prompt := strings.TrimSpace(in.Prompt)
+	if prompt == "" {
+		prompt = defaultProbePrompt
+	}
+	baseURL, err := probeBaseURL(target)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(target.APIKey) == "" {
+		return nil, infraerrors.New(http.StatusConflict, "HEALTH_PROBE_API_KEY_REQUIRED", "local Sub2API account api key is required for health probe")
+	}
+
+	startedAt := s.now().UTC()
+	probe, err := s.executeAnthropicMessagesProbe(ctx, baseURL, target.APIKey, model, prompt)
+	if err != nil {
+		return nil, err
+	}
+	rawPayload := map[string]any{
+		"provider":                    "anthropic",
+		"api_mode":                    "messages",
+		"model":                       model,
+		"endpoint":                    redactProbeURL(joinURL(baseURL, "/v1/messages")),
+		"supplier_account_id":         target.SupplierAccountID,
+		"local_sub2api_account_id":    target.LocalAccountID,
+		"local_sub2api_account_name":  target.LocalAccountName,
+		"local_sub2api_account_type":  target.LocalAccountType,
+		"local_sub2api_account_state": target.LocalAccountStatus,
+		"configured_concurrency":      target.LocalAccountConcurrency,
+		"response_text_present":       probe.ResponseTextPresent,
+		"error_message":               probe.ErrorMessage,
+	}
+	return s.RecordSample(ctx, RecordSampleInput{
+		SupplierID:                   in.SupplierID,
+		Source:                       "anthropic_messages_probe",
+		Model:                        model,
+		FirstTokenLatencyMS:          probe.FirstTokenLatencyMS,
+		TotalLatencyMS:               probe.TotalLatencyMS,
+		StatusCode:                   probe.StatusCode,
+		ErrorClass:                   probe.ErrorClass,
+		ObservedConcurrency:          0,
+		AvailableConcurrency:         positiveIntPtr(target.LocalAccountConcurrency),
+		ConcurrencyLimit:             positiveIntPtr(target.LocalAccountConcurrency),
+		FirstTokenThresholdMS:        in.FirstTokenThresholdMS,
+		TotalLatencyThresholdMS:      in.TotalLatencyThresholdMS,
+		ConcurrencySaturationPercent: in.ConcurrencySaturationPercent,
+		RawPayload:                   rawPayload,
+		CapturedAt:                   &startedAt,
+	})
+}
+
 func (s *Service) SyncFromSession(ctx context.Context, in SyncFromSessionInput) (*SyncFromSessionResult, error) {
 	if in.SupplierID <= 0 {
 		return nil, badRequest("HEALTH_SUPPLIER_ID_INVALID", "invalid supplier id")
@@ -571,6 +637,61 @@ func (s *Service) executeOpenAIResponsesProbe(ctx context.Context, baseURL strin
 	return result, nil
 }
 
+func (s *Service) executeAnthropicMessagesProbe(ctx context.Context, baseURL string, apiKey string, model string, prompt string) (*openAIResponsesProbeResult, error) {
+	started := s.now()
+	payload, err := json.Marshal(map[string]any{
+		"model":      model,
+		"system":     "You are a health-check endpoint. Reply briefly.",
+		"max_tokens": 16,
+		"stream":     true,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, joinURL(baseURL, "/v1/messages"), bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		total := int64(s.now().Sub(started) / time.Millisecond)
+		return &openAIResponsesProbeResult{
+			StatusCode:     0,
+			TotalLatencyMS: total,
+			ErrorClass:     "network_error",
+			ErrorMessage:   sanitizeProbeMessage(err.Error()),
+		}, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	result := &openAIResponsesProbeResult{StatusCode: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProbeErrorBodyBytes))
+		result.TotalLatencyMS = int64(s.now().Sub(started) / time.Millisecond)
+		result.ErrorClass = errorClassForStatus(resp.StatusCode)
+		result.ErrorMessage = sanitizeProbeMessage(string(body))
+		return result, nil
+	}
+
+	firstToken, textPresent, readErr := readAnthropicMessagesStream(resp.Body, started, s.now)
+	result.FirstTokenLatencyMS = firstToken
+	result.TotalLatencyMS = int64(s.now().Sub(started) / time.Millisecond)
+	result.ResponseTextPresent = textPresent
+	if readErr != nil {
+		result.ErrorClass = "stream_error"
+		result.ErrorMessage = sanitizeProbeMessage(readErr.Error())
+	}
+	return result, nil
+}
+
 func readOpenAIResponsesStream(body io.Reader, started time.Time, now func() time.Time) (int64, bool, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -595,6 +716,48 @@ func readOpenAIResponsesStream(body io.Reader, started time.Time, now func() tim
 			continue
 		}
 		if strings.TrimSpace(gjson.Get(data, "response.output.0.content.0.text").String()) != "" {
+			textPresent = true
+			if firstTokenMS == 0 {
+				firstTokenMS = int64(now().Sub(started) / time.Millisecond)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return firstTokenMS, textPresent, err
+	}
+	if firstTokenMS == 0 && textPresent {
+		firstTokenMS = int64(now().Sub(started) / time.Millisecond)
+	}
+	return firstTokenMS, textPresent, nil
+}
+
+func readAnthropicMessagesStream(body io.Reader, started time.Time, now func() time.Time) (int64, bool, error) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var firstTokenMS int64
+	textPresent := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		if gjson.Get(data, "type").String() == "error" {
+			message := firstNonEmptyString(
+				gjson.Get(data, "error.message").String(),
+				gjson.Get(data, "error.type").String(),
+				"anthropic stream error",
+			)
+			return firstTokenMS, textPresent, errors.New(message)
+		}
+		text := firstNonEmptyString(
+			gjson.Get(data, "delta.text").String(),
+			gjson.Get(data, "content_block.text").String(),
+		)
+		if strings.TrimSpace(text) != "" {
 			textPresent = true
 			if firstTokenMS == 0 {
 				firstTokenMS = int64(now().Sub(started) / time.Millisecond)
@@ -673,6 +836,15 @@ func sanitizeProbeMessage(message string) string {
 		value = value[:500]
 	}
 	return value
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func redactProbeURL(raw string) string {

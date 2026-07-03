@@ -152,6 +152,62 @@ func TestServiceProbeOpenAIResponsesRecordsGPT55Sample(t *testing.T) {
 	require.Empty(t, result.Events)
 }
 
+func TestServiceProbeAnthropicMessagesRecordsSample(t *testing.T) {
+	repo := newFakeHealthRepository()
+	var received struct {
+		Path    string
+		Model   string
+		APIKey  string
+		Version string
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Path = r.URL.Path
+		received.APIKey = r.Header.Get("x-api-key")
+		received.Version = r.Header.Get("anthropic-version")
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		received.Model, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"))
+	}))
+	t.Cleanup(server.Close)
+	repo.probeTarget = &ProbeTarget{
+		SupplierID:              7,
+		SupplierAPIBaseURL:      server.URL,
+		SupplierAccountID:       3,
+		LocalAccountID:          11,
+		LocalAccountName:        "Claude upstream",
+		LocalAccountPlatform:    "anthropic",
+		LocalAccountType:        "apikey",
+		LocalAccountStatus:      "active",
+		LocalAccountConcurrency: 8,
+		APIKey:                  "sk-ant-test",
+	}
+	svc := NewService(repo)
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	tick := 0
+	svc.now = func() time.Time {
+		tick++
+		return now.Add(time.Duration(tick*100) * time.Millisecond)
+	}
+
+	result, err := svc.ProbeAnthropicMessages(context.Background(), ProbeInput{
+		SupplierID:        7,
+		SupplierAccountID: 3,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "/v1/messages", received.Path)
+	require.Equal(t, "sk-ant-test", received.APIKey)
+	require.Equal(t, "2023-06-01", received.Version)
+	require.Equal(t, "claude-sonnet-4-6", received.Model)
+	require.NotNil(t, result.Sample)
+	require.Equal(t, "anthropic_messages_probe", result.Sample.Source)
+	require.Equal(t, "claude-sonnet-4-6", result.Sample.Model)
+	require.Equal(t, 200, result.Sample.StatusCode)
+	require.Empty(t, result.Events)
+}
+
 func TestServiceSyncFromSessionRunsOpenAICompatibleProbe(t *testing.T) {
 	repo := newFakeHealthRepository()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

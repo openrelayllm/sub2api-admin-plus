@@ -56,6 +56,7 @@ func RegisterAdminPlusRoutes(
 		}
 
 		adminPlus.GET("/supplier-channel-checks/best", h.AdminPlus.ChannelCheck.ListBest)
+		adminPlus.GET("/supplier-channel-checks/overview", h.AdminPlus.ChannelCheck.Overview)
 
 		siteDiscovery := adminPlus.Group("/site-discovery")
 		{

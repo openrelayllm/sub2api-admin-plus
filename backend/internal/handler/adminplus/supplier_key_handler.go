@@ -46,15 +46,16 @@ type provisionSupplierKeyRequest struct {
 }
 
 type ensureSupplierKeysRequest struct {
-	SyncProviderName        bool   `json:"sync_provider_name"`
-	LocalAccountBaseURL     string `json:"local_account_base_url"`
-	LocalAccountConcurrency int    `json:"local_account_concurrency"`
-	LocalAccountPriority    int    `json:"local_account_priority"`
-	RuntimeStatus           string `json:"runtime_status"`
-	HealthStatus            string `json:"health_status"`
-	BalanceThresholdCents   int64  `json:"balance_threshold_cents"`
-	BalanceCents            int64  `json:"balance_cents"`
-	BalanceCurrency         string `json:"balance_currency"`
+	SyncProviderName        bool    `json:"sync_provider_name"`
+	LocalAccountBaseURL     string  `json:"local_account_base_url"`
+	LocalAccountConcurrency int     `json:"local_account_concurrency"`
+	LocalAccountPriority    int     `json:"local_account_priority"`
+	LocalAccountGroupIDs    []int64 `json:"local_account_group_ids"`
+	RuntimeStatus           string  `json:"runtime_status"`
+	HealthStatus            string  `json:"health_status"`
+	BalanceThresholdCents   int64   `json:"balance_threshold_cents"`
+	BalanceCents            int64   `json:"balance_cents"`
+	BalanceCurrency         string  `json:"balance_currency"`
 }
 
 type repairSupplierKeyBindingRequest struct {
@@ -140,6 +141,7 @@ func (h *SupplierKeyHandler) EnsureAll(c *gin.Context) {
 			LocalAccountBaseURL:     req.LocalAccountBaseURL,
 			LocalAccountConcurrency: req.LocalAccountConcurrency,
 			LocalAccountPriority:    req.LocalAccountPriority,
+			LocalAccountGroupIDs:    req.LocalAccountGroupIDs,
 			RuntimeStatus:           adminplusdomain.NormalizeSupplierRuntimeStatus(req.RuntimeStatus),
 			HealthStatus:            adminplusdomain.NormalizeSupplierHealthStatus(req.HealthStatus),
 			BalanceThresholdCents:   req.BalanceThresholdCents,
@@ -271,6 +273,7 @@ func ensureAllRequestSnapshot(req ensureSupplierKeysRequest) map[string]any {
 		"local_account_base_url":    req.LocalAccountBaseURL,
 		"local_account_concurrency": req.LocalAccountConcurrency,
 		"local_account_priority":    req.LocalAccountPriority,
+		"local_account_group_ids":   req.LocalAccountGroupIDs,
 		"runtime_status":            req.RuntimeStatus,
 		"health_status":             req.HealthStatus,
 		"balance_threshold_cents":   req.BalanceThresholdCents,

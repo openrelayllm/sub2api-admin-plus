@@ -8,15 +8,18 @@
 
   async function enrichSessionBundle({ bundle, storage, supplier }) {
     const context = bundle.context || {}
+    const storageUser = userObjectFromStorage(storage)
     const userID = firstNonEmpty(
       context.user_id,
-      userIDFromStorage(storage)
+      userIDFromStorage(storage),
+      storageUser?.id
     )
     const profile = await probeProfile(storage, supplier, userID)
-    const providerType = inferProviderType(supplier, profile)
+    const providerType = inferProviderType(supplier, profile, storageUser, storage)
     if (providerType !== 'new_api') return bundle
 
-    const profileUserID = firstNonEmpty(profile?.id, userID)
+    const profileUser = profile || storageUser || {}
+    const profileUserID = firstNonEmpty(profileUser?.id, userID)
     bundle.provider_type = 'new_api'
     bundle.system_type = 'new_api'
     bundle.auth_header_name = 'New-Api-User'
@@ -26,10 +29,13 @@
     context.system_type = 'new_api'
     context.api_base_url = supplier?.api_base_url || location.origin
     context.user_id = profileUserID
-    if (profile) {
-      context.username = stringFromAny(profile.username)
-      context.display_name = stringFromAny(profile.display_name)
-      context.group = stringFromAny(profile.group)
+    if (profileUser) {
+      context.username = stringFromAny(profileUser.username)
+      context.display_name = stringFromAny(profileUser.display_name || profileUser.displayName)
+      context.email = stringFromAny(profileUser.email)
+      context.group = stringFromAny(profileUser.group)
+      context.role = stringFromAny(profileUser.role)
+      context.status = stringFromAny(profileUser.status)
     }
     bundle.context = context
 
@@ -87,10 +93,11 @@
     }
   }
 
-  function inferProviderType(supplier, profile) {
+  function inferProviderType(supplier, profile, storageUser, storage) {
     const explicit = normalizeProviderType(supplier?.type || supplier?.supplier_type || supplier?.provider_type)
     if (explicit) return explicit
-    return profile ? 'new_api' : ''
+    if (profile || storageUser) return 'new_api'
+    return hasStorageMarkers(storage) ? 'new_api' : ''
   }
 
   function normalizeProviderType(value) {
@@ -110,22 +117,83 @@
     return firstNonEmpty(
       firstStorageValue(storage, ['uid'], { exact: true }),
       firstStorageValue(storage, ['user_id', 'userid'], { exact: true }),
+      firstStorageValue(storage, ['new_api_user', 'new-api-user', 'newApiUser'], { exact: true }),
       userObjectFromStorage(storage)?.id
     )
   }
 
   function userObjectFromStorage(storage) {
+    const prioritized = []
+    const fallback = []
     for (const [key, value] of Object.entries(storage || {})) {
       const storageKey = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key
-      if (storageKey !== 'user') continue
-      try {
-        const parsed = JSON.parse(String(value || '{}'))
-        return parsed && typeof parsed === 'object' ? parsed : {}
-      } catch {
-        return {}
+      const normalized = storageKey.toLowerCase()
+      if (['user', 'userstorage', 'auth-store', 'auth_storage', 'authstore'].includes(normalized)) {
+        prioritized.push(value)
+      } else if (looksLikeJSON(value)) {
+        fallback.push(value)
       }
     }
+    for (const value of [...prioritized, ...fallback]) {
+      const parsed = parseJSON(value)
+      const user = findUserLikeObject(parsed)
+      if (user?.id) return user
+    }
     return {}
+  }
+
+  function findUserLikeObject(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 5) return null
+    const candidate = normalizeUserCandidate(value)
+    if (candidate?.id) return candidate
+    for (const key of ['user', 'currentUser', 'profile', 'self', 'data', 'auth', 'state']) {
+      const found = findUserLikeObject(value[key], depth + 1)
+      if (found?.id) return found
+    }
+    for (const nested of Object.values(value)) {
+      const found = findUserLikeObject(nested, depth + 1)
+      if (found?.id) return found
+    }
+    return null
+  }
+
+  function normalizeUserCandidate(value) {
+    if (!value || typeof value !== 'object') return null
+    const id = firstNonEmpty(value.id, value.user_id, value.userId, value.uid)
+    if (!id) return null
+    const identity = firstNonEmpty(
+      value.username,
+      value.display_name,
+      value.displayName,
+      value.email
+    )
+    const role = firstNonEmpty(value.role)
+    const statusOrUsage = firstNonEmpty(value.status, value.quota, value.used_quota, value.request_count)
+    if (!identity && !(role && statusOrUsage)) return null
+    return {
+      id,
+      username: value.username,
+      display_name: value.display_name || value.displayName,
+      email: value.email,
+      group: value.group,
+      role: value.role,
+      status: value.status
+    }
+  }
+
+  function parseJSON(value) {
+    try {
+      const raw = String(value || '').trim()
+      if (!raw) return null
+      return JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+
+  function looksLikeJSON(value) {
+    const raw = String(value || '').trim()
+    return raw.startsWith('{') || raw.startsWith('[')
   }
 
   function firstStorageValue(storage, patterns, options = {}) {

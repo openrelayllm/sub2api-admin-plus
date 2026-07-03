@@ -49,6 +49,7 @@ func ensureAllInputFromSnapshot(supplierID int64, snapshot map[string]any) suppl
 		LocalAccountBaseURL:     stringValue(snapshot["local_account_base_url"]),
 		LocalAccountConcurrency: intValue(snapshot["local_account_concurrency"]),
 		LocalAccountPriority:    intValue(snapshot["local_account_priority"]),
+		LocalAccountGroupIDs:    int64SliceValue(snapshot["local_account_group_ids"]),
 		RuntimeStatus:           adminplusdomain.NormalizeSupplierRuntimeStatus(stringValue(snapshot["runtime_status"])),
 		HealthStatus:            adminplusdomain.NormalizeSupplierHealthStatus(stringValue(snapshot["health_status"])),
 		BalanceThresholdCents:   int64Value(snapshot["balance_threshold_cents"]),
