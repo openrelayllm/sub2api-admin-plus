@@ -58,6 +58,26 @@ func RegisterAdminPlusRoutes(
 		adminPlus.GET("/supplier-channel-checks/best", h.AdminPlus.ChannelCheck.ListBest)
 		adminPlus.GET("/supplier-channel-checks/overview", h.AdminPlus.ChannelCheck.Overview)
 
+		kanban := adminPlus.Group("/kanban")
+		{
+			kanban.GET("/overview", h.AdminPlus.Kanban.Overview)
+			kanban.GET("/market-price-sources/discover", h.AdminPlus.Kanban.DiscoverMarketPriceSources)
+			kanban.POST("/market-prices/parse", h.AdminPlus.Kanban.ParseMarketPrices)
+			kanban.POST("/market-prices/import-url", h.AdminPlus.Kanban.ImportMarketPricesFromURL)
+			kanban.POST("/market-prices", h.AdminPlus.Kanban.RecordMarketPrice)
+			kanban.GET("/market-prices", h.AdminPlus.Kanban.ListMarketPrices)
+			kanban.POST("/cache-efficiency", h.AdminPlus.Kanban.RecordCacheEfficiency)
+			kanban.GET("/cache-efficiency", h.AdminPlus.Kanban.ListCacheEfficiency)
+			kanban.POST("/supply-quality", h.AdminPlus.Kanban.RecordSupplyQuality)
+			kanban.GET("/supply-quality", h.AdminPlus.Kanban.ListSupplyQuality)
+			kanban.POST("/acceptance-reports/generate", h.AdminPlus.Kanban.GenerateAcceptanceReport)
+			kanban.POST("/acceptance-reports/refresh-from-run", h.AdminPlus.Kanban.RefreshAcceptanceReportFromEvidenceRun)
+			kanban.POST("/acceptance-reports", h.AdminPlus.Kanban.RecordAcceptanceReport)
+			kanban.GET("/acceptance-reports", h.AdminPlus.Kanban.ListAcceptanceReports)
+			kanban.GET("/events", h.AdminPlus.Kanban.ListEvents)
+			kanban.PATCH("/events/:id/status", h.AdminPlus.Kanban.UpdateEventStatus)
+		}
+
 		accountRateSync := adminPlus.Group("/account-rate-sync")
 		{
 			accountRateSync.GET("/accounts", h.AdminPlus.AccountRateSync.List)
@@ -279,6 +299,8 @@ func RegisterAdminPlusRoutes(
 			actions.POST("/generate", h.AdminPlus.Action.Generate)
 			actions.GET("/recommendations", h.AdminPlus.Action.ListRecommendations)
 			actions.PATCH("/recommendations/:id/status", h.AdminPlus.Action.UpdateRecommendationStatus)
+			actions.POST("/recommendations/:id/execute", h.AdminPlus.Action.ExecuteRecommendation)
+			actions.GET("/recommendations/:id/executions", h.AdminPlus.Action.ListExecutions)
 		}
 	}
 }

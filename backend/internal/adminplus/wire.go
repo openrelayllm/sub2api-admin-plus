@@ -12,6 +12,7 @@ import (
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
+	kanbanapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/kanban"
 	mailverificationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/mailverification"
 	notificationsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/notifications"
 	provisionjobsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/provisionjobs"
@@ -36,13 +37,17 @@ func ProvideBusinessLogRecorder(repo service.OpsRepository) *bizlogsapp.Recorder
 	return bizlogsapp.NewRecorder(repo)
 }
 
+func UseMailVerificationEmailSender(emailService *service.EmailService) mailverificationapp.EmailSender {
+	return emailService
+}
+
 var ProviderSet = wire.NewSet(
 	sub2apiprovider.ProvideHTTPClient,
 	sub2apiprovider.NewSessionProfileClient,
 	newapiprovider.NewClient,
 	providerrouter.New,
 	ProvideBusinessLogRecorder,
-	wire.Bind(new(mailverificationapp.EmailSender), new(*service.EmailService)),
+	UseMailVerificationEmailSender,
 	wire.Bind(new(ports.SessionProbeAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.SessionLoginAdapter), new(*providerrouter.Router)),
 	wire.Bind(new(ports.DirectRegistrationAdapter), new(*providerrouter.Router)),
@@ -70,6 +75,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(costsapp.UsageCostSyncer), new(*usagecostsapp.Service)),
 	wire.Bind(new(costsapp.BalanceSyncer), new(*balancesapp.Service)),
 	wire.Bind(new(costsapp.SupplierLookup), new(*suppliersapp.Service)),
+	wire.Bind(new(actionsapp.SupplierStatusUpdater), new(*suppliersapp.Service)),
 	wire.Bind(new(ratesapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(usagecostsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(provisionjobsapp.GroupSyncer), new(*suppliergroupsapp.Service)),
@@ -82,11 +88,15 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(schedulerapp.HealthSyncer), new(*healthapp.Service)),
 	wire.Bind(new(schedulerapp.UsageCostSyncer), new(*usagecostsapp.Service)),
 	wire.Bind(new(schedulerapp.ChannelChecker), new(*channelchecksapp.Service)),
+	wire.Bind(new(schedulerapp.PurityChecker), new(*purityapp.Service)),
 	wire.Bind(new(schedulerapp.SessionRefresher), new(*sessionsapp.Service)),
 	wire.Bind(new(suppliergroupsapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(supplierkeysapp.SessionReader), new(*sessionsapp.Service)),
 	wire.Bind(new(channelchecksapp.LocalBindingEnsurer), new(*supplierkeysapp.Service)),
+	wire.Bind(new(kanbanapp.SiteCatalogReader), new(*sitecatalogapp.Service)),
+	wire.Bind(new(kanbanapp.AcceptanceEvidenceScheduler), new(*schedulerapp.Service)),
 	healthapp.ProviderSet,
+	kanbanapp.ProviderSet,
 	mailverificationapp.ProviderSet,
 	notificationsapp.ProviderSet,
 	purityapp.ProviderSet,

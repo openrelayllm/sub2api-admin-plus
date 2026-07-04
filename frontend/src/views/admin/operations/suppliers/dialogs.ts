@@ -338,6 +338,11 @@ export function attachSupplierDialogs(ctx: any) {
 
   async function directLoginSupplier(supplier: Supplier, options: { updateLastProbe: boolean; successMessage: string }) {
     const result = await loginSupplierSession(supplier.id, {
+      login_context: supplier.type === 'new_api' ? {
+        source: 'supplier_manual_login',
+        require_admin_session: true,
+        required_role: '10'
+      } : undefined,
       record_balance_snapshot: true
     })
     sessionStore[supplier.id] = result.session

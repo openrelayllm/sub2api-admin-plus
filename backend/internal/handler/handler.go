@@ -23,6 +23,7 @@ type AdminPlusHandlers struct {
 	Rate             *adminplushandler.RateHandler
 	Balance          *adminplushandler.BalanceHandler
 	Health           *adminplushandler.HealthHandler
+	Kanban           *adminplushandler.KanbanHandler
 	Notification     *adminplushandler.NotificationHandler
 	UsageCost        *adminplushandler.UsageCostHandler
 	Cost             *adminplushandler.CostHandler

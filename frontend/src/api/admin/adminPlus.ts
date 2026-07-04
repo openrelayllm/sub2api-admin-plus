@@ -1299,6 +1299,254 @@ export interface RateSnapshot {
   created_at: string
 }
 
+export type MarketPriceSourceType = 'manual' | 'site_catalog' | 'site_discovery' | 'provider_page' | 'api'
+export type CacheEfficiencySupplyType = 'supplier' | 'own_pool' | 'competitor' | 'custom'
+export type CacheRoutingStrategy = 'unknown' | 'fixed_account' | 'round_robin' | 'weighted_round_robin' | 'sticky' | 'least_loaded' | 'custom'
+export type CacheStickyScope = 'none' | 'user' | 'api_key' | 'project' | 'session' | 'organization' | 'custom'
+export type CacheEfficiencyStatus = 'unknown' | 'healthy' | 'watching' | 'risky' | 'bad'
+export type KanbanRiskLevel = 'unknown' | 'low' | 'medium' | 'high'
+export type KanbanEventType = 'market_price_drop' | 'market_price_rise' | 'market_price_anomaly' | 'market_model_added' | 'market_model_removed' | 'market_promotion' | 'cache_efficiency_risk' | 'supply_quality_risk' | 'acceptance_risk' | 'unprofitable_model' | 'pricing_recommendation'
+export type KanbanEventSeverity = 'info' | 'warning' | 'critical'
+export type KanbanEventStatus = 'open' | 'acknowledged' | 'ignored'
+export type SupplyQualityDecision = 'production' | 'watching' | 'low_priority' | 'paused' | 'blocked'
+export type AcceptanceStepStatus = 'unknown' | 'pass' | 'warn' | 'fail'
+
+export interface MarketPriceSnapshot {
+  id: number
+  source_type: MarketPriceSourceType | string
+  source_name: string
+  source_url?: string
+  site_id?: number
+  supplier_id?: number
+  model: string
+  billing_mode: string
+  price_item: string
+  unit: string
+  currency: string
+  price_micros: number
+  package_label?: string
+  package_price_cents?: number | null
+  package_quota?: string
+  rate_multiplier?: number | null
+  min_recharge_cents?: number | null
+  bonus_percent?: number | null
+  confidence: number
+  observed_at: string
+  raw_payload?: Record<string, unknown>
+  created_at: string
+}
+
+export interface CacheEfficiencySnapshot {
+  id: number
+  supply_type: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  model: string
+  routing_strategy: CacheRoutingStrategy | string
+  sticky_scope: CacheStickyScope | string
+  sample_requests: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  input_tokens: number
+  output_tokens: number
+  cache_hit_ratio: number
+  duplicate_input_tokens: number
+  estimated_waste_cents: number
+  avg_ttft_ms?: number | null
+  avg_total_latency_ms?: number | null
+  status: CacheEfficiencyStatus | string
+  notes?: string
+  observed_at: string
+  raw_payload?: Record<string, unknown>
+  created_at: string
+}
+
+export interface SupplyQualitySnapshot {
+  id: number
+  supply_type: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  model?: string
+  availability_ratio: number
+  error_ratio: number
+  avg_ttft_ms?: number | null
+  avg_total_latency_ms?: number | null
+  cache_hit_ratio: number
+  purity_score: number
+  usage_trust_score: number
+  balance_risk_score: number
+  concurrency_score: number
+  quality_score: number
+  decision: SupplyQualityDecision | string
+  notes?: string
+  observed_at: string
+  raw_payload?: Record<string, unknown>
+  created_at: string
+}
+
+export interface AcceptanceReport {
+  id: number
+  supply_type: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  model?: string
+  status: SupplyQualityDecision | string
+  connectivity_status: AcceptanceStepStatus | string
+  model_list_status: AcceptanceStepStatus | string
+  purity_status: AcceptanceStepStatus | string
+  trial_call_status: AcceptanceStepStatus | string
+  usage_metering_status: AcceptanceStepStatus | string
+  cache_audit_status: AcceptanceStepStatus | string
+  balance_status: AcceptanceStepStatus | string
+  concurrency_status: AcceptanceStepStatus | string
+  failure_reason?: string
+  recommendation?: string
+  report_payload?: Record<string, unknown>
+  observed_at: string
+  created_at: string
+}
+
+export interface KanbanModelMarginRow {
+  model: string
+  currency: string
+  market_low_price_micros?: number | null
+  market_median_price_micros?: number | null
+  market_high_price_micros?: number | null
+  market_sample_count: number
+  best_supplier_cost_micros?: number | null
+  cache_adjusted_cost_micros?: number | null
+  cache_hit_ratio?: number | null
+  cache_status?: CacheEfficiencyStatus | string
+  quality_score?: number | null
+  quality_decision?: SupplyQualityDecision | string
+  acceptance_status?: SupplyQualityDecision | string
+  suggested_price_micros?: number | null
+  gross_margin_percent?: number | null
+  risk_level: KanbanRiskLevel | string
+  recommendation: string
+  latest_market_observed_at?: string | null
+  latest_cache_observed_at?: string | null
+  latest_supplier_captured_at?: string | null
+}
+
+export interface KanbanEvent {
+  id: number
+  event_type: KanbanEventType | string
+  severity: KanbanEventSeverity | string
+  status: KanbanEventStatus | string
+  model: string
+  source_type?: string
+  source_id?: number
+  related_snapshot_type?: string
+  related_snapshot_id?: number
+  title: string
+  description?: string
+  recommendation?: string
+  payload?: Record<string, unknown>
+  occurred_at: string
+  created_at: string
+}
+
+export interface KanbanOverview {
+  generated_at: string
+  market_snapshot_count: number
+  cache_snapshot_count: number
+  quality_snapshot_count: number
+  acceptance_report_count: number
+  open_event_count: number
+  critical_event_count: number
+  model_count: number
+  risky_cache_model_count: number
+  risky_quality_model_count: number
+  blocked_acceptance_count: number
+  unprofitable_model_count: number
+  model_margins: KanbanModelMarginRow[]
+  recent_events: KanbanEvent[]
+  recent_market_snapshots: MarketPriceSnapshot[]
+  recent_cache_snapshots: CacheEfficiencySnapshot[]
+  recent_quality_snapshots: SupplyQualitySnapshot[]
+  recent_acceptance_reports: AcceptanceReport[]
+}
+
+export type CreateMarketPricePayload = Omit<MarketPriceSnapshot, 'id' | 'created_at' | 'observed_at' | 'confidence'> & {
+  confidence?: number
+  observed_at?: string
+}
+
+export interface ParseMarketPricesPayload {
+  source_type?: MarketPriceSourceType | string
+  source_name?: string
+  source_url?: string
+  site_id?: number
+  supplier_id?: number
+  default_currency?: string
+  confidence?: number
+  text: string
+  observed_at?: string
+}
+
+export interface ParseMarketPricesResult {
+  items: MarketPriceSnapshot[]
+  total: number
+}
+
+export type ImportMarketPricesFromURLPayload = Omit<ParseMarketPricesPayload, 'text'> & {
+  source_url: string
+}
+
+export interface ImportMarketPricesFromURLResult extends ParseMarketPricesResult {
+  source_url: string
+  content_type?: string
+  text_length: number
+}
+
+export interface MarketPriceSourceCandidate {
+  site_id?: number
+  supplier_id?: number
+  source_type: MarketPriceSourceType | string
+  source_name: string
+  source_url: string
+  link_type?: string
+  confidence: number
+  reason: string
+  raw_payload?: Record<string, unknown>
+}
+
+export interface MarketPriceSourceDiscoveryResult {
+  items: MarketPriceSourceCandidate[]
+  total: number
+}
+
+export type CreateCacheEfficiencyPayload = Omit<CacheEfficiencySnapshot, 'id' | 'created_at' | 'observed_at' | 'cache_hit_ratio' | 'status'> & {
+  cache_hit_ratio?: number | null
+  observed_at?: string
+  status?: CacheEfficiencyStatus | ''
+}
+
+export type CreateSupplyQualityPayload = Omit<SupplyQualitySnapshot, 'id' | 'created_at' | 'observed_at' | 'quality_score' | 'decision'> & {
+  quality_score?: number
+  decision?: SupplyQualityDecision | ''
+  observed_at?: string
+}
+
+export type CreateAcceptanceReportPayload = Omit<AcceptanceReport, 'id' | 'created_at' | 'observed_at' | 'status'> & {
+  status?: SupplyQualityDecision | ''
+  observed_at?: string
+}
+
+export interface GenerateAcceptanceReportPayload {
+  supply_type?: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  model?: string
+  enqueue_evidence_tasks?: boolean
+  observed_at?: string
+}
+
+export interface RefreshAcceptanceReportFromEvidenceRunPayload {
+  run_id: string
+}
+
 export interface BalanceSnapshot {
   id: number
   supplier_id: number
@@ -2171,6 +2419,21 @@ export interface ActionRecommendation {
   created_at: string
 }
 
+export interface ActionExecution {
+  id: number
+  recommendation_id: number
+  action_type: ActionRecommendation['type']
+  supplier_id: number
+  target_supplier_id?: number | null
+  status: 'running' | 'succeeded' | 'failed' | 'unsupported'
+  request_payload?: Record<string, unknown>
+  response_payload?: Record<string, unknown>
+  error_message?: string
+  operator_user_id?: number
+  created_at: string
+  updated_at: string
+}
+
 export interface NotificationDelivery {
   id: number
   channel: 'feishu'
@@ -2710,6 +2973,123 @@ export async function listRateSnapshots(params?: { supplier_id?: number; model?:
   return data
 }
 
+export async function getKanbanOverview(params?: {
+  model?: string
+  target_margin_percent?: number
+  risk_buffer_percent?: number
+  limit?: number
+}): Promise<KanbanOverview> {
+  const { data } = await apiClient.get<KanbanOverview>('/admin-plus/kanban/overview', { params })
+  return data
+}
+
+export async function listMarketPriceSnapshots(params?: {
+  model?: string
+  source_type?: MarketPriceSourceType | string
+  site_id?: number
+  supplier_id?: number
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<MarketPriceSnapshot>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<MarketPriceSnapshot>>('/admin-plus/kanban/market-prices', { params })
+  return data
+}
+
+export async function recordMarketPrice(payload: CreateMarketPricePayload): Promise<MarketPriceSnapshot> {
+  const { data } = await apiClient.post<MarketPriceSnapshot>('/admin-plus/kanban/market-prices', payload)
+  return data
+}
+
+export async function parseMarketPrices(payload: ParseMarketPricesPayload): Promise<ParseMarketPricesResult> {
+  const { data } = await apiClient.post<ParseMarketPricesResult>('/admin-plus/kanban/market-prices/parse', payload)
+  return data
+}
+
+export async function importMarketPricesFromURL(payload: ImportMarketPricesFromURLPayload): Promise<ImportMarketPricesFromURLResult> {
+  const { data } = await apiClient.post<ImportMarketPricesFromURLResult>('/admin-plus/kanban/market-prices/import-url', payload)
+  return data
+}
+
+export async function discoverMarketPriceSources(params?: {
+  q?: string
+  include_low_confidence?: boolean
+  limit?: number
+}): Promise<MarketPriceSourceDiscoveryResult> {
+  const { data } = await apiClient.get<MarketPriceSourceDiscoveryResult>('/admin-plus/kanban/market-price-sources/discover', { params })
+  return data
+}
+
+export async function listCacheEfficiencySnapshots(params?: {
+  model?: string
+  supply_type?: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  status?: CacheEfficiencyStatus | string
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<CacheEfficiencySnapshot>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<CacheEfficiencySnapshot>>('/admin-plus/kanban/cache-efficiency', { params })
+  return data
+}
+
+export async function recordCacheEfficiency(payload: CreateCacheEfficiencyPayload): Promise<CacheEfficiencySnapshot> {
+  const { data } = await apiClient.post<CacheEfficiencySnapshot>('/admin-plus/kanban/cache-efficiency', payload)
+  return data
+}
+
+export async function listSupplyQualitySnapshots(params?: {
+  model?: string
+  supply_type?: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  decision?: SupplyQualityDecision | string
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<SupplyQualitySnapshot>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<SupplyQualitySnapshot>>('/admin-plus/kanban/supply-quality', { params })
+  return data
+}
+
+export async function recordSupplyQuality(payload: CreateSupplyQualityPayload): Promise<SupplyQualitySnapshot> {
+  const { data } = await apiClient.post<SupplyQualitySnapshot>('/admin-plus/kanban/supply-quality', payload)
+  return data
+}
+
+export async function listAcceptanceReports(params?: {
+  model?: string
+  supply_type?: CacheEfficiencySupplyType | string
+  supplier_id?: number
+  local_sub2api_account_id?: number
+  status?: SupplyQualityDecision | string
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<AcceptanceReport>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<AcceptanceReport>>('/admin-plus/kanban/acceptance-reports', { params })
+  return data
+}
+
+export async function recordAcceptanceReport(payload: CreateAcceptanceReportPayload): Promise<AcceptanceReport> {
+  const { data } = await apiClient.post<AcceptanceReport>('/admin-plus/kanban/acceptance-reports', payload)
+  return data
+}
+
+export async function generateAcceptanceReport(payload: GenerateAcceptanceReportPayload): Promise<AcceptanceReport> {
+  const { data } = await apiClient.post<AcceptanceReport>('/admin-plus/kanban/acceptance-reports/generate', payload)
+  return data
+}
+
+export async function refreshAcceptanceReportFromEvidenceRun(payload: RefreshAcceptanceReportFromEvidenceRunPayload): Promise<AcceptanceReport> {
+  const { data } = await apiClient.post<AcceptanceReport>('/admin-plus/kanban/acceptance-reports/refresh-from-run', payload)
+  return data
+}
+
+export async function listKanbanEvents(params?: {
+  model?: string
+  event_type?: KanbanEventType | string
+  severity?: KanbanEventSeverity | string
+  status?: KanbanEventStatus | string
+} & AdminPlusPaginationParams): Promise<AdminPlusListResponse<KanbanEvent>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<KanbanEvent>>('/admin-plus/kanban/events', { params })
+  return data
+}
+
+export async function updateKanbanEventStatus(id: number, status: KanbanEventStatus): Promise<KanbanEvent> {
+  const { data } = await apiClient.patch<KanbanEvent>(`/admin-plus/kanban/events/${id}/status`, { status })
+  return data
+}
+
 export async function listBalanceEvents(params?: { supplier_id?: number; status?: string } & AdminPlusPaginationParams) {
   const { data } = await apiClient.get<AdminPlusListResponse<BalanceEvent>>('/admin-plus/balances/events', { params })
   return data
@@ -3225,6 +3605,7 @@ export async function generateActions(payload: {
   suppliers: SupplierSignal[]
   balance_events?: BalanceEvent[]
   health_events?: HealthEvent[]
+  kanban_events?: KanbanEvent[]
   min_profit_margin?: number
 }) {
   const { data } = await apiClient.post<AdminPlusListResponse<ActionRecommendation>>('/admin-plus/actions/generate', payload)
@@ -3238,6 +3619,16 @@ export async function listActionRecommendations(params?: { supplier_id?: number;
 
 export async function updateActionRecommendationStatus(id: number, status: ActionRecommendation['status']) {
   const { data } = await apiClient.patch<ActionRecommendation>(`/admin-plus/actions/recommendations/${id}/status`, { status })
+  return data
+}
+
+export async function executeActionRecommendation(id: number, payload?: { operator_user_id?: number; request_payload?: Record<string, unknown> }): Promise<ActionExecution> {
+  const { data } = await apiClient.post<ActionExecution>(`/admin-plus/actions/recommendations/${id}/execute`, payload || {})
+  return data
+}
+
+export async function listActionExecutions(id: number, params?: AdminPlusPaginationParams): Promise<AdminPlusListResponse<ActionExecution>> {
+  const { data } = await apiClient.get<AdminPlusListResponse<ActionExecution>>(`/admin-plus/actions/recommendations/${id}/executions`, { params })
   return data
 }
 
@@ -3609,6 +4000,21 @@ export const adminPlusAPI = {
   updateSupplierAccount,
   deleteSupplierAccount,
   listRateSnapshots,
+  getKanbanOverview,
+  listMarketPriceSnapshots,
+  parseMarketPrices,
+  discoverMarketPriceSources,
+  recordMarketPrice,
+  listCacheEfficiencySnapshots,
+  recordCacheEfficiency,
+  listSupplyQualitySnapshots,
+  recordSupplyQuality,
+  listAcceptanceReports,
+  generateAcceptanceReport,
+  refreshAcceptanceReportFromEvidenceRun,
+  recordAcceptanceReport,
+  listKanbanEvents,
+  updateKanbanEventStatus,
   listBalanceEvents,
   listHealthEvents,
   importUsageCostLines,
@@ -3675,6 +4081,8 @@ export const adminPlusAPI = {
   generateActions,
   listActionRecommendations,
   updateActionRecommendationStatus,
+  executeActionRecommendation,
+  listActionExecutions,
   getNotificationCenterStatus,
   getNotificationSettings,
   updateNotificationSettings,

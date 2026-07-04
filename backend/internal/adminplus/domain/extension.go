@@ -14,13 +14,14 @@ const (
 	ExtensionTaskTypeReconcileCosts     ExtensionTaskType = "reconcile_supplier_costs"
 	ExtensionTaskTypeFetchHealth        ExtensionTaskType = "fetch_health"
 	ExtensionTaskTypeCheckChannels      ExtensionTaskType = "check_supplier_channels"
+	ExtensionTaskTypeRunPurityCheck     ExtensionTaskType = "run_purity_check"
 	ExtensionTaskTypeCaptureSession     ExtensionTaskType = "capture_supplier_session"
 	ExtensionTaskTypeRegisterSupplier   ExtensionTaskType = "register_supplier_account"
 )
 
 func (t ExtensionTaskType) Valid() bool {
 	switch t {
-	case ExtensionTaskTypeFetchRates, ExtensionTaskTypeFetchGroups, ExtensionTaskTypeFetchBalance, ExtensionTaskTypeFetchAnnouncements, ExtensionTaskTypeExportBills, ExtensionTaskTypeFetchUsageCosts, ExtensionTaskTypeReconcileCosts, ExtensionTaskTypeFetchHealth, ExtensionTaskTypeCheckChannels, ExtensionTaskTypeCaptureSession, ExtensionTaskTypeRegisterSupplier:
+	case ExtensionTaskTypeFetchRates, ExtensionTaskTypeFetchGroups, ExtensionTaskTypeFetchBalance, ExtensionTaskTypeFetchAnnouncements, ExtensionTaskTypeExportBills, ExtensionTaskTypeFetchUsageCosts, ExtensionTaskTypeReconcileCosts, ExtensionTaskTypeFetchHealth, ExtensionTaskTypeCheckChannels, ExtensionTaskTypeRunPurityCheck, ExtensionTaskTypeCaptureSession, ExtensionTaskTypeRegisterSupplier:
 		return true
 	default:
 		return false

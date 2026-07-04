@@ -17,6 +17,7 @@ import (
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
+	purityapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
@@ -41,6 +42,7 @@ type RunInput struct {
 	Mode          string
 	SupplierID    int64
 	TaskTypes     []adminplusdomain.ExtensionTaskType
+	Request       map[string]any
 	WindowMinutes int
 	DryRun        bool
 	Now           time.Time
@@ -70,7 +72,9 @@ type Service struct {
 	usageCostSyncer  UsageCostSyncer
 	costSyncer       CostSyncer
 	channelChecker   ChannelChecker
+	purityChecker    PurityChecker
 	sessionRefresher SessionRefresher
+	runObserver      RunStatusObserver
 	now              func() time.Time
 	recentRunsMu     sync.Mutex
 	recentRuns       []adminplusdomain.SchedulerRunSummary
@@ -134,9 +138,17 @@ type ChannelChecker interface {
 	Check(ctx context.Context, in channelchecksapp.CheckInput) (*channelchecksapp.CheckResult, error)
 }
 
+type PurityChecker interface {
+	RunAccountCheck(ctx context.Context, in purityapp.AccountCheckInput) (*purityapp.PublicReport, error)
+}
+
 type SessionRefresher interface {
 	DecryptedProbeInput(ctx context.Context, supplierID int64) (ports.SessionProbeInput, error)
 	Login(ctx context.Context, in sessionsapp.LoginInput) (*sessionsapp.LoginResult, error)
+}
+
+type RunStatusObserver interface {
+	OnSchedulerRunStatusRefreshed(ctx context.Context, runID string) error
 }
 
 type stepFailureReason struct {
@@ -170,9 +182,11 @@ func ProvideService(
 	healthSyncer HealthSyncer,
 	usageCostSyncer UsageCostSyncer,
 	channelChecker ChannelChecker,
+	purityChecker PurityChecker,
 	sessionRefresher SessionRefresher,
 ) *Service {
 	return NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, groupSyncer, rateSyncer, balanceSyncer, healthSyncer, usageCostSyncer, channelChecker).
+		WithPurityChecker(purityChecker).
 		WithSessionRefresher(sessionRefresher)
 }
 
@@ -214,6 +228,20 @@ func (s *Service) WithSessionRefresher(refresher SessionRefresher) *Service {
 func (s *Service) WithCostSyncer(syncer CostSyncer) *Service {
 	if s != nil {
 		s.costSyncer = syncer
+	}
+	return s
+}
+
+func (s *Service) WithPurityChecker(checker PurityChecker) *Service {
+	if s != nil {
+		s.purityChecker = checker
+	}
+	return s
+}
+
+func (s *Service) WithRunStatusObserver(observer RunStatusObserver) *Service {
+	if s != nil {
+		s.runObserver = observer
 	}
 	return s
 }
@@ -353,7 +381,7 @@ func (s *Service) Run(ctx context.Context, in RunInput) (*adminplusdomain.Schedu
 			continue
 		}
 		for _, taskType := range taskTypes {
-			item := s.scheduleSupplierTask(ctx, supplier, taskType, mode, windowMinutes, in.Now, in.DryRun)
+			item := s.scheduleSupplierTask(ctx, supplier, taskType, mode, windowMinutes, in.Now, in.DryRun, in.Request)
 			if item.Created {
 				run.CreatedCount++
 			} else if item.Synced {
@@ -409,6 +437,7 @@ func (s *Service) EnqueueRun(ctx context.Context, in RunInput) (*adminplusdomain
 		}
 		for _, taskType := range taskTypes {
 			item := s.planSupplierTask(supplier, taskType, windowMinutes, in.Now)
+			item.Request = cloneMap(in.Request)
 			if item.Reason != "" {
 				run.SkippedCount++
 			} else {
@@ -419,17 +448,18 @@ func (s *Service) EnqueueRun(ctx context.Context, in RunInput) (*adminplusdomain
 	}
 	requestedAt := in.Now.UTC()
 	summary := adminplusdomain.SchedulerRunSummary{
-		ID:             strings.ReplaceAll(run.RunID, ":", "-"),
-		LegacyRunID:    run.RunID,
-		TriggerType:    mode,
-		TaskType:       schedulerRunTaskLabel(taskTypes),
-		Status:         "queued",
-		RequestedAt:    requestedAt,
-		SupplierCount:  schedulerRunSupplierCount(run.Items),
-		TotalSteps:     len(run.Items),
-		SucceededSteps: 0,
-		FailedSteps:    0,
-		SkippedSteps:   run.SkippedCount,
+		ID:              strings.ReplaceAll(run.RunID, ":", "-"),
+		LegacyRunID:     run.RunID,
+		TriggerType:     mode,
+		TaskType:        schedulerRunTaskLabel(taskTypes),
+		Status:          "queued",
+		RequestedAt:     requestedAt,
+		SupplierCount:   schedulerRunSupplierCount(run.Items),
+		TotalSteps:      len(run.Items),
+		SucceededSteps:  0,
+		FailedSteps:     0,
+		SkippedSteps:    run.SkippedCount,
+		RequestSnapshot: cloneMap(in.Request),
 	}
 	if len(run.Items) == 0 {
 		summary.Status = "skipped"
@@ -957,6 +987,7 @@ func (s *Service) defaultSettings() adminplusdomain.SchedulerSettings {
 		},
 		HighCostTaskTypes: []string{
 			"supplier.channels.check",
+			"supplier.purity.check",
 			"local.sub2api.schedule.ensure",
 			"local.sub2api.schedule.remove_invalid",
 		},
@@ -1045,6 +1076,70 @@ func costSyncResultCount(result *costsapp.SyncResult) int {
 	return count
 }
 
+func (s *Service) purityAccountForSupplier(ctx context.Context, supplier *adminplusdomain.Supplier, request map[string]any) (int64, string, error) {
+	accountID := int64Value(request, "local_sub2api_account_id")
+	if accountID > 0 {
+		return accountID, purityProviderFromSupplier(supplier), nil
+	}
+	accounts, err := s.supplierService.ListAccounts(ctx, supplier.ID)
+	if err != nil {
+		return 0, "", err
+	}
+	for _, account := range accounts {
+		if account != nil && account.LocalSub2APIAccountID > 0 {
+			return account.LocalSub2APIAccountID, purityProviderFromSupplier(supplier), nil
+		}
+	}
+	return 0, "", infraerrors.New(http.StatusConflict, "ADMIN_PLUS_SCHEDULER_PURITY_ACCOUNT_MISSING", "supplier has no linked local account for purity check")
+}
+
+func purityProviderFromSupplier(supplier *adminplusdomain.Supplier) string {
+	if supplier == nil {
+		return ""
+	}
+	switch supplier.Type {
+	case adminplusdomain.SupplierTypeAnthropic:
+		return purityapp.ProviderAnthropic
+	case adminplusdomain.SupplierTypeGemini:
+		return purityapp.ProviderGemini
+	default:
+		return purityapp.ProviderOpenAI
+	}
+}
+
+func purityReportSnapshot(report *purityapp.PublicReport, accountID int64, provider string) map[string]any {
+	if report == nil {
+		return map[string]any{
+			"local_sub2api_account_id": accountID,
+			"provider":                 provider,
+		}
+	}
+	out := map[string]any{
+		"local_sub2api_account_id": accountID,
+		"provider":                 provider,
+		"report_id":                report.ReportID,
+		"model":                    report.ModelID,
+		"status":                   report.Status,
+		"verdict":                  report.Verdict,
+		"score":                    report.Score,
+		"total":                    report.Total,
+		"official_score":           report.OfficialScore,
+		"compatibility_score":      report.CompatibilityScore,
+		"summary":                  report.Summary,
+		"checked_at":               report.CheckedAt.UTC().Format(time.RFC3339),
+	}
+	if report.Metrics.Usage != nil {
+		out["input_tokens"] = report.Metrics.Usage.InputTokens
+		out["output_tokens"] = report.Metrics.Usage.OutputTokens
+		out["cached_tokens"] = report.Metrics.Usage.CachedTokens
+	}
+	if report.TokenAudit != nil {
+		out["token_audit_status"] = report.TokenAudit.Status
+		out["token_audit_summary"] = report.TokenAudit.Summary
+	}
+	return out
+}
+
 func timePtrRFC3339(value *time.Time) string {
 	if value == nil || value.IsZero() {
 		return ""
@@ -1102,6 +1197,10 @@ func int64Value(snapshot map[string]any, key string) int64 {
 	}
 }
 
+func stringValue(snapshot map[string]any, key string) string {
+	return strings.TrimSpace(stringValueAny(snapshot[key]))
+}
+
 func stringValueAny(value any) string {
 	if value == nil {
 		return ""
@@ -1151,7 +1250,17 @@ func (s *Service) ProcessNext(ctx context.Context, workerID string) (bool, error
 	if err := s.repo.RefreshRunStatus(ctx, step.RunID, finishedAt); err != nil {
 		return true, err
 	}
+	if err := s.notifyRunStatusObserver(ctx, step.RunID); err != nil {
+		return true, err
+	}
 	return true, nil
+}
+
+func (s *Service) notifyRunStatusObserver(ctx context.Context, runID string) error {
+	if s == nil || s.runObserver == nil {
+		return nil
+	}
+	return s.runObserver.OnSchedulerRunStatusRefreshed(ctx, runID)
 }
 
 func (s *Service) cancelClaimedStepWhenRunStops(ctx context.Context, runID string, cancel context.CancelFunc, done <-chan struct{}) {
@@ -1273,12 +1382,13 @@ func (s *Service) executeClaimedStep(ctx context.Context, step *adminplusdomain.
 	return "succeeded", item.Total, "", item.Result
 }
 
-func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, mode string, windowMinutes int, now time.Time, dryRun bool) adminplusdomain.ScheduledTask {
+func (s *Service) scheduleSupplierTask(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, mode string, windowMinutes int, now time.Time, dryRun bool, request map[string]any) adminplusdomain.ScheduledTask {
 	item := adminplusdomain.ScheduledTask{
 		SupplierID:   supplier.ID,
 		SupplierName: supplier.Name,
 		TaskType:     taskType,
 		Action:       actionForTaskType(taskType),
+		Request:      cloneMap(request),
 	}
 	if reason := ineligibleReason(supplier, taskType); reason != "" {
 		item.Reason = reason
@@ -1397,13 +1507,18 @@ func (s *Service) refreshSupplierSession(ctx context.Context, supplier *adminplu
 		})
 		return false
 	}
+	loginContext := map[string]any{
+		"source":          "scheduler",
+		"task_type":       string(taskType),
+		"scheduler_stage": stage,
+	}
+	if taskRequiresAdminSession(taskType) {
+		loginContext["require_admin_session"] = true
+		loginContext["required_role"] = "10"
+	}
 	login, loginErr := s.sessionRefresher.Login(ctx, sessionsapp.LoginInput{
-		SupplierID: supplier.ID,
-		LoginContext: map[string]any{
-			"source":          "scheduler",
-			"task_type":       string(taskType),
-			"scheduler_stage": stage,
-		},
+		SupplierID:   supplier.ID,
+		LoginContext: loginContext,
 	})
 	if loginErr != nil {
 		item.Reason = encodeStepFailure(stepFailureReason{
@@ -1435,6 +1550,15 @@ func (s *Service) refreshSupplierSession(ctx context.Context, supplier *adminplu
 		return false
 	}
 	return true
+}
+
+func taskRequiresAdminSession(taskType adminplusdomain.ExtensionTaskType) bool {
+	switch taskType {
+	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts, adminplusdomain.ExtensionTaskTypeReconcileCosts:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomain.Supplier, taskType adminplusdomain.ExtensionTaskType, now time.Time, item *adminplusdomain.ScheduledTask) {
@@ -1540,6 +1664,27 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 		if result != nil {
 			item.Total = result.Total
 		}
+	case adminplusdomain.ExtensionTaskTypeRunPurityCheck:
+		if s.purityChecker == nil {
+			item.Reason = "purity_checker_missing"
+			return
+		}
+		accountID, provider, err := s.purityAccountForSupplier(ctx, supplier, item.Request)
+		if err != nil {
+			item.Reason = encodeSyncFailure(stepFailureInput{TaskType: taskType, Stage: "supplier_purity_check", Action: "resolve_account", Err: err})
+			return
+		}
+		report, err := s.purityChecker.RunAccountCheck(ctx, purityapp.AccountCheckInput{
+			AccountID: accountID,
+			Provider:  provider,
+			ModelID:   stringValue(item.Request, "model"),
+		})
+		if err != nil {
+			item.Reason = encodeSyncFailure(stepFailureInput{TaskType: taskType, Stage: "supplier_purity_check", Action: "run_account_check", Err: err})
+			return
+		}
+		item.Total = 1
+		item.Result = purityReportSnapshot(report, accountID, provider)
 	default:
 		item.Reason = "direct_sync_not_supported"
 		return
@@ -1596,6 +1741,7 @@ func (s *Service) defaultPlans() []adminplusdomain.SchedulerPlan {
 		plan("supplier.costs.reconcile", "成本对账", "supplier.costs.reconcile", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeReconcileCosts}, "enabled", "全部启用供应商", time.Hour, 60, "backfill", "forbid", false, "分批采集充值、兑换、usage 和余额并刷新成本台账", now),
 		plan("supplier.session.probe", "会话探测", "supplier.session.probe", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeFetchHealth}, "enabled", "全部启用供应商", 30*time.Minute, 30, "fire_once", "forbid", false, "探测供应商会话和只读 capability", now),
 		plan("supplier.channels.check", "渠道健康检测", "supplier.channels.check", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCheckChannels}, "paused", "按供应商启用", 0, 10, "skip", "forbid", true, "使用真实模型请求检测渠道可用性、首 token 和总耗时", now),
+		plan("supplier.purity.check", "模型纯度检测", "supplier.purity.check", []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeRunPurityCheck}, "paused", "按供应商启用", 0, 10, "skip", "forbid", true, "使用本地账号 API Key 执行模型身份、协议和 usage 纯度检测", now),
 		plan("local.sub2api.schedule.ensure", "加入本地调度", "local.sub2api.schedule.ensure", nil, "paused", "智能动作触发", 0, 10, "skip", "forbid", true, "将低倍率且可用的供应商渠道加入本地 Lime/Sub2API 调度", now),
 	}
 }
@@ -2269,6 +2415,8 @@ func schedulerTaskTypeLabel(taskType adminplusdomain.ExtensionTaskType) string {
 		return "supplier.costs.reconcile"
 	case adminplusdomain.ExtensionTaskTypeCheckChannels:
 		return "supplier.channels.check"
+	case adminplusdomain.ExtensionTaskTypeRunPurityCheck:
+		return "supplier.purity.check"
 	case adminplusdomain.ExtensionTaskTypeCaptureSession:
 		return "supplier.session.capture"
 	default:
@@ -2361,7 +2509,7 @@ func ineligibleReason(supplier *adminplusdomain.Supplier, taskType adminplusdoma
 	if supplier.HealthStatus == adminplusdomain.SupplierHealthStatusCredentialInvalid {
 		return "credential_invalid"
 	}
-	if actionForTaskType(taskType) == actionDirectSync && supplier.DashboardURL == "" && supplier.APIBaseURL == "" {
+	if actionForTaskType(taskType) == actionDirectSync && taskType != adminplusdomain.ExtensionTaskTypeRunPurityCheck && supplier.DashboardURL == "" && supplier.APIBaseURL == "" {
 		return "supplier_url_missing"
 	}
 	if actionForTaskType(taskType) != actionDirectSync && supplier.DashboardURL == "" {
@@ -2392,7 +2540,8 @@ func actionForTaskType(taskType adminplusdomain.ExtensionTaskType) string {
 		adminplusdomain.ExtensionTaskTypeFetchHealth,
 		adminplusdomain.ExtensionTaskTypeFetchUsageCosts,
 		adminplusdomain.ExtensionTaskTypeReconcileCosts,
-		adminplusdomain.ExtensionTaskTypeCheckChannels:
+		adminplusdomain.ExtensionTaskTypeCheckChannels,
+		adminplusdomain.ExtensionTaskTypeRunPurityCheck:
 		return actionDirectSync
 	case adminplusdomain.ExtensionTaskTypeCaptureSession:
 		return actionExtensionTask
@@ -2428,6 +2577,8 @@ func taskPriority(taskType adminplusdomain.ExtensionTaskType) int {
 		return 60
 	case adminplusdomain.ExtensionTaskTypeCheckChannels:
 		return 55
+	case adminplusdomain.ExtensionTaskTypeRunPurityCheck:
+		return 50
 	case adminplusdomain.ExtensionTaskTypeFetchUsageCosts:
 		return 40
 	case adminplusdomain.ExtensionTaskTypeReconcileCosts:

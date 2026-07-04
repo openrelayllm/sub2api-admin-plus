@@ -26,6 +26,13 @@ describe('adminPlusRoutes', () => {
       '/admin/suppliers',
       '/admin/supplier-bindings',
       '/admin/supplier-rate-checks',
+      '/admin/kanban',
+      '/admin/kanban/market-prices',
+      '/admin/kanban/supply-quality',
+      '/admin/kanban/profit',
+      '/admin/kanban/acceptance',
+      '/admin/kanban/events',
+      '/admin/kanban/settings',
       '/admin/account-rate-sync',
       '/admin/scheduler',
       '/admin/scheduler/notifications',
@@ -56,6 +63,7 @@ describe('adminPlusRoutes', () => {
       '/admin/operations/supplier-accounts',
       '/admin/operations/account-runtime',
       '/admin/operations/rates',
+      '/admin/operations/kanban',
       '/admin/operations/balances',
       '/admin/operations/health',
       '/admin/operations/announcements',
@@ -109,6 +117,12 @@ describe('adminPlusRoutes', () => {
         '/admin/suppliers',
         '/admin/supplier-bindings',
         '/admin/supplier-rate-checks',
+        '/admin/kanban/market-prices',
+        '/admin/kanban/supply-quality',
+        '/admin/kanban/profit',
+        '/admin/kanban/acceptance',
+        '/admin/kanban/events',
+        '/admin/kanban/settings',
         '/admin/account-rate-sync',
         '/admin/scheduler',
         '/admin/scheduler/notifications',
@@ -126,7 +140,7 @@ describe('adminPlusRoutes', () => {
       ].includes(route.path)
     )
 
-    expect(adminRoutes).toHaveLength(18)
+    expect(adminRoutes).toHaveLength(24)
     for (const route of adminRoutes) {
       expect(route.meta?.requiresAuth).toBe(true)
       expect(route.meta?.requiresAdmin).toBe(true)
@@ -146,6 +160,8 @@ describe('adminPlusRoutes', () => {
         ['/admin/monitoring/account-runtime', '/admin/suppliers'],
         ['/admin/operations/account-runtime', '/admin/suppliers'],
         ['/admin/operations/rates', '/admin/supplier-rate-checks'],
+        ['/admin/kanban', '/admin/kanban/profit'],
+        ['/admin/operations/kanban', '/admin/kanban/profit'],
         ['/admin/monitoring/balances', '/admin/suppliers'],
         ['/admin/operations/balances', '/admin/suppliers'],
         ['/admin/operations/health', '/admin/suppliers'],

@@ -372,6 +372,43 @@ func newAPIAdminSessionRequired(currentRole int64, roleKnown bool) error {
 	).WithMetadata(metadata)
 }
 
+func requireAdminSessionForDirectLogin(loginContext map[string]any, bundle map[string]any) error {
+	if !newAPIContextRequiresAdminSession(loginContext) {
+		return nil
+	}
+	currentRole, roleKnown := newAPIRoleFromBundle(bundle)
+	if roleKnown && currentRole >= 10 {
+		return nil
+	}
+	metadata := map[string]string{
+		"required_role": "10",
+		"suggestion":    "请在供应商设置中配置 new-api 管理员或 root 账号，或提供管理员/root 的 access token 与 New-Api-User。",
+	}
+	if roleKnown {
+		metadata["current_role"] = strconv.FormatInt(currentRole, 10)
+	}
+	return infraerrors.New(
+		http.StatusConflict,
+		"SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED",
+		"new-api direct login returned a non-admin session",
+	).WithMetadata(metadata)
+}
+
+func newAPIContextRequiresAdminSession(loginContext map[string]any) bool {
+	if loginContext == nil {
+		return false
+	}
+	if required, ok := boolValue(loginContext["require_admin_session"]); ok && required {
+		return true
+	}
+	for _, key := range []string{"required_role", "require_role", "minimum_role", "min_role"} {
+		if role := int64FromAny(loginContext[key]); role >= 10 {
+			return true
+		}
+	}
+	return false
+}
+
 func isNewAPIAdminPermissionError(err error) bool {
 	if err == nil {
 		return false

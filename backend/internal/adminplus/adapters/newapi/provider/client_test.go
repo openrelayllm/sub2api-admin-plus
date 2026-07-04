@@ -86,6 +86,43 @@ func TestClientDirectLoginStoresCookieAndProbesSelfWithUserHeader(t *testing.T) 
 	require.Equal(t, "signed-session", cookie["value"])
 }
 
+func TestClientDirectLoginRequiresAdminSessionWhenRequested(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "signed-session", Path: "/", HttpOnly: true})
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":4111,"username":"wutongci","display_name":"wutongci","role":1,"status":1,"group":"default"}}`))
+		case "/api/user/self":
+			require.Equal(t, "4111", r.Header.Get("New-Api-User"))
+			require.Equal(t, "session=signed-session", r.Header.Get("Cookie"))
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":4111,"username":"wutongci","display_name":"wutongci","role":1,"status":1,"group":"default","quota":23288,"used_quota":59976712,"request_count":12775}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	_, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Username:   "wutongci",
+		Password:   "secret",
+		LoginContext: map[string]any{
+			"require_admin_session": true,
+			"required_role":         "10",
+		},
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED", infraerrors.Reason(err))
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "1", appErr.Metadata["current_role"])
+	require.Equal(t, "10", appErr.Metadata["required_role"])
+}
+
 func TestClientDirectLoginWithAccessTokenStoresAuthorizationAndUserHeader(t *testing.T) {
 	now := time.Date(2026, 6, 22, 10, 30, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

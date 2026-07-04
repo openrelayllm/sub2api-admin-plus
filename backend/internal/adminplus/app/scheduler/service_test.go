@@ -12,6 +12,7 @@ import (
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
+	purityapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity"
 	ratesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/rates"
 	sessionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/sessions"
 	suppliergroupsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliergroups"
@@ -131,6 +132,45 @@ func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
 	require.NoError(t, err)
 	require.Empty(t, tasks)
+}
+
+func TestServiceRunPurityCheckUsesRequestSnapshot(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	purityChecker := &stubPurityChecker{}
+	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, nil, nil, nil, nil).
+		WithPurityChecker(purityChecker)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+
+	supplier := createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:          "relay-purity-direct",
+		Kind:          adminplusdomain.SupplierKindRelay,
+		Type:          adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus: adminplusdomain.SupplierRuntimeStatusMonitorOnly,
+		HealthStatus:  adminplusdomain.SupplierHealthStatusNormal,
+	})
+	_, err := supplierService.CreateAccount(context.Background(), suppliersapp.CreateSupplierAccountInput{
+		SupplierID:            supplier.ID,
+		LocalSub2APIAccountID: 1,
+		BalanceCurrency:       "USD",
+	})
+	require.NoError(t, err)
+
+	run, err := service.Run(context.Background(), RunInput{
+		Mode:      "manual",
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeRunPurityCheck},
+		Request:   map[string]any{"model": "gpt-direct"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, run.EligibleCount)
+	require.Len(t, run.Items, 1)
+	require.True(t, run.Items[0].Synced)
+	require.Equal(t, "gpt-direct", run.Items[0].Request["model"])
+	require.Equal(t, "purity-report-1", run.Items[0].Result["report_id"])
+	require.Equal(t, "gpt-direct", purityChecker.input.ModelID)
 }
 
 func TestServiceRunDryRunExplainsEligibleTasksWithoutWritingQueue(t *testing.T) {
@@ -427,6 +467,56 @@ func TestServiceEnqueueRunDefersExecutionUntilWorkerClaimsStep(t *testing.T) {
 	require.Equal(t, "succeeded", repo.runs[0].Status)
 }
 
+func TestServiceProcessNextRunsPurityCheckFromQueuedStep(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	repo := newFakeSchedulerRepository()
+	purityChecker := &stubPurityChecker{}
+	service := NewServiceWithDependenciesAndRepository(repo, supplierService, extensionService, nil, nil, nil, nil, nil, nil).
+		WithPurityChecker(purityChecker)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+
+	supplier := createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:          "relay-purity",
+		Kind:          adminplusdomain.SupplierKindRelay,
+		Type:          adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus: adminplusdomain.SupplierRuntimeStatusMonitorOnly,
+		HealthStatus:  adminplusdomain.SupplierHealthStatusNormal,
+	})
+	_, err := supplierService.CreateAccount(context.Background(), suppliersapp.CreateSupplierAccountInput{
+		SupplierID:            supplier.ID,
+		LocalSub2APIAccountID: 1,
+		BalanceCurrency:       "USD",
+	})
+	require.NoError(t, err)
+
+	summary, err := service.EnqueueRun(context.Background(), RunInput{
+		Mode:      "manual",
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeRunPurityCheck},
+		Request:   map[string]any{"model": "gpt-acceptance"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "queued", summary.Status)
+	require.Len(t, repo.steps, 1)
+	require.Equal(t, adminplusdomain.ExtensionTaskTypeRunPurityCheck, repo.steps[0].TaskType)
+	require.Equal(t, "gpt-acceptance", repo.steps[0].RequestSnapshot["model"])
+
+	processed, err := service.ProcessNext(context.Background(), "worker-test")
+
+	require.NoError(t, err)
+	require.True(t, processed)
+	require.Equal(t, 1, purityChecker.calls)
+	require.Equal(t, int64(1), purityChecker.input.AccountID)
+	require.Equal(t, purityapp.ProviderOpenAI, purityChecker.input.Provider)
+	require.Equal(t, "gpt-acceptance", purityChecker.input.ModelID)
+	require.Equal(t, "succeeded", repo.steps[0].Status)
+	require.Equal(t, 1, repo.steps[0].ResultCount)
+	require.Equal(t, "purity-report-1", repo.steps[0].ResultSnapshot["report_id"])
+	require.Equal(t, "gpt-acceptance", repo.steps[0].ResultSnapshot["model"])
+}
+
 func TestServiceListStepsIncludesAttemptLogs(t *testing.T) {
 	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
 	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
@@ -571,6 +661,8 @@ func TestServiceProcessNextRefreshesMissingSessionBeforeCostBackfill(t *testing.
 	require.NoError(t, err)
 	require.True(t, processed)
 	require.Equal(t, 1, sessionRefresher.loginCalls)
+	require.Equal(t, true, sessionRefresher.lastLoginInput.LoginContext["require_admin_session"])
+	require.Equal(t, "10", sessionRefresher.lastLoginInput.LoginContext["required_role"])
 	require.Equal(t, 1, costSyncer.calls)
 	require.Equal(t, "succeeded", repo.steps[0].Status)
 	require.Empty(t, repo.steps[0].Reason)
@@ -622,6 +714,7 @@ func TestServiceProcessNextRefreshesMissingSessionBeforeBalanceSync(t *testing.T
 	require.NoError(t, err)
 	require.True(t, processed)
 	require.Equal(t, 1, sessionRefresher.loginCalls)
+	require.NotContains(t, sessionRefresher.lastLoginInput.LoginContext, "require_admin_session")
 	require.Equal(t, 1, balanceSyncer.calls)
 	require.Equal(t, "succeeded", repo.steps[0].Status)
 	require.Empty(t, repo.steps[0].Reason)
@@ -991,11 +1084,12 @@ func (s *stubBalanceSyncer) SyncFromSession(_ context.Context, in balancesapp.Sy
 }
 
 type stubSessionRefresher struct {
-	probeCalls  int
-	loginCalls  int
-	probeErrors []error
-	loginResult *sessionsapp.LoginResult
-	loginErr    error
+	probeCalls     int
+	loginCalls     int
+	lastLoginInput sessionsapp.LoginInput
+	probeErrors    []error
+	loginResult    *sessionsapp.LoginResult
+	loginErr       error
 }
 
 func (s *stubSessionRefresher) DecryptedProbeInput(_ context.Context, supplierID int64) (ports.SessionProbeInput, error) {
@@ -1008,8 +1102,9 @@ func (s *stubSessionRefresher) DecryptedProbeInput(_ context.Context, supplierID
 	return ports.SessionProbeInput{SupplierID: supplierID}, nil
 }
 
-func (s *stubSessionRefresher) Login(_ context.Context, _ sessionsapp.LoginInput) (*sessionsapp.LoginResult, error) {
+func (s *stubSessionRefresher) Login(_ context.Context, in sessionsapp.LoginInput) (*sessionsapp.LoginResult, error) {
 	s.loginCalls++
+	s.lastLoginInput = in
 	if s.loginErr != nil {
 		return nil, s.loginErr
 	}
@@ -1066,6 +1161,36 @@ func (s *stubCostSyncer) Sync(_ context.Context, in costsapp.SyncInput) (*costsa
 		UsageCostLines:          4,
 		LedgerEntries:           5,
 		Capabilities:            map[string]bool{"funding_transactions": in.IncludeFundingTransactions},
+	}, nil
+}
+
+type stubPurityChecker struct {
+	calls int
+	input purityapp.AccountCheckInput
+}
+
+func (s *stubPurityChecker) RunAccountCheck(_ context.Context, in purityapp.AccountCheckInput) (*purityapp.PublicReport, error) {
+	s.calls++
+	s.input = in
+	return &purityapp.PublicReport{
+		Provider:           in.Provider,
+		ReportID:           "purity-report-1",
+		ModelID:            in.ModelID,
+		Status:             purityapp.RunStatusDone,
+		Verdict:            purityapp.VerdictOfficialOpenAI,
+		Score:              90,
+		Total:              100,
+		OfficialScore:      80,
+		CompatibilityScore: 10,
+		Summary:            "ok",
+		CheckedAt:          time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC),
+		Metrics: purityapp.PublicCheckMetrics{
+			Usage: &purityapp.TokenUsage{
+				InputTokens:  100,
+				OutputTokens: 20,
+				CachedTokens: 40,
+			},
+		},
 	}, nil
 }
 

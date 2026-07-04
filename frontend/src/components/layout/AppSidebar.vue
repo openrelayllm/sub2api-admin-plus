@@ -279,6 +279,19 @@ const ChevronDoubleRightIcon = {
 const adminNavItems = computed((): NavItem[] => [
   { path: '/admin/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
   {
+    path: '/admin/kanban',
+    label: '运营看板',
+    icon: ChartIcon,
+    children: [
+      { path: '/admin/kanban/market-prices', label: '市场价格', icon: ChartIcon },
+      { path: '/admin/kanban/supply-quality', label: '供应质量', icon: ChartIcon },
+      { path: '/admin/kanban/profit', label: '模型利润', icon: ChartIcon },
+      { path: '/admin/kanban/acceptance', label: '接入验收', icon: ChartIcon },
+      { path: '/admin/kanban/events', label: '价格事件', icon: ChartIcon },
+      { path: '/admin/kanban/settings', label: '设置', icon: ChartIcon }
+    ]
+  },
+  {
     path: '/admin/suppliers',
     label: '供应商',
     icon: OperationsIcon,

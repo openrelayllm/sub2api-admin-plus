@@ -19,9 +19,10 @@ func NewActionHandler(service *actionsapp.Service) *ActionHandler {
 }
 
 type generateActionsRequest struct {
-	Suppliers       []supplierSignalDTO             `json:"suppliers" binding:"required"`
+	Suppliers       []supplierSignalDTO             `json:"suppliers"`
 	BalanceEvents   []*adminplusdomain.BalanceEvent `json:"balance_events"`
 	HealthEvents    []*adminplusdomain.HealthEvent  `json:"health_events"`
+	KanbanEvents    []*adminplusdomain.KanbanEvent  `json:"kanban_events"`
 	MinProfitMargin float64                         `json:"min_profit_margin"`
 }
 
@@ -37,6 +38,11 @@ type supplierSignalDTO struct {
 
 type updateActionStatusRequest struct {
 	Status string `json:"status" binding:"required"`
+}
+
+type executeActionRequest struct {
+	OperatorUserID int64          `json:"operator_user_id"`
+	RequestPayload map[string]any `json:"request_payload"`
 }
 
 func (h *ActionHandler) Generate(c *gin.Context) {
@@ -61,6 +67,7 @@ func (h *ActionHandler) Generate(c *gin.Context) {
 		Suppliers:       suppliers,
 		BalanceEvents:   req.BalanceEvents,
 		HealthEvents:    req.HealthEvents,
+		KanbanEvents:    req.KanbanEvents,
 		MinProfitMargin: req.MinProfitMargin,
 	})
 	if response.ErrorFrom(c, err) {
@@ -100,6 +107,40 @@ func (h *ActionHandler) UpdateRecommendationStatus(c *gin.Context) {
 		return
 	}
 	response.Success(c, item)
+}
+
+func (h *ActionHandler) ExecuteRecommendation(c *gin.Context) {
+	id, ok := parseActionRecommendationID(c)
+	if !ok {
+		return
+	}
+	var req executeActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	item, err := h.service.ExecuteApprovedRecommendation(c.Request.Context(), id, actionsapp.ExecuteInput{
+		OperatorUserID: req.OperatorUserID,
+		RequestPayload: req.RequestPayload,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Created(c, item)
+}
+
+func (h *ActionHandler) ListExecutions(c *gin.Context) {
+	id, ok := parseActionRecommendationID(c)
+	if !ok {
+		return
+	}
+	page := parsePagination(c)
+	items, err := h.service.ListExecutions(c.Request.Context(), id, fetchLimitForPagination(page))
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	paged, total := paginateSlice(items, page)
+	response.Success(c, paginatedData(paged, total, page))
 }
 
 func parseActionRecommendationID(c *gin.Context) (int64, bool) {

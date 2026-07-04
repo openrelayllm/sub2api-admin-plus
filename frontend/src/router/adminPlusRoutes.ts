@@ -14,6 +14,8 @@ const redirectWithQuery = (path: string) => (to: RouteLocationGeneric) => ({
   query: to.query
 })
 
+const kanbanComponent = () => import('@/views/admin/operations/KanbanView.vue')
+
 export const adminPlusRoutes: RouteRecordRaw[] = [
   {
     path: '/setup',
@@ -72,6 +74,52 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
     name: 'AdminPlusSupplierRateChecks',
     component: () => import('@/views/admin/operations/SupplierRateChecksView.vue'),
     meta: adminMeta('倍率检测')
+  },
+  {
+    path: '/admin/kanban',
+    redirect: redirectWithQuery('/admin/kanban/profit')
+  },
+  {
+    path: '/admin/kanban/market-prices',
+    name: 'AdminPlusKanbanMarketPrices',
+    component: kanbanComponent,
+    props: { section: 'market-prices' },
+    meta: adminMeta('市场价格')
+  },
+  {
+    path: '/admin/kanban/supply-quality',
+    name: 'AdminPlusKanbanSupplyQuality',
+    component: kanbanComponent,
+    props: { section: 'supply-quality' },
+    meta: adminMeta('供应质量')
+  },
+  {
+    path: '/admin/kanban/profit',
+    name: 'AdminPlusKanbanProfit',
+    component: kanbanComponent,
+    props: { section: 'profit' },
+    meta: adminMeta('模型利润')
+  },
+  {
+    path: '/admin/kanban/acceptance',
+    name: 'AdminPlusKanbanAcceptance',
+    component: kanbanComponent,
+    props: { section: 'acceptance' },
+    meta: adminMeta('接入验收')
+  },
+  {
+    path: '/admin/kanban/events',
+    name: 'AdminPlusKanbanEvents',
+    component: kanbanComponent,
+    props: { section: 'events' },
+    meta: adminMeta('价格事件')
+  },
+  {
+    path: '/admin/kanban/settings',
+    name: 'AdminPlusKanbanSettings',
+    component: kanbanComponent,
+    props: { section: 'settings' },
+    meta: adminMeta('运营看板设置')
   },
   {
     path: '/admin/account-rate-sync',
@@ -220,6 +268,10 @@ export const adminPlusRoutes: RouteRecordRaw[] = [
   {
     path: '/admin/operations/rates',
     redirect: redirectWithQuery('/admin/supplier-rate-checks')
+  },
+  {
+    path: '/admin/operations/kanban',
+    redirect: redirectWithQuery('/admin/kanban/profit')
   },
   {
     path: '/admin/operations/balances',

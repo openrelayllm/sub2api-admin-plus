@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -50,6 +51,24 @@ func (r *SQLRepository) CreateRecommendation(ctx context.Context, action *adminp
 		action.CreatedAt,
 	)
 	return scanActionRecommendation(row)
+}
+
+func (r *SQLRepository) GetRecommendation(ctx context.Context, id int64) (*adminplusdomain.ActionRecommendation, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, supplier_id, target_supplier_id, type, severity, status,
+			reason_code, title, description, expected_impact, requires_approval,
+			signals, created_at
+		FROM admin_plus_action_recommendations
+		WHERE id = $1
+	`, id)
+	action, err := scanActionRecommendation(row)
+	if err == sql.ErrNoRows {
+		return nil, infraerrors.New(http.StatusNotFound, "ACTION_RECOMMENDATION_NOT_FOUND", "action recommendation not found")
+	}
+	return action, err
 }
 
 func (r *SQLRepository) ListRecommendations(ctx context.Context, filter ActionFilter) ([]*adminplusdomain.ActionRecommendation, error) {
@@ -130,6 +149,81 @@ func (r *SQLRepository) UpdateRecommendationStatus(ctx context.Context, id int64
 	return action, err
 }
 
+func (r *SQLRepository) CreateExecution(ctx context.Context, execution *adminplusdomain.ActionExecution) (*adminplusdomain.ActionExecution, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	requestPayload, err := json.Marshal(nonNilPayload(execution.RequestPayload))
+	if err != nil {
+		return nil, err
+	}
+	responsePayload, err := json.Marshal(nonNilPayload(execution.ResponsePayload))
+	if err != nil {
+		return nil, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO admin_plus_action_executions (
+			recommendation_id, action_type, supplier_id, target_supplier_id, status,
+			request_payload, response_payload, error_message, operator_user_id,
+			created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11)
+		RETURNING id, recommendation_id, action_type, supplier_id, target_supplier_id,
+			status, request_payload, response_payload, error_message, operator_user_id,
+			created_at, updated_at
+	`,
+		execution.RecommendationID,
+		string(execution.ActionType),
+		execution.SupplierID,
+		nullableInt64(execution.TargetSupplierID),
+		string(execution.Status),
+		string(requestPayload),
+		string(responsePayload),
+		execution.ErrorMessage,
+		execution.OperatorUserID,
+		execution.CreatedAt,
+		execution.UpdatedAt,
+	)
+	return scanActionExecution(row)
+}
+
+func (r *SQLRepository) ListExecutions(ctx context.Context, recommendationID int64, limit int) ([]*adminplusdomain.ActionExecution, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, recommendation_id, action_type, supplier_id, target_supplier_id,
+			status, request_payload, response_payload, error_message, operator_user_id,
+			created_at, updated_at
+		FROM admin_plus_action_executions
+		WHERE recommendation_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2
+	`, recommendationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]*adminplusdomain.ActionExecution, 0)
+	for rows.Next() {
+		item, err := scanActionExecution(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 type actionScanner interface {
 	Scan(dest ...any) error
 }
@@ -166,6 +260,58 @@ func scanActionRecommendation(scanner actionScanner) (*adminplusdomain.ActionRec
 	action.Status = adminplusdomain.ActionStatus(status)
 	action.Signals = signals
 	return &action, nil
+}
+
+func scanActionExecution(scanner actionScanner) (*adminplusdomain.ActionExecution, error) {
+	var execution adminplusdomain.ActionExecution
+	var targetSupplierID sql.NullInt64
+	var actionType, status string
+	var requestPayload []byte
+	var responsePayload []byte
+	err := scanner.Scan(
+		&execution.ID,
+		&execution.RecommendationID,
+		&actionType,
+		&execution.SupplierID,
+		&targetSupplierID,
+		&status,
+		&requestPayload,
+		&responsePayload,
+		&execution.ErrorMessage,
+		&execution.OperatorUserID,
+		&execution.CreatedAt,
+		&execution.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if targetSupplierID.Valid {
+		v := targetSupplierID.Int64
+		execution.TargetSupplierID = &v
+	}
+	execution.ActionType = adminplusdomain.ActionType(actionType)
+	execution.Status = adminplusdomain.ActionExecutionStatus(status)
+	execution.RequestPayload = decodePayload(requestPayload)
+	execution.ResponsePayload = decodePayload(responsePayload)
+	return &execution, nil
+}
+
+func decodePayload(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]any{}
+	}
+	return out
+}
+
+func nonNilPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return map[string]any{}
+	}
+	return payload
 }
 
 func nullableInt64(value *int64) any {

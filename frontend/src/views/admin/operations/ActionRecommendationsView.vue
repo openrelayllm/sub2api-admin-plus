@@ -64,6 +64,10 @@
                 <p v-if="item.expected_impact" class="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
                   {{ item.expected_impact }}
                 </p>
+                <p v-if="lastExecutions[item.id]" class="mt-2 text-xs" :class="executionClass(lastExecutions[item.id].status)">
+                  回执 {{ executionLabel(lastExecutions[item.id].status) }}
+                  <span v-if="lastExecutions[item.id].error_message">· {{ lastExecutions[item.id].error_message }}</span>
+                </p>
               </div>
               <div class="flex flex-wrap gap-2">
                 <button
@@ -75,6 +79,15 @@
                   @click="updateStatus(item.id, status)"
                 >
                   {{ status }}
+                </button>
+                <button
+                  v-if="item.status === 'approved'"
+                  type="button"
+                  class="btn btn-primary px-3 py-1.5 text-xs"
+                  :disabled="executingID === item.id"
+                  @click="executeRecommendation(item)"
+                >
+                  {{ executingID === item.id ? '执行中' : '执行' }}
                 </button>
               </div>
             </div>
@@ -101,16 +114,20 @@ import Pagination from '@/components/common/Pagination.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useAppStore } from '@/stores/app'
 import {
+  executeActionRecommendation,
   generateActions,
   listActionRecommendations,
   listBalanceEvents,
   listHealthEvents,
+  listKanbanEvents,
   listRateSnapshots,
   listSuppliers,
   updateActionRecommendationStatus,
+  type ActionExecution,
   type ActionRecommendation,
   type BalanceEvent,
   type HealthEvent,
+  type KanbanEvent,
   type RateSnapshot,
   type Supplier,
   type SupplierSignal
@@ -120,11 +137,14 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const generating = ref(false)
+const executingID = ref<number | null>(null)
 const suppliers = ref<Supplier[]>([])
 const rateSnapshots = ref<RateSnapshot[]>([])
 const balanceEvents = ref<BalanceEvent[]>([])
 const healthEvents = ref<HealthEvent[]>([])
+const kanbanEvents = ref<KanbanEvent[]>([])
 const recommendations = ref<ActionRecommendation[]>([])
+const lastExecutions = ref<Record<number, ActionExecution>>({})
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0, pages: 0 })
 
 const statuses: ActionRecommendation['status'][] = ['acknowledged', 'approved', 'executed', 'rejected']
@@ -136,7 +156,8 @@ const switchableCount = computed(() => suppliers.value.filter((supplier) =>
 ).length)
 const openSignalCount = computed(() =>
   balanceEvents.value.filter((event) => event.status === 'open').length +
-  healthEvents.value.filter((event) => event.status === 'open').length
+  healthEvents.value.filter((event) => event.status === 'open').length +
+  kanbanEvents.value.filter((event) => event.status === 'open').length
 )
 
 function supplierName(id?: number | null): string {
@@ -157,14 +178,29 @@ function statusClass(status: ActionRecommendation['status']): string {
   return 'badge-gray'
 }
 
+function executionLabel(status: ActionExecution['status']): string {
+  if (status === 'succeeded') return '成功'
+  if (status === 'unsupported') return '暂不支持自动执行'
+  if (status === 'failed') return '失败'
+  return '执行中'
+}
+
+function executionClass(status: ActionExecution['status']): string {
+  if (status === 'succeeded') return 'text-emerald-600 dark:text-emerald-400'
+  if (status === 'unsupported') return 'text-amber-600 dark:text-amber-400'
+  if (status === 'failed') return 'text-rose-600 dark:text-rose-400'
+  return 'text-gray-500 dark:text-dark-400'
+}
+
 async function loadPage() {
   loading.value = true
   try {
-    const [supplierResult, rateResult, balanceResult, healthResult, actionResult] = await Promise.all([
+    const [supplierResult, rateResult, balanceResult, healthResult, kanbanResult, actionResult] = await Promise.all([
       listSuppliers(),
       listRateSnapshots({ limit: 200 }),
       listBalanceEvents({ limit: 100 }),
       listHealthEvents({ limit: 100 }),
+      listKanbanEvents({ status: 'open', limit: 100 }),
       listActionRecommendations({
         page: pagination.page,
         page_size: pagination.page_size
@@ -174,6 +210,7 @@ async function loadPage() {
     rateSnapshots.value = rateResult.items
     balanceEvents.value = balanceResult.items
     healthEvents.value = healthResult.items
+    kanbanEvents.value = kanbanResult.items
     recommendations.value = actionResult.items
     pagination.total = actionResult.total || 0
     pagination.pages = actionResult.pages || 0
@@ -225,6 +262,7 @@ async function generate() {
       suppliers: supplierSignals(),
       balance_events: balanceEvents.value.filter((event) => event.status === 'open'),
       health_events: healthEvents.value.filter((event) => event.status === 'open'),
+      kanban_events: kanbanEvents.value.filter((event) => event.status === 'open'),
       min_profit_margin: 0.1
     })
     recommendations.value = result.items
@@ -244,6 +282,30 @@ async function updateStatus(id: number, status: ActionRecommendation['status']) 
     await loadPage()
   } catch (error) {
     appStore.showError((error as { message?: string }).message || '更新状态失败')
+  }
+}
+
+async function executeRecommendation(item: ActionRecommendation) {
+  executingID.value = item.id
+  try {
+    const execution = await executeActionRecommendation(item.id, {
+      request_payload: {
+        source: 'admin_plus_action_recommendations_view',
+        action_type: item.type,
+        reason_code: item.reason_code
+      }
+    })
+    lastExecutions.value = { ...lastExecutions.value, [item.id]: execution }
+    if (execution.status === 'unsupported') {
+      appStore.showError('该动作暂未接入自动执行器，已写入回执')
+    } else {
+      appStore.showSuccess('动作执行回执已写入')
+    }
+    await loadPage()
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || '执行动作失败')
+  } finally {
+    executingID.value = null
   }
 }
 

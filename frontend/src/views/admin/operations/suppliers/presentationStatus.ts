@@ -429,7 +429,7 @@ export function attachPresentationStatus(ctx: any) {
       return withDiagnostic('供应商直登失败：账号或密码无效，请编辑供应商更新登录凭据后重试', diagnostic)
     }
     if (code === 'SUPPLIER_DIRECT_LOGIN_ADMIN_REQUIRED') {
-      return '供应商启用了后台模式，后端直登需要供应商管理员账号'
+      return withDiagnostic('New API 后端直登需要供应商管理员/root 账号；当前凭据登录后不是管理员，请改用管理员账号，或配置管理员/root 的 access token 与数字 User ID', diagnostic)
     }
     if (code === '429') {
       return '供应商登录限流，请稍后重试'

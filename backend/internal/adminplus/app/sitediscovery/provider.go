@@ -5,6 +5,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/bizlogs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
+	mailverificationapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/mailverification"
 	suppliersapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/suppliers"
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/ports"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -13,6 +14,14 @@ import (
 
 func UseCredentialCipher(encryptor service.SecretEncryptor) CredentialCipher {
 	return encryptor
+}
+
+func UseRegistrationMailReader(service *mailverificationapp.Service) RegistrationMailReader {
+	return service
+}
+
+func UseRegistrationLogReader(opsService *service.OpsService) RegistrationLogReader {
+	return opsService
 }
 
 func ProvideService(repo Repository, suppliers *suppliersapp.Service, extension *extensionapp.Service, mail RegistrationMailReader, directRegistration ports.DirectRegistrationAdapter, cipher CredentialCipher, client *http.Client, recorder *bizlogs.Recorder, logs RegistrationLogReader, proxyManager ProxyManager) *Service {
@@ -25,6 +34,8 @@ func ProvideRegistrationProcessor(repo Repository, suppliers *suppliersapp.Servi
 
 var ProviderSet = wire.NewSet(
 	UseCredentialCipher,
+	UseRegistrationMailReader,
+	UseRegistrationLogReader,
 	NewSQLRepository,
 	wire.Bind(new(Repository), new(*SQLRepository)),
 	ProvideRegistrationProcessor,
