@@ -372,7 +372,7 @@ func exportTable(ctx context.Context, db tableQuerier, spec tableSpec) ([]json.R
 	if err != nil {
 		return nil, err
 	}
-	defer dbRows.Close()
+	defer func() { _ = dbRows.Close() }()
 
 	out := make([]json.RawMessage, 0)
 	for dbRows.Next() {
@@ -481,7 +481,7 @@ ORDER BY ordinal_position`, tableName)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []columnInfo
 	for rows.Next() {
