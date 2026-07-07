@@ -149,16 +149,28 @@ func (c *Client) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*p
 	}
 	expiresAt := expiresAtFromCookies(resp.Cookies(), capturedAt)
 	bundle := buildSessionBundle(in.SupplierID, origin, apiBaseURL, userID, envelope.Data, cookies, capturedAt, expiresAt)
+	diagnostics := map[string]any{
+		"login_endpoint":       loginEndpoint,
+		"auth_header_required": "New-Api-User",
+		"login_response_keys":  rawKeys(envelope.Data),
+	}
 	probe, err := c.ProbeSub2APIUserProfile(ctx, ports.SessionProbeInput{
 		SupplierID: in.SupplierID,
 		Origin:     origin,
 		APIBaseURL: apiBaseURL,
 		Bundle:     bundle,
 	})
-	if err != nil {
+	if err == nil {
+		applyProfileToSessionBundle(bundle, probe)
+		diagnostics["profile_status"] = stringFromProbeStatus(probe)
+	} else if isOptionalNewAPIDirectLoginProbeError(err) {
+		diagnostics["profile_status"] = "unverified"
+		diagnostics["profile_probe_failed"] = true
+		diagnostics["profile_probe_reason"] = infraerrors.Reason(err)
+		diagnostics["profile_probe_message"] = infraerrors.Message(err)
+	} else {
 		return nil, err
 	}
-	applyProfileToSessionBundle(bundle, probe)
 	if err := requireAdminSessionForDirectLogin(in.LoginContext, bundle); err != nil {
 		return nil, err
 	}
@@ -169,13 +181,12 @@ func (c *Client) DirectLogin(ctx context.Context, in ports.DirectLoginInput) (*p
 		SessionBundle: bundle,
 		CapturedAt:    capturedAt,
 		ExpiresAt:     expiresAt,
-		Diagnostics: map[string]any{
-			"login_endpoint":       loginEndpoint,
-			"profile_status":       stringFromProbeStatus(probe),
-			"auth_header_required": "New-Api-User",
-			"login_response_keys":  rawKeys(envelope.Data),
-		},
+		Diagnostics:   diagnostics,
 	}, nil
+}
+
+func isOptionalNewAPIDirectLoginProbeError(err error) bool {
+	return infraerrors.Reason(err) == "SUPPLIER_SESSION_PERMISSION_DENIED"
 }
 
 func newAPILoginAccessToken(envelope *apiEnvelope) string {

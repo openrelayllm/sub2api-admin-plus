@@ -20,6 +20,7 @@
 
 - 修正供应商筛选、创建、更新和站点匹配在多平台提示下的边界处理。
 - 修正 NewAPI 会话、分组和 Key 同步中的兼容性问题，减少不同 NewAPI 站点返回结构差异导致的采集失败。
+- 修正 NewAPI 直登后 profile probe 权限不足时直接失败的问题，允许保留已获取的 cookie session 并标记为未验证。
 - 移除未使用的 `xlsx` 前端依赖和过期 audit 豁免，避免 Security Scan 被无效依赖阻断。
 
 ### 测试

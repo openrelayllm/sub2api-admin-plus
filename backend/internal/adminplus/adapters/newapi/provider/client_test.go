@@ -132,6 +132,44 @@ func TestClientDirectLoginRequiresAdminSessionWhenRequested(t *testing.T) {
 	require.Equal(t, "10", appErr.Metadata["required_role"])
 }
 
+func TestClientDirectLoginKeepsCookieSessionWhenProfileProbeDenied(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "signed-session", Path: "/", HttpOnly: true})
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":4111,"username":"wutongci","display_name":"wutongci","role":1,"status":1,"group":"default"}}`))
+		case "/api/user/self":
+			require.Equal(t, "4111", r.Header.Get("New-Api-User"))
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"success":false,"message":"unauthorized"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	result, err := client.DirectLogin(context.Background(), ports.DirectLoginInput{
+		SupplierID: 7,
+		Origin:     server.URL,
+		APIBaseURL: server.URL,
+		Username:   "wutongci",
+		Password:   "secret",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "new_api", result.SessionBundle["provider_type"])
+	require.Equal(t, "4111", result.SessionBundle["auth_header_value"])
+	require.Equal(t, "unverified", result.Diagnostics["profile_status"])
+	require.Equal(t, true, result.Diagnostics["profile_probe_failed"])
+	require.Equal(t, "SUPPLIER_SESSION_PERMISSION_DENIED", result.Diagnostics["profile_probe_reason"])
+	contextValue, ok := result.SessionBundle["context"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "1", contextValue["role"])
+	require.Equal(t, "1", contextValue["status"])
+}
+
 func TestClientDirectLoginWithAccessTokenStoresAuthorizationAndUserHeader(t *testing.T) {
 	now := time.Date(2026, 6, 22, 10, 30, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
