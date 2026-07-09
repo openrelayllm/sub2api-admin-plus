@@ -10,6 +10,7 @@ import (
 
 	actionsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/actions"
 	balancesapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/balances"
+	channelchecksapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/channelchecks"
 	costsapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/costs"
 	extensionapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/extension"
 	healthapp "github.com/Wei-Shaw/sub2api/internal/adminplus/app/health"
@@ -134,6 +135,55 @@ func TestServiceRunDirectSyncTasksDoNotCreateExtensionTasks(t *testing.T) {
 	tasks, err := extensionService.ListTasks(context.Background(), extensionapp.TaskFilter{SupplierID: supplier.ID, Limit: 20})
 	require.NoError(t, err)
 	require.Empty(t, tasks)
+}
+
+func TestServiceRunChannelCheckUsesBudgetAndCooldownSettings(t *testing.T) {
+	supplierService := suppliersapp.NewService(suppliersapp.NewMemoryRepository())
+	extensionService := extensionapp.NewService(extensionapp.NewMemoryRepository())
+	channelChecker := &stubChannelChecker{total: 2}
+	service := NewServiceWithDependencies(supplierService, extensionService, nil, nil, nil, nil, nil, channelChecker)
+	service.now = func() time.Time {
+		return time.Date(2026, 6, 20, 10, 4, 0, 0, time.UTC)
+	}
+	_, err := service.UpdateSettings(context.Background(), adminplusdomain.SchedulerSettings{
+		Enabled:                          true,
+		DefaultSupplierConcurrency:       1,
+		ChannelChecksEnabled:             true,
+		ChannelCheckDailyBudgetTokens:    900,
+		ChannelCheckProbeCooldownSeconds: 1200,
+		FirstTokenSlowThresholdMS:        2500,
+		TotalLatencySlowThresholdMS:      12000,
+		DefaultEnabledTaskTypes:          []string{"supplier.balance.sync"},
+		HighCostTaskTypes:                []string{"supplier.channels.check"},
+	})
+	require.NoError(t, err)
+
+	createSchedulerSupplier(t, supplierService, suppliersapp.CreateSupplierInput{
+		Name:            "relay-channel",
+		Kind:            adminplusdomain.SupplierKindRelay,
+		Type:            adminplusdomain.SupplierTypeSub2API,
+		RuntimeStatus:   adminplusdomain.SupplierRuntimeStatusActive,
+		HealthStatus:    adminplusdomain.SupplierHealthStatusNormal,
+		APIBaseURL:      "https://relay-channel.example.com",
+		BalanceCents:    500_00,
+		BalanceCurrency: "CNY",
+	})
+
+	run, err := service.Run(context.Background(), RunInput{
+		Mode:      "manual",
+		TaskTypes: []adminplusdomain.ExtensionTaskType{adminplusdomain.ExtensionTaskTypeCheckChannels},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, run.EligibleCount)
+	require.Len(t, run.Items, 1)
+	require.True(t, run.Items[0].Synced)
+	require.Equal(t, 1, channelChecker.calls)
+	require.Equal(t, 900, channelChecker.input.ActiveProbeDailyBudgetTokens)
+	require.Equal(t, 1200, channelChecker.input.ActiveProbeCooldownSeconds)
+	require.EqualValues(t, 2500, channelChecker.input.FirstTokenThresholdMS)
+	require.EqualValues(t, 12000, channelChecker.input.TotalLatencyThresholdMS)
+	require.True(t, channelChecker.input.AutoPauseOnFailure)
 }
 
 func TestServiceRunPurityCheckUsesRequestSnapshot(t *testing.T) {
@@ -1654,6 +1704,18 @@ type stubHealthSyncer struct {
 func (s *stubHealthSyncer) SyncFromSession(_ context.Context, in healthapp.SyncFromSessionInput) (*healthapp.SyncFromSessionResult, error) {
 	s.calls++
 	return &healthapp.SyncFromSessionResult{SupplierID: in.SupplierID, Total: s.total}, nil
+}
+
+type stubChannelChecker struct {
+	calls int
+	total int
+	input channelchecksapp.CheckInput
+}
+
+func (s *stubChannelChecker) Check(_ context.Context, in channelchecksapp.CheckInput) (*channelchecksapp.CheckResult, error) {
+	s.calls++
+	s.input = in
+	return &channelchecksapp.CheckResult{SupplierID: in.SupplierID, Total: s.total}, nil
 }
 
 type stubUsageCostSyncer struct {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	adminplusdomain "github.com/Wei-Shaw/sub2api/internal/adminplus/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -382,6 +383,32 @@ func (r *SQLRepository) ListLatestSnapshotsBySupplierIDs(ctx context.Context, su
 		FROM latest
 		ORDER BY supplier_id ASC, effective_rate_multiplier ASC, captured_at DESC, id DESC
 	`, pq.Array(supplierIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	return scanSnapshots(rows)
+}
+
+func (r *SQLRepository) ListActiveProbeSnapshotsSince(ctx context.Context, supplierID int64, since time.Time, limit int) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error) {
+	if r == nil || r.db == nil {
+		return nil, dbNotConfigured()
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+snapshotColumns()+`
+		FROM admin_plus_supplier_channel_check_snapshots
+		WHERE supplier_id = $1
+			AND captured_at >= $2
+			AND probe_status = ANY($3)
+		ORDER BY captured_at DESC, id DESC
+		LIMIT $4
+	`, supplierID, since, pq.Array(activeProbeStatusValues()), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -82,6 +82,8 @@ type Service struct {
 	actionSyncer     ActionRecommendationSyncer
 	runObserver      RunStatusObserver
 	now              func() time.Time
+	settingsMu       sync.RWMutex
+	settings         *adminplusdomain.SchedulerSettings
 	recentRunsMu     sync.Mutex
 	recentRuns       []adminplusdomain.SchedulerRunSummary
 }
@@ -1567,6 +1569,13 @@ func (s *Service) Settings(ctx context.Context) adminplusdomain.SchedulerSetting
 		}
 		_ = s.repo.SaveSettings(ctx, defaults)
 	}
+	s.settingsMu.RLock()
+	if s.settings != nil {
+		value := *s.settings
+		s.settingsMu.RUnlock()
+		return normalizeSettings(value, defaults)
+	}
+	s.settingsMu.RUnlock()
 	return defaults
 }
 
@@ -1577,6 +1586,9 @@ func (s *Service) UpdateSettings(ctx context.Context, settings adminplusdomain.S
 			return normalized, err
 		}
 	}
+	s.settingsMu.Lock()
+	s.settings = &normalized
+	s.settingsMu.Unlock()
 	return normalized, nil
 }
 
@@ -1586,6 +1598,7 @@ func (s *Service) defaultSettings() adminplusdomain.SchedulerSettings {
 		DefaultSupplierConcurrency:        1,
 		ChannelChecksEnabled:              channelChecksSchedulerEnabled(),
 		ChannelCheckDailyBudgetTokens:     0,
+		ChannelCheckProbeCooldownSeconds:  600,
 		FirstTokenSlowThresholdMS:         3000,
 		TotalLatencySlowThresholdMS:       15000,
 		RoutingRefillAutoExecuteEnabled:   false,
@@ -1620,6 +1633,15 @@ func normalizeSettings(settings, defaults adminplusdomain.SchedulerSettings) adm
 	}
 	if settings.TotalLatencySlowThresholdMS <= 0 {
 		settings.TotalLatencySlowThresholdMS = defaults.TotalLatencySlowThresholdMS
+	}
+	if settings.ChannelCheckDailyBudgetTokens < 0 {
+		settings.ChannelCheckDailyBudgetTokens = 0
+	}
+	if settings.ChannelCheckProbeCooldownSeconds < 0 {
+		settings.ChannelCheckProbeCooldownSeconds = defaults.ChannelCheckProbeCooldownSeconds
+	}
+	if settings.ChannelCheckProbeCooldownSeconds > 86400 {
+		settings.ChannelCheckProbeCooldownSeconds = 86400
 	}
 	if settings.RoutingRefillLowCapacityThreshold <= 0 {
 		settings.RoutingRefillLowCapacityThreshold = defaults.RoutingRefillLowCapacityThreshold
@@ -2337,9 +2359,14 @@ func (s *Service) syncSupplierTask(ctx context.Context, supplier *adminplusdomai
 			item.Reason = "channel_checker_missing"
 			return
 		}
+		settings := s.Settings(ctx)
 		result, err := s.channelChecker.Check(ctx, channelchecksapp.CheckInput{
-			SupplierID:         supplier.ID,
-			AutoPauseOnFailure: true,
+			SupplierID:                   supplier.ID,
+			AutoPauseOnFailure:           true,
+			FirstTokenThresholdMS:        settings.FirstTokenSlowThresholdMS,
+			TotalLatencyThresholdMS:      settings.TotalLatencySlowThresholdMS,
+			ActiveProbeDailyBudgetTokens: settings.ChannelCheckDailyBudgetTokens,
+			ActiveProbeCooldownSeconds:   settings.ChannelCheckProbeCooldownSeconds,
 		})
 		if err != nil {
 			item.Reason = encodeSyncFailure(stepFailureInput{TaskType: taskType, Stage: "supplier_channel_check", Action: "check_channels", Err: err})

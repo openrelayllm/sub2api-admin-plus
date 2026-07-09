@@ -12,7 +12,7 @@
 3. Admin Plus 核心链路必须能从 `admin_plus_suppliers` 追到 `admin_plus_supplier_groups`、`admin_plus_supplier_keys`、`admin_plus_supplier_accounts`、本地 `accounts`、本地 `groups` 和用户 `api_keys`。
 4. 运行历史、检测快照、通知投递、插件任务、调度 run/step/attempt 不属于核心迁移数据；换服务器时默认不导出或只归档。
 5. 第三方 Key 明文、浏览器会话密文、邮箱凭据、代理订阅等敏感数据必须单独标记，不进入普通导出。
-6. 本地账号状态基线、drift 事件、供应商级 Key 配额字段、分组级 Key 配额字段、批量开通计划、计划优先级覆盖、Provider `ListKeys/ReadKeyCapacity` 第一阶段、第三方未绑定 Key 脱敏投影导入、`manual_secret_required` 手动补密钥修复绑定、余额机会队列、余额恢复通知/复检建议、充值/兑换账单对账异常动作建议、对账差额人工调整闭环、账单明细级修复第一阶段、路由补池运行、模型级候选第一阶段、动作建议路径下的补池/关调度执行历史、普通本地账号手工写执行历史、动作执行到调度 run/step 的反向来源、动作执行幂等指纹、replay 回填和前后快照，以及本地路由类失败执行安全重试和成功执行回滚已经落地；真实最大 Key 上限自动读取、成本利润看板、通知矩阵、代理质量联动、纯度检测联动、账单明细自动定位和批量导入、非本地路由类动作回滚仍是下一阶段必须补齐的能力。
+6. 本地账号状态基线、drift 事件、供应商级 Key 配额字段、分组级 Key 配额字段、批量开通计划、计划优先级覆盖、Provider `ListKeys/ReadKeyCapacity` 第一阶段、第三方未绑定 Key 脱敏投影导入、`manual_secret_required` 手动补密钥修复绑定、余额机会队列、余额恢复通知/复检建议、充值/兑换账单对账异常动作建议、对账差额人工调整闭环、账单明细级修复第一阶段、路由补池运行、模型级候选第一阶段、渠道检测实测预算/冷却第一阶段、动作建议路径下的补池/关调度执行历史、普通本地账号手工写执行历史、动作执行到调度 run/step 的反向来源、动作执行幂等指纹、replay 回填和前后快照，以及本地路由类失败执行安全重试和成功执行回滚已经落地；真实最大 Key 上限自动读取、成本利润看板、通知矩阵、代理质量联动、纯度检测联动、账单明细自动定位和批量导入、非本地路由类动作回滚仍是下一阶段必须补齐的能力。
 7. 当前同库部署下，本地账号运营动作层已在 Admin Plus 内事务写 `accounts/account_groups` 并补写 `scheduler_outbox`；P1 第一阶段已从 service 层收口为 `Sub2APIRoutingPort`，并提供分组可用性、账号快照、加入分组和开关调度语义化方法。远程写回第一阶段已通过 `RemoteAdminAPIRoutingPort` 调用现有 Sub2API Admin API，不新增 Admin Plus 表；多实例仍沿同一写回边界扩展。
 
 ## 2. 表域划分
@@ -1062,7 +1062,8 @@ flowchart TD
 | P1 | 已扩展 `admin_plus_action_executions.scheduler_run_id/scheduler_step_id` | 让从调度 run/step 触发的动作执行可反向追溯来源 |
 | P1 | 已扩展 `admin_plus_action_executions.idempotency_key_hash/idempotency_replayed/before_snapshot/after_snapshot` | 让执行历史能证明幂等来源、replay 命中和执行前后影响 |
 | P2 | 已接入模型级候选第一阶段 | 复用 `admin_plus_supplier_groups.model_family/model_spec` 和 `admin_plus_routing_refill_runs.model_scope`，不新增表；补池按 `model_scope` 选择候选，明确不匹配输出 `model_scope_unsupported` |
-| P2 | 成本利润、通知矩阵、代理质量、纯度检测和实测预算字段 | 待补齐，用于支撑模型级运营质量和利润判断 |
+| P2 | 已接入渠道检测实测预算/冷却第一阶段 | 复用 `admin_plus_supplier_channel_check_snapshots` 估算当天主动实测消耗和同分组冷却，不新增表；调度设置新增 `channel_check_probe_cooldown_seconds` JSON 字段 |
+| P2 | 成本利润、通知矩阵、代理质量、纯度检测和细粒度实测预算字段 | 待补齐，用于支撑模型级运营质量和利润判断 |
 | P3 | `sub2api_instance_id` 维度 | 本轮不实施多 Sub2API 实例 |
 
 ## 13. 相关文档

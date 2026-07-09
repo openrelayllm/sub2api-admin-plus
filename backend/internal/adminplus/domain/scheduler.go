@@ -221,6 +221,7 @@ type SchedulerSettings struct {
 	DefaultSupplierConcurrency        int      `json:"default_supplier_concurrency"`
 	ChannelChecksEnabled              bool     `json:"channel_checks_enabled"`
 	ChannelCheckDailyBudgetTokens     int      `json:"channel_check_daily_budget_tokens"`
+	ChannelCheckProbeCooldownSeconds  int      `json:"channel_check_probe_cooldown_seconds"`
 	FirstTokenSlowThresholdMS         int64    `json:"first_token_slow_threshold_ms"`
 	TotalLatencySlowThresholdMS       int64    `json:"total_latency_slow_threshold_ms"`
 	RoutingRefillAutoExecuteEnabled   bool     `json:"routing_refill_auto_execute_enabled"`

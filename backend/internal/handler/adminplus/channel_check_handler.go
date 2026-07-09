@@ -26,19 +26,25 @@ func NewChannelCheckHandlerWithProvisionJobs(service *channelchecksapp.Service, 
 }
 
 type probeSupplierChannelRequest struct {
-	SupplierGroupID         int64  `json:"supplier_group_id"`
-	AutoPauseOnFailure      *bool  `json:"auto_pause_on_failure"`
-	ProbeModel              string `json:"probe_model"`
-	FirstTokenThresholdMS   int64  `json:"first_token_threshold_ms"`
-	TotalLatencyThresholdMS int64  `json:"total_latency_threshold_ms"`
+	SupplierGroupID              int64  `json:"supplier_group_id"`
+	AutoPauseOnFailure           *bool  `json:"auto_pause_on_failure"`
+	ProbeModel                   string `json:"probe_model"`
+	FirstTokenThresholdMS        int64  `json:"first_token_threshold_ms"`
+	TotalLatencyThresholdMS      int64  `json:"total_latency_threshold_ms"`
+	ActiveProbeDailyBudgetTokens int    `json:"active_probe_daily_budget_tokens"`
+	ActiveProbeEstimatedTokens   int    `json:"active_probe_estimated_tokens"`
+	ActiveProbeCooldownSeconds   int    `json:"active_probe_cooldown_seconds"`
 }
 
 type syncSupplierChannelsRequest struct {
-	CandidateLimit          int    `json:"candidate_limit"`
-	AutoPauseOnFailure      *bool  `json:"auto_pause_on_failure"`
-	ProbeModel              string `json:"probe_model"`
-	FirstTokenThresholdMS   int64  `json:"first_token_threshold_ms"`
-	TotalLatencyThresholdMS int64  `json:"total_latency_threshold_ms"`
+	CandidateLimit               int    `json:"candidate_limit"`
+	AutoPauseOnFailure           *bool  `json:"auto_pause_on_failure"`
+	ProbeModel                   string `json:"probe_model"`
+	FirstTokenThresholdMS        int64  `json:"first_token_threshold_ms"`
+	TotalLatencyThresholdMS      int64  `json:"total_latency_threshold_ms"`
+	ActiveProbeDailyBudgetTokens int    `json:"active_probe_daily_budget_tokens"`
+	ActiveProbeEstimatedTokens   int    `json:"active_probe_estimated_tokens"`
+	ActiveProbeCooldownSeconds   int    `json:"active_probe_cooldown_seconds"`
 }
 
 type setChannelSchedulingRequest struct {
@@ -93,12 +99,15 @@ func (h *ChannelCheckHandler) Probe(c *gin.Context) {
 		return
 	}
 	result, err := h.service.Check(c.Request.Context(), channelchecksapp.CheckInput{
-		SupplierID:              supplierID,
-		SupplierGroupID:         req.SupplierGroupID,
-		AutoPauseOnFailure:      boolDefault(req.AutoPauseOnFailure, true),
-		ProbeModel:              strings.TrimSpace(req.ProbeModel),
-		FirstTokenThresholdMS:   req.FirstTokenThresholdMS,
-		TotalLatencyThresholdMS: req.TotalLatencyThresholdMS,
+		SupplierID:                   supplierID,
+		SupplierGroupID:              req.SupplierGroupID,
+		AutoPauseOnFailure:           boolDefault(req.AutoPauseOnFailure, true),
+		ProbeModel:                   strings.TrimSpace(req.ProbeModel),
+		FirstTokenThresholdMS:        req.FirstTokenThresholdMS,
+		TotalLatencyThresholdMS:      req.TotalLatencyThresholdMS,
+		ActiveProbeDailyBudgetTokens: req.ActiveProbeDailyBudgetTokens,
+		ActiveProbeEstimatedTokens:   req.ActiveProbeEstimatedTokens,
+		ActiveProbeCooldownSeconds:   req.ActiveProbeCooldownSeconds,
 	})
 	if response.ErrorFrom(c, err) {
 		return
@@ -123,11 +132,14 @@ func (h *ChannelCheckHandler) Sync(c *gin.Context) {
 		IdempotencyKey: c.GetHeader("Idempotency-Key"),
 		RequestedBy:    currentAdminUserID(c),
 		Request: map[string]any{
-			"candidate_limit":            req.CandidateLimit,
-			"auto_pause_on_failure":      boolDefault(req.AutoPauseOnFailure, true),
-			"probe_model":                strings.TrimSpace(req.ProbeModel),
-			"first_token_threshold_ms":   req.FirstTokenThresholdMS,
-			"total_latency_threshold_ms": req.TotalLatencyThresholdMS,
+			"candidate_limit":                  req.CandidateLimit,
+			"auto_pause_on_failure":            boolDefault(req.AutoPauseOnFailure, true),
+			"probe_model":                      strings.TrimSpace(req.ProbeModel),
+			"first_token_threshold_ms":         req.FirstTokenThresholdMS,
+			"total_latency_threshold_ms":       req.TotalLatencyThresholdMS,
+			"active_probe_daily_budget_tokens": req.ActiveProbeDailyBudgetTokens,
+			"active_probe_estimated_tokens":    req.ActiveProbeEstimatedTokens,
+			"active_probe_cooldown_seconds":    req.ActiveProbeCooldownSeconds,
 		},
 	})
 	if response.ErrorFrom(c, err) {

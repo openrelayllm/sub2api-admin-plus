@@ -697,6 +697,12 @@ export interface SupplierChannelCheckResult {
   total: number
   best?: SupplierChannelCheckSnapshot
   items: SupplierChannelCheckSnapshot[]
+  active_probe_budget_tokens?: number
+  active_probe_estimated_tokens?: number
+  active_probe_tokens_used_today?: number
+  active_probes_attempted?: number
+  active_probes_skipped_by_budget?: number
+  active_probes_skipped_by_cooldown?: number
 }
 
 export interface ProbeSupplierChannelPayload {
@@ -705,6 +711,9 @@ export interface ProbeSupplierChannelPayload {
   probe_model?: string
   first_token_threshold_ms?: number
   total_latency_threshold_ms?: number
+  active_probe_daily_budget_tokens?: number
+  active_probe_estimated_tokens?: number
+  active_probe_cooldown_seconds?: number
 }
 
 export interface SyncSupplierChannelsPayload {
@@ -713,6 +722,9 @@ export interface SyncSupplierChannelsPayload {
   probe_model?: string
   first_token_threshold_ms?: number
   total_latency_threshold_ms?: number
+  active_probe_daily_budget_tokens?: number
+  active_probe_estimated_tokens?: number
+  active_probe_cooldown_seconds?: number
 }
 
 export interface SetSupplierChannelSchedulingPayload {
@@ -3001,6 +3013,7 @@ export interface SchedulerSettings {
   default_supplier_concurrency: number
   channel_checks_enabled: boolean
   channel_check_daily_budget_tokens: number
+  channel_check_probe_cooldown_seconds: number
   first_token_slow_threshold_ms: number
   total_latency_slow_threshold_ms: number
   routing_refill_auto_execute_enabled: boolean

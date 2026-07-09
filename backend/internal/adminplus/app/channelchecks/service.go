@@ -22,6 +22,7 @@ const (
 	DefaultAnthropicProbeModel = "claude-sonnet-4-6"
 	defaultCandidateLimit      = 3
 	maxCandidateLimit          = 20
+	defaultProbeEstimateTokens = 300
 	defaultFirstTokenSlowMS    = int64(3000)
 	defaultTotalSlowMS         = int64(30000)
 )
@@ -29,21 +30,30 @@ const (
 var openAIGroupKeywordPattern = regexp.MustCompile(`\b(pro|plus)\b`)
 
 type CheckInput struct {
-	SupplierID              int64
-	SupplierGroupID         int64
-	CandidateLimit          int
-	AutoPauseOnFailure      bool
-	ProbeModel              string
-	FirstTokenThresholdMS   int64
-	TotalLatencyThresholdMS int64
+	SupplierID                   int64
+	SupplierGroupID              int64
+	CandidateLimit               int
+	AutoPauseOnFailure           bool
+	ProbeModel                   string
+	FirstTokenThresholdMS        int64
+	TotalLatencyThresholdMS      int64
+	ActiveProbeDailyBudgetTokens int
+	ActiveProbeEstimatedTokens   int
+	ActiveProbeCooldownSeconds   int
 }
 
 type CheckResult struct {
-	SupplierID int64                                           `json:"supplier_id"`
-	CheckedAt  time.Time                                       `json:"checked_at"`
-	Total      int                                             `json:"total"`
-	Best       *adminplusdomain.SupplierChannelCheckSnapshot   `json:"best,omitempty"`
-	Items      []*adminplusdomain.SupplierChannelCheckSnapshot `json:"items"`
+	SupplierID                    int64                                           `json:"supplier_id"`
+	CheckedAt                     time.Time                                       `json:"checked_at"`
+	Total                         int                                             `json:"total"`
+	Best                          *adminplusdomain.SupplierChannelCheckSnapshot   `json:"best,omitempty"`
+	Items                         []*adminplusdomain.SupplierChannelCheckSnapshot `json:"items"`
+	ActiveProbeBudgetTokens       int                                             `json:"active_probe_budget_tokens,omitempty"`
+	ActiveProbeEstimatedTokens    int                                             `json:"active_probe_estimated_tokens,omitempty"`
+	ActiveProbeTokensUsedToday    int                                             `json:"active_probe_tokens_used_today,omitempty"`
+	ActiveProbesAttempted         int                                             `json:"active_probes_attempted,omitempty"`
+	ActiveProbesSkippedByBudget   int                                             `json:"active_probes_skipped_by_budget,omitempty"`
+	ActiveProbesSkippedByCooldown int                                             `json:"active_probes_skipped_by_cooldown,omitempty"`
 }
 
 type OverviewFilter struct {
@@ -134,6 +144,7 @@ type Repository interface {
 	CreateSnapshot(ctx context.Context, snapshot *adminplusdomain.SupplierChannelCheckSnapshot) (*adminplusdomain.SupplierChannelCheckSnapshot, error)
 	ListLatestSnapshots(ctx context.Context, supplierID int64, limit int) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error)
 	ListLatestSnapshotsBySupplierIDs(ctx context.Context, supplierIDs []int64) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error)
+	ListActiveProbeSnapshotsSince(ctx context.Context, supplierID int64, since time.Time, limit int) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error)
 	SetLocalAccountSchedulable(ctx context.Context, localAccountID int64, schedulable bool) error
 }
 
@@ -192,6 +203,11 @@ func (s *Service) Check(ctx context.Context, in CheckInput) (*CheckResult, error
 		candidateLimit = maxCandidateLimit
 	}
 	probeModel := strings.TrimSpace(in.ProbeModel)
+	checkedAt := s.now().UTC()
+	probeGate, err := s.loadActiveProbeGate(ctx, in, checkedAt)
+	if err != nil {
+		return nil, err
+	}
 
 	candidates, err := s.repo.ListCandidates(ctx, in.SupplierID)
 	if err != nil {
@@ -203,7 +219,6 @@ func (s *Service) Check(ctx context.Context, in CheckInput) (*CheckResult, error
 	}
 
 	monitors, _ := s.readRemoteMonitors(ctx, in.SupplierID)
-	checkedAt := s.now().UTC()
 	items := make([]*adminplusdomain.SupplierChannelCheckSnapshot, 0, minInt(candidateLimit, len(candidates)))
 	for _, candidate := range candidates {
 		if len(items) >= candidateLimit {
@@ -233,19 +248,35 @@ func (s *Service) Check(ctx context.Context, in CheckInput) (*CheckResult, error
 			items = append(items, created)
 			continue
 		}
+		if skipReason := probeGate.skipReason(candidate, checkedAt); skipReason != "" {
+			probeGate.recordSkip(skipReason)
+			snapshot.ProbeStatus = adminplusdomain.SupplierChannelProbeStatusUntested
+			snapshot.ErrorClass = skipReason
+			snapshot.ErrorMessage = activeProbeSkipMessage(skipReason)
+			items = append(items, snapshot)
+			continue
+		}
+		probeGate.recordAttempt()
 		s.applyProbe(ctx, snapshot, candidate, probeModel, firstThreshold, totalThreshold)
 		created, err := s.saveAndMaybePause(ctx, snapshot, in.AutoPauseOnFailure)
 		if err != nil {
 			return nil, err
 		}
+		probeGate.recordSnapshot(created)
 		items = append(items, created)
 	}
 	return &CheckResult{
-		SupplierID: in.SupplierID,
-		CheckedAt:  checkedAt,
-		Total:      len(items),
-		Best:       chooseBest(items),
-		Items:      items,
+		SupplierID:                    in.SupplierID,
+		CheckedAt:                     checkedAt,
+		Total:                         len(items),
+		Best:                          chooseBest(items),
+		Items:                         items,
+		ActiveProbeBudgetTokens:       probeGate.budgetTokens,
+		ActiveProbeEstimatedTokens:    probeGate.estimatedTokens,
+		ActiveProbeTokensUsedToday:    probeGate.usedTokensToday,
+		ActiveProbesAttempted:         probeGate.attempted,
+		ActiveProbesSkippedByBudget:   probeGate.skippedByBudget,
+		ActiveProbesSkippedByCooldown: probeGate.skippedByCooldown,
 	}, nil
 }
 
@@ -551,6 +582,153 @@ func (s *Service) SetScheduling(ctx context.Context, supplierID int64, supplierG
 		snapshot.ErrorMessage = "local account scheduling paused"
 	}
 	return s.repo.CreateSnapshot(ctx, snapshot)
+}
+
+type activeProbeGate struct {
+	budgetTokens      int
+	estimatedTokens   int
+	usedTokensToday   int
+	cooldown          time.Duration
+	dayStart          time.Time
+	latestByGroup     map[int64]*adminplusdomain.SupplierChannelCheckSnapshot
+	attempted         int
+	skippedByBudget   int
+	skippedByCooldown int
+}
+
+func (s *Service) loadActiveProbeGate(ctx context.Context, in CheckInput, now time.Time) (*activeProbeGate, error) {
+	gate := &activeProbeGate{
+		budgetTokens:    normalizeProbeBudgetTokens(in.ActiveProbeDailyBudgetTokens),
+		estimatedTokens: normalizeProbeEstimateTokens(in.ActiveProbeEstimatedTokens),
+		cooldown:        normalizeProbeCooldown(in.ActiveProbeCooldownSeconds),
+		dayStart:        now.UTC().Truncate(24 * time.Hour),
+		latestByGroup:   make(map[int64]*adminplusdomain.SupplierChannelCheckSnapshot),
+	}
+	if gate.budgetTokens <= 0 && gate.cooldown <= 0 {
+		return gate, nil
+	}
+	since := gate.dayStart
+	if gate.cooldown > 0 {
+		cooldownStart := now.Add(-gate.cooldown)
+		if cooldownStart.Before(since) {
+			since = cooldownStart
+		}
+	}
+	snapshots, err := s.repo.ListActiveProbeSnapshotsSince(ctx, in.SupplierID, since, 10000)
+	if err != nil {
+		return nil, err
+	}
+	for _, snapshot := range snapshots {
+		gate.recordSnapshot(snapshot)
+	}
+	return gate, nil
+}
+
+func (g *activeProbeGate) skipReason(candidate *Candidate, now time.Time) string {
+	if g == nil || candidate == nil {
+		return ""
+	}
+	if g.cooldown > 0 {
+		if latest := g.latestByGroup[candidate.SupplierGroupID]; latest != nil && latest.CapturedAt.After(now.Add(-g.cooldown)) {
+			return "active_probe_cooldown"
+		}
+	}
+	if g.budgetTokens > 0 && g.usedTokensToday+g.estimatedTokens > g.budgetTokens {
+		return "active_probe_budget_exhausted"
+	}
+	return ""
+}
+
+func (g *activeProbeGate) recordAttempt() {
+	if g != nil {
+		g.attempted++
+	}
+}
+
+func (g *activeProbeGate) recordSkip(reason string) {
+	if g == nil {
+		return
+	}
+	switch reason {
+	case "active_probe_budget_exhausted":
+		g.skippedByBudget++
+	case "active_probe_cooldown":
+		g.skippedByCooldown++
+	}
+}
+
+func (g *activeProbeGate) recordSnapshot(snapshot *adminplusdomain.SupplierChannelCheckSnapshot) {
+	if g == nil || snapshot == nil || !activeProbeStatus(snapshot.ProbeStatus) {
+		return
+	}
+	if !snapshot.CapturedAt.Before(g.dayStart) {
+		g.usedTokensToday += g.estimatedTokens
+	}
+	current := g.latestByGroup[snapshot.SupplierGroupID]
+	if current == nil || snapshot.CapturedAt.After(current.CapturedAt) {
+		g.latestByGroup[snapshot.SupplierGroupID] = snapshot
+	}
+}
+
+func normalizeProbeBudgetTokens(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func normalizeProbeEstimateTokens(value int) int {
+	if value <= 0 {
+		return defaultProbeEstimateTokens
+	}
+	if value > 100000 {
+		return 100000
+	}
+	return value
+}
+
+func normalizeProbeCooldown(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	if seconds > int((24 * time.Hour).Seconds()) {
+		seconds = int((24 * time.Hour).Seconds())
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func activeProbeStatus(status adminplusdomain.SupplierChannelProbeStatus) bool {
+	switch status {
+	case adminplusdomain.SupplierChannelProbeStatusAvailable,
+		adminplusdomain.SupplierChannelProbeStatusSlowFirstToken,
+		adminplusdomain.SupplierChannelProbeStatusSlowTotal,
+		adminplusdomain.SupplierChannelProbeStatusRequestError,
+		adminplusdomain.SupplierChannelProbeStatusProbeFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func activeProbeStatusValues() []string {
+	return []string{
+		string(adminplusdomain.SupplierChannelProbeStatusAvailable),
+		string(adminplusdomain.SupplierChannelProbeStatusSlowFirstToken),
+		string(adminplusdomain.SupplierChannelProbeStatusSlowTotal),
+		string(adminplusdomain.SupplierChannelProbeStatusRequestError),
+		string(adminplusdomain.SupplierChannelProbeStatusProbeFailed),
+	}
+}
+
+func activeProbeSkipMessage(reason string) string {
+	switch reason {
+	case "active_probe_budget_exhausted":
+		return "active probe skipped because daily token budget is exhausted"
+	case "active_probe_cooldown":
+		return "active probe skipped because the supplier group is in cooldown"
+	default:
+		return "active probe skipped"
+	}
 }
 
 func (s *Service) ensureSchedulingPrerequisites(ctx context.Context, candidate *Candidate, localAccountGroupIDs []int64) (*Candidate, error) {

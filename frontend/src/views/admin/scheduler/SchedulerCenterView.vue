@@ -485,6 +485,10 @@
               <input v-model.number="settingsForm.channel_check_daily_budget_tokens" type="number" min="0" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800 dark:text-white" />
             </label>
             <label class="block">
+              <span class="text-gray-500 dark:text-dark-400">同分组实测冷却秒数</span>
+              <input v-model.number="settingsForm.channel_check_probe_cooldown_seconds" type="number" min="0" max="86400" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800 dark:text-white" />
+            </label>
+            <label class="block">
               <span class="text-gray-500 dark:text-dark-400">首 token 慢阈值 ms</span>
               <input v-model.number="settingsForm.first_token_slow_threshold_ms" type="number" min="0" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800 dark:text-white" />
             </label>
@@ -682,6 +686,7 @@ const settingsForm = reactive<SchedulerSettings>({
   default_supplier_concurrency: 1,
   channel_checks_enabled: false,
   channel_check_daily_budget_tokens: 0,
+  channel_check_probe_cooldown_seconds: 600,
   first_token_slow_threshold_ms: 0,
   total_latency_slow_threshold_ms: 0,
   routing_refill_auto_execute_enabled: false,
@@ -1186,6 +1191,7 @@ function syncSettingsForm(value: SchedulerSettings) {
   settingsForm.default_supplier_concurrency = value.default_supplier_concurrency || 1
   settingsForm.channel_checks_enabled = value.channel_checks_enabled
   settingsForm.channel_check_daily_budget_tokens = value.channel_check_daily_budget_tokens || 0
+  settingsForm.channel_check_probe_cooldown_seconds = value.channel_check_probe_cooldown_seconds || 600
   settingsForm.first_token_slow_threshold_ms = value.first_token_slow_threshold_ms || 0
   settingsForm.total_latency_slow_threshold_ms = value.total_latency_slow_threshold_ms || 0
   settingsForm.routing_refill_auto_execute_enabled = value.routing_refill_auto_execute_enabled || false
@@ -1203,6 +1209,7 @@ function normalizedSettingsPayload(): SchedulerSettings {
     default_supplier_concurrency: Math.max(1, Number(settingsForm.default_supplier_concurrency) || 1),
     channel_checks_enabled: settingsForm.channel_checks_enabled,
     channel_check_daily_budget_tokens: Math.max(0, Number(settingsForm.channel_check_daily_budget_tokens) || 0),
+    channel_check_probe_cooldown_seconds: clampInteger(settingsForm.channel_check_probe_cooldown_seconds, 600, 0, 86400),
     first_token_slow_threshold_ms: Math.max(0, Number(settingsForm.first_token_slow_threshold_ms) || 0),
     total_latency_slow_threshold_ms: Math.max(0, Number(settingsForm.total_latency_slow_threshold_ms) || 0),
     routing_refill_auto_execute_enabled: settingsForm.routing_refill_auto_execute_enabled,

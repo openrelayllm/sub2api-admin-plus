@@ -104,6 +104,85 @@ func TestServiceCheckUsesRequestedProbeModel(t *testing.T) {
 	require.Equal(t, "gpt-5.5", result.Items[0].ProbeModel)
 }
 
+func TestServiceCheckSkipsActiveProbeWhenDailyBudgetExhausted(t *testing.T) {
+	repo := newFakeChannelCheckRepository()
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	repo.candidates = []*Candidate{
+		fakeCandidate(7, 101, 0.7, 201, true),
+		fakeCandidate(7, 102, 0.8, 202, true),
+	}
+	repo.snapshots = []*adminplusdomain.SupplierChannelCheckSnapshot{
+		fakeSnapshot(1, 7, 100, "openai", "group", 0.6, true, now.Add(-time.Hour)),
+	}
+	serverCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serverCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	healthRepo := &fakeChannelHealthRepository{baseURL: server.URL}
+	svc := NewService(repo, nil, nil, healthapp.NewService(healthRepo))
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.Check(context.Background(), CheckInput{
+		SupplierID:                   7,
+		CandidateLimit:               2,
+		ActiveProbeDailyBudgetTokens: 300,
+		ActiveProbeEstimatedTokens:   300,
+		ActiveProbeCooldownSeconds:   0,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, serverCalls)
+	require.Equal(t, 300, result.ActiveProbeTokensUsedToday)
+	require.Equal(t, 0, result.ActiveProbesAttempted)
+	require.Equal(t, 2, result.ActiveProbesSkippedByBudget)
+	require.Len(t, result.Items, 2)
+	require.Equal(t, "active_probe_budget_exhausted", result.Items[0].ErrorClass)
+	require.Len(t, repo.snapshots, 1)
+	require.Empty(t, repo.pausedAccountIDs)
+}
+
+func TestServiceCheckSkipsActiveProbeWhenGroupInCooldown(t *testing.T) {
+	repo := newFakeChannelCheckRepository()
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	repo.candidates = []*Candidate{
+		fakeCandidate(7, 101, 0.7, 201, true),
+	}
+	repo.snapshots = []*adminplusdomain.SupplierChannelCheckSnapshot{
+		fakeSnapshot(1, 7, 101, "openai", "group", 0.7, true, now.Add(-5*time.Minute)),
+	}
+	serverCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serverCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	healthRepo := &fakeChannelHealthRepository{baseURL: server.URL}
+	svc := NewService(repo, nil, nil, healthapp.NewService(healthRepo))
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.Check(context.Background(), CheckInput{
+		SupplierID:                 7,
+		SupplierGroupID:            101,
+		ActiveProbeCooldownSeconds: 600,
+		ActiveProbeEstimatedTokens: 300,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, serverCalls)
+	require.Equal(t, 0, result.ActiveProbesAttempted)
+	require.Equal(t, 1, result.ActiveProbesSkippedByCooldown)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "active_probe_cooldown", result.Items[0].ErrorClass)
+	require.Len(t, repo.snapshots, 1)
+	require.Empty(t, repo.pausedAccountIDs)
+}
+
 func TestServiceCheckClampsCandidateLimitToTwenty(t *testing.T) {
 	repo := newFakeChannelCheckRepository()
 	repo.candidates = make([]*Candidate, 0, 25)
@@ -366,6 +445,21 @@ func (r *fakeChannelCheckRepository) ListLatestSnapshots(_ context.Context, supp
 		if item.SupplierID == supplierID {
 			items = append(items, cloneChannelSnapshot(item))
 		}
+	}
+	sortSnapshotsByNewest(items)
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (r *fakeChannelCheckRepository) ListActiveProbeSnapshotsSince(_ context.Context, supplierID int64, since time.Time, limit int) ([]*adminplusdomain.SupplierChannelCheckSnapshot, error) {
+	items := make([]*adminplusdomain.SupplierChannelCheckSnapshot, 0)
+	for _, item := range r.snapshots {
+		if item.SupplierID != supplierID || item.CapturedAt.Before(since) || !activeProbeStatus(item.ProbeStatus) {
+			continue
+		}
+		items = append(items, cloneChannelSnapshot(item))
 	}
 	sortSnapshotsByNewest(items)
 	if limit > 0 && len(items) > limit {

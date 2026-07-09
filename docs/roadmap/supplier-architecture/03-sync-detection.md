@@ -135,11 +135,14 @@ flowchart TD
 | P1 | Key 配额状态 | `ListKeys/ReadKeyCapacity` | `key_limit_policy`、`key_capacity_status`、`active_key_count` | 不消耗模型 token | 判断是否能继续自动创建第三方 Key |
 | P2 | 第三方 Key 事实 | `admin_plus_supplier_keys` | `status`、`external_key_id`、`local_sub2api_account_id` | 不消耗模型 token | 判断该分组是否已落地本地账号 |
 | P2 | 本地调度状态 | 本地 Sub2API `accounts` / `OpsService` | `schedulable`、429、error、temp unsched | 不消耗供应商 token | 判断本地网关能否调度 |
-| P3 | 主动健康探测 | `health.Service` | `probe_status`、`status_code`、`first_token_ms` | 消耗模型 token 和供应商余额 | 只在监控缺失/过期/冲突、人工触发或自动写回前验证真实链路 |
+| P2 | 主动健康探测 | `health.Service`、`channelchecks.Check` | `probe_status`、`status_code`、`first_token_ms`、`active_probe_daily_budget_tokens`、`channel_check_probe_cooldown_seconds` | 消耗模型 token 和供应商余额 | 只在监控缺失/过期/冲突、人工触发或自动写回前验证真实链路；第一阶段已有每日预算和同分组冷却 |
 
 实测规则：
 
 - 默认不把主动实测作为第一道检查。
+- 余额不足时不触发主动实测。
+- 调度器执行渠道检测时必须传入预算、冷却和慢阈值设置。
+- 预算或冷却命中时不能自动关闭本地账号调度。
 - 通道监控明确不可用时，不再立即实测，先生成 `channel_monitor_failed` 或人工确认动作。
 - 余额明确不足时，不实测，标记 `balance_blocked/recharge_required`。
 - 只有低成本事实无法判断、或即将自动补池/恢复调度时，才执行最小 token 的探测请求。
