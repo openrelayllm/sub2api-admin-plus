@@ -453,6 +453,9 @@ async function handleUpdate() {
     needRestart.value = result.need_restart
     // Clear version cache to reflect update completed
     appStore.clearVersionCache()
+    if (result.need_restart) {
+      await handleRestart()
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')

@@ -46,6 +46,7 @@ type systemUpdateResponseEnvelope struct {
 		AlreadyUpToDate bool   `json:"already_up_to_date"`
 		CurrentVersion  string `json:"current_version"`
 		LatestVersion   string `json:"latest_version"`
+		NeedRestart     bool   `json:"need_restart"`
 		OperationID     string `json:"operation_id"`
 	} `json:"data"`
 }
@@ -117,6 +118,30 @@ func TestSystemHandlerPerformUpdateAlreadyUpToDateReturnsOK(t *testing.T) {
 	require.True(t, body.Data.AlreadyUpToDate)
 	require.Equal(t, "0.1.132", body.Data.CurrentVersion)
 	require.Equal(t, "0.1.132", body.Data.LatestVersion)
+	require.NotEmpty(t, body.Data.OperationID)
+}
+
+func TestSystemHandlerPerformUpdateSuccessRequiresRestart(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req.Header.Set("Idempotency-Key", "update-success")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, updateSvc.performCall)
+	require.Empty(t, updateSvc.checkForces)
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
+
+	var body systemUpdateResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 0, body.Code)
+	require.Equal(t, "success", body.Message)
+	require.Equal(t, "Update completed. Please restart the service.", body.Data.Message)
+	require.True(t, body.Data.NeedRestart)
 	require.NotEmpty(t, body.Data.OperationID)
 }
 

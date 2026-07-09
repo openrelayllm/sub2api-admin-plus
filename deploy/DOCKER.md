@@ -2,6 +2,11 @@
 
 Sub2API Admin Plus is an operations automation extension built from the Sub2API codebase.
 
+Release images are published for `linux/amd64` and `linux/arm64` to:
+
+- DockerHub: `wutongci/sub2api-admin-plus:<version>`
+- GHCR: `ghcr.io/openrelayllm/sub2api-admin-plus:<version>`
+
 ## Quick Start
 
 ```bash
@@ -14,7 +19,7 @@ docker run -d \
   -e DATABASE_PASSWORD="change_this_secure_password" \
   -e DATABASE_DBNAME="sub2api_admin_plus" \
   -e REDIS_HOST="redis-host" \
-  ghcr.io/openrelayllm/sub2api-admin-plus:latest
+  wutongci/sub2api-admin-plus:latest
 ```
 
 ## Docker Compose
@@ -27,6 +32,8 @@ mkdir -p admin_plus_data admin_plus_postgres_data admin_plus_redis_data
 docker compose -f docker-compose.local.yml up -d
 docker compose -f docker-compose.local.yml logs -f admin-plus
 ```
+
+To pin a release image, set `ADMIN_PLUS_IMAGE=wutongci/sub2api-admin-plus:X.Y.Z` in `.env`.
 
 ## v0.2 Data Boundary
 

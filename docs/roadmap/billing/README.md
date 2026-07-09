@@ -78,6 +78,8 @@ Admin Plus 既是第三方供应商的下游用户，也是本地 Sub2API 服务
 - P1 已实现上游供应商成本 MVP。
 - P2 下游收入、P3 利润对账、P4 异常闭环/闭账/手工调整仍是后续阶段，当前不展示导航入口，不注册运行时 API，不复用旧 `/admin/finance/reconciliation`。
 
+> 当前口径更新：本文的 P1/P2/P3/P4 是账务专项阶段名，不等同于 supplier architecture 的 P1/P2/P3 收口边界。当前 P1/P2 阶段关闭证据、发布前验收和 P3 不实施边界以 [`../supplier-architecture/09-phase-closure.md`](../supplier-architecture/09-phase-closure.md) 为准；本文的下游收入、利润对账和闭账调整不阻塞当前 supplier architecture 收口。
+
 ## 3. 目的与收益
 
 目的：

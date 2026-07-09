@@ -9,6 +9,7 @@ import type { Toast, ToastType, PublicSettings } from '@/types'
 import { i18n } from '@/i18n'
 import {
   checkUpdates as checkUpdatesAPI,
+  type BuildType,
   type VersionInfo,
   type ReleaseInfo
 } from '@/api/admin/system'
@@ -40,7 +41,7 @@ export const useAppStore = defineStore('app', () => {
   const currentVersion = ref<string>('')
   const latestVersion = ref<string>('')
   const hasUpdate = ref<boolean>(false)
-  const buildType = ref<string>('source')
+  const buildType = ref<BuildType>('source')
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
   // Auto-incrementing ID for toasts

@@ -58,7 +58,7 @@ flowchart TD
 - `POST /api/v1/admin-plus/sub2api/local-account-ops/accept-local-state` 已支持采纳 Sub2API 原后台当前状态为新基线。
 - `POST /api/v1/admin-plus/sub2api/local-account-ops/restore-local-state` 已支持把 Admin Plus 已采纳基线写回 Sub2API，并写 `scheduler_outbox`。
 - 本地账号运营 apply 写回前会重新同步当前 Sub2API 状态，若存在 pending drift，会以 `LOCAL_ACCOUNT_STATE_DRIFT_PENDING` 阻断，避免覆盖原后台手工变更。
-- 当前 service 层已把本地账号运营 preview/apply/restore 收口到 `Sub2APIRoutingPort`，并已提供 `GetGroupAvailability/GetAccount/EnsureAccountInGroup/SetAccountSchedulable` 语义化方法；同库部署仍由 `SQLRepository` 实现，远程写回第一阶段由 `RemoteAdminAPIRoutingPort` 调用现有 Sub2API Admin API 实现，并在远程写回前继续执行 drift 阻断和空池影响 preview。多实例和完整动作执行表继续沿该端口扩展。
+- 当前 service 层已把本地账号运营 preview/apply/restore 收口到 `Sub2APIRoutingPort`，并已提供 `GetGroupAvailability/GetAccount/EnsureAccountInGroup/SetAccountSchedulable` 语义化方法；同库部署仍由 `SQLRepository` 实现，远程写回第一阶段由 `RemoteAdminAPIRoutingPort` 调用现有 Sub2API Admin API 实现，并在远程写回前继续执行 drift 阻断和空池影响 preview。P3 多实例本轮不实施；后续 P1.x/P2.x 写回能力和未来可能恢复的多实例能力都必须通过该端口扩展。
 
 ## 3. 本地落地流程
 

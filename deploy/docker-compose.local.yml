@@ -24,7 +24,7 @@ services:
   # Admin Plus Application
   # ===========================================================================
   admin-plus:
-    image: ${ADMIN_PLUS_IMAGE:-ghcr.io/openrelayllm/sub2api-admin-plus:latest}
+    image: ${ADMIN_PLUS_IMAGE:-wutongci/sub2api-admin-plus:latest}
     container_name: sub2api-admin-plus
     restart: unless-stopped
     ulimits:

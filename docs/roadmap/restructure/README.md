@@ -6,6 +6,7 @@
 范围：重新梳理供应商、后端直登、Chrome 插件兜底、账号/Key、Provider Adapter、前后端页面和真实验收口径。
 
 > 当前口径更新：本文保留 2026-06 的重构梳理上下文，不再作为 P1/P2 当前收口状态事实源。供应商、账号、本地 Sub2API、路由补池、运营可视化和数据库关系以 [`../supplier-architecture/README.md`](../supplier-architecture/README.md) 为准；P1/P2 阶段关闭证据以 [`../supplier-architecture/09-phase-closure.md`](../supplier-architecture/09-phase-closure.md) 为准。
+> 本文下面出现的 P0/P1/P2/P3 是历史重构计划的阶段名，不等同于当前 supplier architecture 的 P1/P2/P3 收口边界；其中历史 P3 不进入当前版本实施和验收。
 
 ## 1. 目标
 

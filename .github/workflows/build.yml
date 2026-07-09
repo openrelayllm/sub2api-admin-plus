@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Optional build version override, for example 0.40.0'
+        description: 'Optional build version override, for example 0.41.0'
         required: false
         type: string
 
@@ -81,14 +81,13 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
-          args: release --snapshot --clean --skip=publish --skip=validate
+          args: release --snapshot --clean --skip=publish --skip=validate --config=.goreleaser.artifacts.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_MESSAGE: Snapshot build
           GITHUB_REPO_OWNER: ${{ github.repository_owner }}
           GITHUB_REPO_OWNER_LOWER: ${{ steps.repo.outputs.owner_lower }}
           GITHUB_REPO_NAME: ${{ steps.repo.outputs.name }}
-          DOCKERHUB_USERNAME: skip
 
       - name: Upload Linux binary artifacts
         uses: actions/upload-artifact@v7

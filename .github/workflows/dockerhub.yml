@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Docker image tag, for example 0.40.0'
+        description: 'Docker image tag, for example 0.41.0'
         required: true
-        default: '0.40.0'
         type: string
       ref:
-        description: 'Git ref to build from, for example main or v0.40.0'
+        description: 'Git ref to build from, for example main or v0.41.0'
         required: true
         default: 'main'
         type: string
@@ -53,8 +52,8 @@ jobs:
             VERSION=${{ inputs.tag }}
             COMMIT=${{ steps.git.outputs.sha }}
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/sub2api-admin-plus:${{ inputs.tag }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/sub2api-admin-plus:latest
+            wutongci/sub2api-admin-plus:${{ inputs.tag }}
+            wutongci/sub2api-admin-plus:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.git.outputs.sha }}

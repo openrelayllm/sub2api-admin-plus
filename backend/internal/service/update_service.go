@@ -58,7 +58,7 @@ type UpdateService struct {
 	cache          UpdateCache
 	githubClient   GitHubReleaseClient
 	currentVersion string
-	buildType      string // "source" for manual builds, "release" for CI builds
+	buildType      string // "source" for manual builds, "release" for CI builds; containers are detected at runtime
 }
 
 // NewUpdateService creates a new UpdateService

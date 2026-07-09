@@ -1,7 +1,7 @@
 # 08. Admin Plus 数据库设计、ER 图与数据流转
 
 版本：v0.1.0
-日期：2026-07-08
+日期：2026-07-09
 状态：数据库设计事实源，覆盖当前已存在表和下一阶段建议新增/调整项
 范围：Admin Plus 私有表、本地 Sub2API 事实表、第三方供应商投影、运行历史、导入导出边界，以及核心流程中的表级读写流转。
 
@@ -13,7 +13,7 @@
 4. 运行历史、检测快照、通知投递、插件任务、调度 run/step/attempt 不属于核心迁移数据；换服务器时默认不导出或只归档。
 5. 第三方 Key 明文、浏览器会话密文、邮箱凭据、代理订阅等敏感数据必须单独标记，不进入普通导出。
 6. 本地账号状态基线、drift 事件、供应商级 Key 配额字段、分组级 Key 配额字段、批量开通计划、计划优先级覆盖、Provider `ListKeys/ReadKeyCapacity` 第一阶段、第三方未绑定 Key 脱敏投影导入、`manual_secret_required` 手动补密钥修复绑定、余额机会队列、余额恢复通知/复检建议、充值/兑换账单对账异常动作建议、对账差额人工调整闭环、账单明细级修复第一阶段、路由补池运行、模型级候选第一阶段、纯度检测联动、7 天过期策略、动作建议复检深链、复检事实源刷新、历史报告深链、按当前页模型/能力标签圈选和受控批量复检队列、代理联动第一阶段、通知矩阵第一阶段、动作建议超时未处理可视化、渠道检测实测预算/冷却第一阶段、接入验收步骤矩阵、模型利润目标毛利缺口和建议价偏离、动作建议路径下的补池/关调度执行历史、普通本地账号手工写执行历史、动作执行到调度 run/step 的反向来源、动作执行幂等指纹、replay 回填和前后快照，以及本地路由类失败执行安全重试和成功执行回滚已经落地；真实最大 Key 上限自动读取、通知自动升级投递、值班分组、多渠道通知、代理中心深度质量联动、纯度检测跨页/后台批量复检策略、按模型预算归集、完整财务汇总、账单明细自动定位和批量导入、非本地路由类动作回滚仍是后续增强能力。
-7. 当前同库部署下，本地账号运营动作层已在 Admin Plus 内事务写 `accounts/account_groups` 并补写 `scheduler_outbox`；P1 第一阶段已从 service 层收口为 `Sub2APIRoutingPort`，并提供分组可用性、账号快照、加入分组和开关调度语义化方法。远程写回第一阶段已通过 `RemoteAdminAPIRoutingPort` 调用现有 Sub2API Admin API，不新增 Admin Plus 表；多实例仍沿同一写回边界扩展。
+7. 当前同库部署下，本地账号运营动作层已在 Admin Plus 内事务写 `accounts/account_groups` 并补写 `scheduler_outbox`；P1 第一阶段已从 service 层收口为 `Sub2APIRoutingPort`，并提供分组可用性、账号快照、加入分组和开关调度语义化方法。远程写回第一阶段已通过 `RemoteAdminAPIRoutingPort` 调用现有 Sub2API Admin API，不新增 Admin Plus 表；P3 多实例本轮不实施，未来若恢复仍沿同一写回边界扩展。
 
 ## 2. 表域划分
 
@@ -1013,7 +1013,7 @@ sequenceDiagram
 - 当前坏账号关调度在调度中心仍生成 `local_account.schedule.disable` compat 工作台动作，写入 `admin_plus_scheduler_actions`；scheduler 会同步生成或复用 `local_account_schedule_disable` 持久建议并在动作建议页审批执行。真正写回仍走本地账号运营 preview/apply 和 `Sub2APIRoutingPort`，成功、空池保护阻断或失败回写 `admin_plus_action_executions`。
 - 当前容量巡检 step 的 `result_snapshot.actions` 会保存 `action_id/type/recommendation_type/local_group_id/local_sub2api_account_id`，用于调度运行详情深链到对应动作建议；该字段属于运行历史，不进入核心导出。
 - 当前本地账号运营页和调度中心已能发起 dry-run 和 apply；调度中心会读取最近补池运行记录。
-- 后续 P1/P3 新增写回只能走 `Sub2APIRoutingPort`，不能在业务层直接新增散落 SQL、HTTP 或 Redis 写路径。
+- 后续 P1.x/P2.x 若新增写回只能走 `Sub2APIRoutingPort`，不能在业务层直接新增散落 SQL、HTTP 或 Redis 写路径；P3 本轮不实施，只保留该端口作为未来可能扩展的边界。
 - 后续自动化需要把策略 ID 写入同一运行记录或统一 action execution；全局用户影响历史已复用现有 `admin_plus_routing_refill_runs`，敏感明细查询保持独立审计，不进入补池运行历史。
 - 自动写回前要重新读取本地状态，发现 drift 先停下生成动作。
 

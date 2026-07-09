@@ -35,16 +35,16 @@ The Sub2API readonly database user should have only `SELECT` on the required run
 
 ## Build, Release, And Deployment Channels
 
-Build, release, and deployment are intentionally separated:
+Release publishing is tag-driven. A `v*` tag is the single version fact for GitHub Release assets, DockerHub images, GHCR images, and optional Railway deployment.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `Build Artifacts` | push, pull request, tag, or manual dispatch | Compile Linux `amd64` and `arm64` binary archives and upload CI artifacts. It does not publish a GitHub Release, Docker image, or deployment. |
-| `GitHub Release` | manual dispatch only | Publish an existing annotated tag to GitHub Release with Linux binary assets and `checksums.txt`. |
-| `DockerHub` | manual dispatch only | Build and push DockerHub images from a selected git ref. |
-| `Deploy Railway` | manual dispatch only | Deploy a selected container image to Railway. Railway is one deployment channel, not the release pipeline. |
+| `GitHub Release` | `v*` tag push or manual dispatch | Publish Linux Release assets, `checksums.txt`, DockerHub multi-arch images, and GHCR multi-arch images. It can deploy the released DockerHub image to Railway when `RAILWAY_AUTO_DEPLOY=true` or the manual `deploy_railway` input is enabled. |
+| `DockerHub` | manual dispatch only | Rebuild and push DockerHub images from a selected git ref when an image-only repair is needed. Normal releases should use `GitHub Release`. |
+| `Deploy Railway` | manual dispatch only | Deploy a selected container image to Railway when a deployment-only retry is needed. Normal release deployment can run from `GitHub Release`. |
 
-Systemd script deployment consumes GitHub Release assets through `install.sh`; it is independent from DockerHub and Railway.
+Systemd script deployment consumes GitHub Release assets through `install.sh`. Docker deployment consumes `wutongci/sub2api-admin-plus:<version>` or `latest`.
 
 The systemd installer also installs a pinned Mihomo core to `/opt/sub2api-admin-plus/bin/mihomo` and writes `ADMIN_PLUS_PROXY_MIHOMO_BINARY_PATH` into the service file. Proxy node checks therefore do not require a separate system-wide Clash/Mihomo installation.
 
@@ -124,8 +124,8 @@ curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main
 
 # After the command wrapper exists, use it for future operations
 sudo sub2apiplus upgrade
-sudo sub2apiplus upgrade -v v0.11.3
-sudo sub2apiplus rollback v0.11.3
+sudo sub2apiplus upgrade -v vX.Y.Z
+sudo sub2apiplus rollback vX.Y.Z
 sub2apiplus status
 sub2apiplus logs -n 200
 sub2apiplus follow
@@ -137,7 +137,7 @@ One-off remote execution is still supported:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh | sudo bash -s -- upgrade
-curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh | sudo bash -s -- upgrade -v v0.11.3
+curl -sSL https://raw.githubusercontent.com/openrelayllm/sub2api-admin-plus/main/deploy/install.sh | sudo bash -s -- upgrade -v vX.Y.Z
 ```
 
 The upgrader also recognizes the old inherited layout `/opt/sub2api/sub2api` + `sub2api.service`, backs up the old binary, installs the new `/opt/sub2api-admin-plus/sub2api-admin-plus`, and disables the legacy service without deleting the old directory.
@@ -153,8 +153,17 @@ docker compose logs -f admin-plus
 For a pinned release image, set `ADMIN_PLUS_IMAGE` in `.env`:
 
 ```env
-ADMIN_PLUS_IMAGE=wutongci/sub2api-admin-plus:0.11.3
+ADMIN_PLUS_IMAGE=wutongci/sub2api-admin-plus:X.Y.Z
 ```
+
+Container deployments do not perform in-place binary self-updates from the admin UI. Upgrade them by pulling the released image and recreating the service:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The admin UI one-click update is for systemd binary deployments. It downloads the matching GitHub Release asset, verifies `checksums.txt`, replaces the binary, and restarts the service through systemd.
 
 ## Backups
 

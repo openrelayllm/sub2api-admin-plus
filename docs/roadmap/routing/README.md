@@ -489,7 +489,7 @@ routing-refill:{sub2api_instance_id}:{group_id}:{platform}:{model_scope}
 PostgreSQL advisory lock，按 local_group_id 跨进程互斥，函数返回时释放。
 ```
 
-多实例或远程实现仍需要可过期分布式锁，建议 TTL：
+远程写回或未来可能恢复的多实例实现仍需要可过期分布式锁，建议 TTL：
 
 ```text
 60s

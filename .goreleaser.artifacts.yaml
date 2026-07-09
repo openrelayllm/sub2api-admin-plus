@@ -1,0 +1,45 @@
+version: 2
+
+project_name: sub2api-admin-plus
+
+before:
+  hooks:
+    - go mod tidy -C backend
+
+builds:
+  - id: sub2api-admin-plus
+    dir: backend
+    main: ./cmd/server
+    binary: sub2api
+    flags:
+      - -tags=embed
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Commit={{ .Commit }}
+      - -X main.Date={{ .Date }}
+      - -X main.BuildType=release
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - README*
+      - deploy/*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  disable: true
