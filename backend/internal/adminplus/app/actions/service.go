@@ -651,6 +651,10 @@ func (s *Service) actionsFromCandidateEvaluations(now time.Time, evaluations []C
 			items = append(items, newAction(now, evaluation.SupplierID, nil, adminplusdomain.ActionTypeReviewCredential, adminplusdomain.ActionSeverityInfo, "candidate_needs_provisioning", "Provision candidate binding", "A candidate needs key or local-account provisioning before it can join routing.", "prepare candidate for future routing refill", signals))
 		case status == candidateeval.StatusLocalBlocked:
 			items = append(items, newAction(now, evaluation.SupplierID, nil, adminplusdomain.ActionTypeReviewCredential, adminplusdomain.ActionSeverityWarning, "candidate_local_state_blocked", "Review candidate local state", "A candidate is blocked by local Sub2API state or drift.", "resolve local account state before automated refill", signals))
+		case reason == "purity_failed":
+			items = append(items, newAction(now, evaluation.SupplierID, nil, adminplusdomain.ActionTypeReviewCredential, adminplusdomain.ActionSeverityWarning, "candidate_purity_failed", "Review candidate purity failure", "A candidate is blocked by the latest purity check. Re-run purity detection or remove it from refill candidates.", "verify model identity and capability before routing", signals))
+		case reason == "purity_risk":
+			items = append(items, newAction(now, evaluation.SupplierID, nil, adminplusdomain.ActionTypeReviewCredential, adminplusdomain.ActionSeverityInfo, "candidate_purity_risk", "Review candidate purity risk", "A candidate is degraded by purity risk. It should be reviewed before automated refill.", "confirm model identity, token audit, and compatibility evidence", signals))
 		case reason == "channel_monitor_failed":
 			items = append(items, newAction(now, evaluation.SupplierID, nil, adminplusdomain.ActionTypeReviewCredential, adminplusdomain.ActionSeverityWarning, "candidate_channel_monitor_failed", "Review candidate channel monitor", "A candidate is blocked by channel monitor status; no active token probe is triggered by this recommendation.", "avoid spending probe tokens until low-cost monitor facts are resolved", signals))
 		}

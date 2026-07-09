@@ -234,6 +234,9 @@
                   <span v-if="groupOpsRow(group)?.balance_status" class="badge" :class="opsBalanceStatusClass(groupOpsRow(group)?.balance_status)">
                     {{ opsBalanceStatusLabel(groupOpsRow(group)?.balance_status) }}
                   </span>
+                  <span v-if="showPurityBadge(groupOpsRow(group))" class="badge" :class="purityStatusClass(groupOpsRow(group)?.purity_status)">
+                    {{ purityStatusLabel(groupOpsRow(group)?.purity_status) }}
+                  </span>
                 </div>
                 <div v-if="groupOpsRow(group)?.blocked_reason" class="mt-1 max-w-[240px] truncate text-xs text-amber-600 dark:text-amber-300" :title="candidateReasonLabel(groupOpsRow(group)?.blocked_reason)">
                   {{ candidateReasonLabel(groupOpsRow(group)?.blocked_reason) }}
@@ -241,6 +244,9 @@
                 </div>
                 <div v-if="groupOpsRow(group)?.last_local_sync_at" class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   同步 {{ formatDateTime(groupOpsRow(group)?.last_local_sync_at) }}
+                </div>
+                <div v-if="showPurityBadge(groupOpsRow(group))" class="mt-1 max-w-[240px] truncate text-xs text-gray-500 dark:text-dark-400" :title="purityTitle(groupOpsRow(group))">
+                  {{ puritySummary(groupOpsRow(group)) }}
                 </div>
               </td>
             </tr>
@@ -398,6 +404,9 @@
                     <span class="badge" :class="driftStatusClass(accountOpsRow(account)?.drift_status)">
                       {{ driftStatusLabel(accountOpsRow(account)?.drift_status) }}
                     </span>
+                    <span v-if="showPurityBadge(accountOpsRow(account))" class="badge" :class="purityStatusClass(accountOpsRow(account)?.purity_status)">
+                      {{ purityStatusLabel(accountOpsRow(account)?.purity_status) }}
+                    </span>
                   </div>
                   <div v-if="accountOpsRow(account)?.blocked_reason" class="mt-1 max-w-[220px] truncate text-xs text-amber-600 dark:text-amber-300" :title="candidateReasonLabel(accountOpsRow(account)?.blocked_reason)">
                     {{ candidateReasonLabel(accountOpsRow(account)?.blocked_reason) }}
@@ -405,6 +414,9 @@
                   </div>
                   <div v-if="accountOpsRow(account)?.channel_error_message" class="mt-1 max-w-[220px] truncate text-xs text-red-600 dark:text-red-300" :title="accountOpsRow(account)?.channel_error_message">
                     {{ accountOpsRow(account)?.channel_error_message }}
+                  </div>
+                  <div v-if="showPurityBadge(accountOpsRow(account))" class="mt-1 max-w-[220px] truncate text-xs text-gray-500 dark:text-dark-400" :title="purityTitle(accountOpsRow(account))">
+                    {{ puritySummary(accountOpsRow(account)) }}
                   </div>
                 </td>
               </tr>
@@ -854,7 +866,8 @@ function checkSourceLabel(value?: string): string {
     balance: '余额',
     local_state: '本地状态',
     channel_monitor: '通道监控',
-    active_probe: '实测'
+    active_probe: '实测',
+    purity: '纯度检测'
   }
   return labels[String(value || '')] || String(value || '-')
 }
@@ -886,9 +899,65 @@ function candidateReasonLabel(value?: string): string {
     local_account_state_drift: '原后台变更待处理',
     local_account_metadata_drift: '本地账号元数据漂移',
     key_local_account_mismatch: 'Key 绑定账号不一致',
-    rate_missing: '倍率缺失'
+    rate_missing: '倍率缺失',
+    purity_failed: '纯度检测失败',
+    purity_risk: '纯度检测有风险'
   }
   return labels[String(value || '')] || String(value || '-')
+}
+
+function showPurityBadge(row?: LocalAccountOpsRow): boolean {
+  const status = String(row?.purity_status || '').toLowerCase()
+  return Boolean(row?.purity_checked_at || (status && status !== 'unknown'))
+}
+
+function purityStatusLabel(value?: string): string {
+  const labels: Record<string, string> = {
+    pass: '纯度通过',
+    warn: '纯度风险',
+    fail: '纯度失败',
+    unknown: '纯度未知'
+  }
+  return labels[String(value || '')] || String(value || '-')
+}
+
+function purityStatusClass(value?: string): string {
+  if (value === 'pass') return 'badge-success'
+  if (value === 'fail') return 'badge-danger'
+  if (value === 'warn') return 'badge-warning'
+  return 'badge-gray'
+}
+
+function purityVerdictLabel(value?: string): string {
+  const labels: Record<string, string> = {
+    official_openai: '官方 OpenAI',
+    openai_compatible: 'OpenAI 兼容',
+    official_claude: '官方 Claude',
+    claude_compatible: 'Claude 兼容',
+    official_gemini: '官方 Gemini',
+    gemini_compatible: 'Gemini 兼容',
+    partial_compatible: '部分兼容',
+    invalid_or_unavailable: '无效或不可用',
+    unknown: '未知'
+  }
+  return labels[String(value || '')] || ''
+}
+
+function puritySummary(row?: LocalAccountOpsRow): string {
+  if (!row) return '-'
+  const parts: string[] = []
+  if (row.purity_model) parts.push(row.purity_model)
+  const verdict = purityVerdictLabel(row.purity_verdict)
+  if (verdict) parts.push(verdict)
+  if (Number(row.purity_score || 0) > 0) parts.push(`${row.purity_score}分`)
+  if (row.purity_checked_at) parts.push(formatDateTime(row.purity_checked_at))
+  return parts.length ? parts.join(' · ') : purityStatusLabel(row.purity_status)
+}
+
+function purityTitle(row?: LocalAccountOpsRow): string {
+  if (!row) return ''
+  const report = row.purity_report_id ? `报告 ${row.purity_report_id}` : '最近一次纯度检测'
+  return `${report}：${puritySummary(row)}`
 }
 
 function groupStatusPriority(status?: string): number {

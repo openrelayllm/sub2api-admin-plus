@@ -135,6 +135,7 @@ flowchart TD
 | P1 | Key 配额状态 | `ListKeys/ReadKeyCapacity` | `key_limit_policy`、`key_capacity_status`、`active_key_count` | 不消耗模型 token | 判断是否能继续自动创建第三方 Key |
 | P2 | 第三方 Key 事实 | `admin_plus_supplier_keys` | `status`、`external_key_id`、`local_sub2api_account_id` | 不消耗模型 token | 判断该分组是否已落地本地账号 |
 | P2 | 本地调度状态 | 本地 Sub2API `accounts` / `OpsService` | `schedulable`、429、error、temp unsched | 不消耗供应商 token | 判断本地网关能否调度 |
+| P2 | 纯度检测快照 | `admin_plus_scheduler_steps.result_snapshot` | `run_purity_check`、`local_sub2api_account_id`、`verdict`、`score`、`model_identity_status` | 不新增本次 token 消耗，复用最近检测结果 | 明确能力不匹配时阻断，风险态降级，未知不阻断 |
 | P2 | 主动健康探测 | `health.Service`、`channelchecks.Check` | `probe_status`、`status_code`、`first_token_ms`、`active_probe_daily_budget_tokens`、`channel_check_probe_cooldown_seconds` | 消耗模型 token 和供应商余额 | 只在监控缺失/过期/冲突、人工触发或自动写回前验证真实链路；第一阶段已有每日预算和同分组冷却 |
 
 实测规则：
@@ -167,7 +168,10 @@ flowchart TD
     I -->|是| J[读取本地账号可调度状态]
     J --> K{本地账号可调度?}
     K -->|否| K1[候选排除: local_unschedulable]
-    K -->|是| L[读取最近通道监控快照]
+    K -->|是| L[读取最近纯度检测快照]
+    L --> L1{纯度是否明确失败?}
+    L1 -->|是| L2[候选排除: purity_failed]
+    L1 -->|否| L3[读取最近通道监控快照]
 ```
 
 ### 5.2 监控、实测与排序
@@ -179,11 +183,14 @@ flowchart TD
     M -->|未知/过期| N{是否需要实测?}
     N -->|否| N1[人工确认候选]
     N -->|是| O[执行最小 token 实测]
-    M -->|是| P[计算 effective_rate]
+    M -->|是| P{纯度是否风险态?}
+    P -->|是| P1[候选降级: purity_risk]
+    P -->|否| P2[计算 effective_rate]
     O --> Q{实测通过?}
     Q -->|否| Q1[排除: health_failed]
     Q -->|是| P
-    P --> R[按倍率/监控/延迟/余额排序]
+    P2 --> R[按倍率/监控/延迟/余额排序]
+    P1 --> R
     R --> S[输出可补池候选]
 ```
 
@@ -199,10 +206,12 @@ flowchart TD
 | `provider_family` | 供应商分组 | OpenAI/Anthropic/Gemini 等协议族 |
 | `health_status` | 检测快照 | 是否推荐 |
 | `last_checked_at` | 检测快照 | 新鲜度 |
-| `check_source` | 检测快照 | `channel_monitor/balance/local_state/active_probe` |
+| `check_source` | 检测快照 | `channel_monitor/balance/local_state/model_scope/purity/active_probe` |
 | `balance_status` | 余额同步 | `balance_ok/balance_low/balance_blocked/recharge_required/balance_unknown` |
 | `key_capacity_status` | Key 配额同步 | `unknown/available/limited/exhausted/manual_only` |
-| `blocked_reason` | 候选生成 | `balance_blocked/key_limit_reached/health_failed/local_unschedulable/channel_monitor_failed` |
+| `model_scope/model_match_status` | 第三方分组能力范围 | 模型范围匹配结果，明确不匹配输出 `model_scope_unsupported` |
+| `purity_status/purity_verdict` | 最近纯度检测 step | `pass/warn/fail/unknown`；明确失败阻断，风险态降级 |
+| `blocked_reason` | 候选生成 | `recharge_required/key_capacity_exhausted/health_failed/local_unschedulable/channel_monitor_failed/model_scope_unsupported/purity_failed/purity_risk` |
 | `probe_cost_class` | 健康探测 | `free/low_token/standard_token`，用于控制实测成本 |
 
 ## 6. 检测优先级时序图

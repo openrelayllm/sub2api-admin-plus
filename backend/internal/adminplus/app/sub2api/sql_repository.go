@@ -361,7 +361,51 @@ func (r *SQLRepository) ListLocalAccountOps(ctx context.Context, filter LocalAcc
 					COALESCE(sg.updated_at, 'epoch'::TIMESTAMPTZ),
 					COALESCE(lss.last_checked_at, 'epoch'::TIMESTAMPTZ)
 				)
-			END AS last_local_sync_at
+			END AS last_local_sync_at,
+			CASE
+				WHEN purity.id IS NULL THEN 'unknown'
+				WHEN COALESCE(purity.result_snapshot->>'status', '') = 'error'
+					OR COALESCE(purity.result_snapshot->>'verdict', '') = 'invalid_or_unavailable'
+					OR COALESCE(purity.result_snapshot->>'model_identity_status', '') IN (
+						'family_mismatch',
+						'cross_vendor_alias',
+						'protocol_model_vendor_mismatch',
+						'wrapper_vendor_signal_mismatch'
+					)
+					OR (
+						COALESCE(purity.result_snapshot->>'score', '') ~ '^[0-9]+$'
+						AND (purity.result_snapshot->>'score')::INT < 50
+					) THEN 'fail'
+				WHEN COALESCE(purity.result_snapshot->>'verdict', '') = 'partial_compatible'
+					OR COALESCE(purity.result_snapshot->>'token_audit_status', '') = 'fail'
+					OR COALESCE(purity.result_snapshot->>'model_identity_status', '') IN (
+						'response_model_missing',
+						'probe_model_fallback',
+						'version_downgrade',
+						'tier_downgrade',
+						'reasoning_tokens_mismatch'
+					)
+					OR (
+						COALESCE(purity.result_snapshot->>'score', '') ~ '^[0-9]+$'
+						AND (purity.result_snapshot->>'score')::INT >= 50
+						AND (purity.result_snapshot->>'score')::INT < 70
+					) THEN 'warn'
+				WHEN COALESCE(purity.result_snapshot->>'verdict', '') IN (
+					'official_openai', 'openai_compatible',
+					'official_claude', 'claude_compatible',
+					'official_gemini', 'gemini_compatible'
+				) THEN 'pass'
+				ELSE 'unknown'
+			END AS purity_status,
+			COALESCE(purity.result_snapshot->>'verdict', '') AS purity_verdict,
+			COALESCE(purity.result_snapshot->>'report_id', '') AS purity_report_id,
+			COALESCE(purity.result_snapshot->>'model', '') AS purity_model,
+			CASE
+				WHEN COALESCE(purity.result_snapshot->>'score', '') ~ '^[0-9]+$'
+					THEN (purity.result_snapshot->>'score')::INT
+				ELSE 0
+			END AS purity_score,
+			COALESCE(purity.finished_at, purity.started_at) AS purity_checked_at
 		FROM accounts a
 		LEFT JOIN local_groups lg ON lg.account_id = a.id
 		LEFT JOIN admin_plus_supplier_accounts asa ON asa.local_sub2api_account_id = a.id
@@ -394,6 +438,17 @@ func (r *SQLRepository) ListLocalAccountOps(ctx context.Context, filter LocalAcc
 				c.id DESC
 			LIMIT 1
 		) lc ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT step.*
+			FROM admin_plus_scheduler_steps step
+			WHERE asa.id IS NOT NULL
+				AND step.supplier_id = asa.supplier_id
+				AND step.task_type = 'run_purity_check'
+				AND COALESCE(step.result_snapshot->>'local_sub2api_account_id', '') ~ '^[0-9]+$'
+				AND (step.result_snapshot->>'local_sub2api_account_id')::BIGINT = a.id
+			ORDER BY COALESCE(step.finished_at, step.started_at, step.created_at) DESC, step.id DESC
+			LIMIT 1
+		) purity ON TRUE
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY a.id DESC, asa.id DESC NULLS LAST
 		LIMIT ` + limitRef
@@ -2256,6 +2311,7 @@ func scanLocalAccountOpsRow(scanner interface{ Scan(dest ...any) error }) (*admi
 	var tempUnschedulableUntil sql.NullTime
 	var lastChannelCheckAt sql.NullTime
 	var lastLocalSyncAt sql.NullTime
+	var purityCheckedAt sql.NullTime
 	if err := scanner.Scan(
 		&item.LocalSub2APIAccountID,
 		&item.LocalAccountName,
@@ -2310,6 +2366,12 @@ func scanLocalAccountOpsRow(scanner interface{ Scan(dest ...any) error }) (*admi
 		&item.BalanceStatus,
 		&item.DriftStatus,
 		&lastLocalSyncAt,
+		&item.PurityStatus,
+		&item.PurityVerdict,
+		&item.PurityReportID,
+		&item.PurityModel,
+		&item.PurityScore,
+		&purityCheckedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -2333,6 +2395,9 @@ func scanLocalAccountOpsRow(scanner interface{ Scan(dest ...any) error }) (*admi
 	if lastLocalSyncAt.Valid {
 		item.LastLocalSyncAt = &lastLocalSyncAt.Time
 	}
+	if purityCheckedAt.Valid {
+		item.PurityCheckedAt = &purityCheckedAt.Time
+	}
 	if item.BalanceCurrency == "" {
 		item.BalanceCurrency = "USD"
 	}
@@ -2344,6 +2409,9 @@ func scanLocalAccountOpsRow(scanner interface{ Scan(dest ...any) error }) (*admi
 	}
 	if item.BalanceStatus == "" {
 		item.BalanceStatus = "unknown"
+	}
+	if item.PurityStatus == "" {
+		item.PurityStatus = "unknown"
 	}
 	return &item, nil
 }

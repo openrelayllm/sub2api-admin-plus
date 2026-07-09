@@ -27,6 +27,7 @@ const (
 	SourceChannelMonitor = "channel_monitor"
 	SourceActiveProbe    = "active_probe"
 	SourceModelScope     = "model_scope"
+	SourcePurity         = "purity"
 )
 
 const (
@@ -44,6 +45,10 @@ const (
 	ModelMatchSupported    = "supported"
 	ModelMatchUnknown      = "unknown"
 	ModelMatchUnsupported  = "unsupported"
+	PurityPass             = "pass"
+	PurityWarn             = "warn"
+	PurityFail             = "fail"
+	PurityUnknown          = "unknown"
 )
 
 type Input struct {
@@ -73,6 +78,11 @@ type Input struct {
 	SupplierGroupName            string
 	SupplierGroupProvider        string
 	SupplierExternalGroupID      string
+	PurityStatus                 string
+	PurityVerdict                string
+	PurityModelIdentityStatus    string
+	PurityTokenAuditStatus       string
+	PurityScore                  int
 	EffectiveRateMultiplier      float64
 }
 
@@ -84,6 +94,8 @@ type Evaluation struct {
 	KeyCapacityStatus       string  `json:"key_capacity_status"`
 	ModelScope              string  `json:"model_scope,omitempty"`
 	ModelMatchStatus        string  `json:"model_match_status,omitempty"`
+	PurityStatus            string  `json:"purity_status,omitempty"`
+	PurityVerdict           string  `json:"purity_verdict,omitempty"`
 	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier"`
 }
 
@@ -149,8 +161,14 @@ func Evaluate(input Input) Evaluation {
 	if normalized.modelMatchStatus() == ModelMatchUnsupported {
 		return normalized.blocked(StatusBlocked, "model_scope_unsupported", SourceModelScope)
 	}
+	if normalized.purityRiskStatus() == PurityFail {
+		return normalized.blocked(StatusBlocked, "purity_failed", SourcePurity)
+	}
 	switch normalized.ChannelCheckStatus {
 	case "available":
+		if normalized.purityRiskStatus() == PurityWarn {
+			return normalized.blocked(StatusDegraded, "purity_risk", SourcePurity)
+		}
 		return normalized.ok(StatusAvailable, SourceChannelMonitor)
 	case "slow_first_token", "slow_total":
 		return normalized.blocked(StatusDegraded, stringValue(normalized.ChannelCheckStatus), SourceActiveProbe)
@@ -202,6 +220,9 @@ func FromLocalAccountOpsRowWithModel(row *adminplusdomain.LocalAccountOpsRow, re
 		SupplierGroupName:            row.SupplierGroupName,
 		SupplierGroupProvider:        row.SupplierGroupProvider,
 		SupplierExternalGroupID:      row.SupplierExternalGroupID,
+		PurityStatus:                 row.PurityStatus,
+		PurityVerdict:                row.PurityVerdict,
+		PurityScore:                  row.PurityScore,
 		EffectiveRateMultiplier:      row.EffectiveRateMultiplier,
 	})
 }
@@ -221,6 +242,8 @@ func ApplyToLocalAccountOpsRowForModel(row *adminplusdomain.LocalAccountOpsRow, 
 	row.KeyCapacityStatus = evaluation.KeyCapacityStatus
 	row.ModelScope = evaluation.ModelScope
 	row.ModelMatchStatus = evaluation.ModelMatchStatus
+	row.PurityStatus = evaluation.PurityStatus
+	row.PurityVerdict = evaluation.PurityVerdict
 }
 
 func normalizeInput(input Input) Input {
@@ -242,6 +265,10 @@ func normalizeInput(input Input) Input {
 	input.SupplierGroupName = strings.TrimSpace(input.SupplierGroupName)
 	input.SupplierGroupProvider = strings.TrimSpace(input.SupplierGroupProvider)
 	input.SupplierExternalGroupID = strings.TrimSpace(input.SupplierExternalGroupID)
+	input.PurityStatus = normalizePurityStatus(input.PurityStatus)
+	input.PurityVerdict = normalize(input.PurityVerdict)
+	input.PurityModelIdentityStatus = normalize(input.PurityModelIdentityStatus)
+	input.PurityTokenAuditStatus = normalize(input.PurityTokenAuditStatus)
 	return input
 }
 
@@ -285,6 +312,21 @@ func normalizeKeyCapacityStatus(value string) string {
 	}
 }
 
+func normalizePurityStatus(value string) string {
+	switch normalize(value) {
+	case "pass", "passed", "ok", "succeeded", "done":
+		return PurityPass
+	case "warn", "warning", "degraded", "partial":
+		return PurityWarn
+	case "fail", "failed", "error", "invalid", "invalid_or_unavailable":
+		return PurityFail
+	case "", "unknown", "not_checked":
+		return PurityUnknown
+	default:
+		return normalize(value)
+	}
+}
+
 func (input Input) provisioningBlock(reason string) Evaluation {
 	if input.KeyCapacityStatus == KeyCapacityExhausted {
 		return input.blocked(StatusCapacityBlocked, "key_capacity_exhausted", SourceKeyCapacity)
@@ -300,6 +342,8 @@ func (input Input) ok(status string, source string) Evaluation {
 		KeyCapacityStatus:       input.KeyCapacityStatus,
 		ModelScope:              input.modelScope(),
 		ModelMatchStatus:        input.modelMatchStatus(),
+		PurityStatus:            input.purityRiskStatus(),
+		PurityVerdict:           input.PurityVerdict,
 		EffectiveRateMultiplier: input.EffectiveRateMultiplier,
 	}
 }
@@ -354,6 +398,49 @@ func (input Input) modelMatchStatus() string {
 		}
 	}
 	return ModelMatchUnsupported
+}
+
+func (input Input) purityRiskStatus() string {
+	if input.PurityStatus == PurityFail {
+		return PurityFail
+	}
+	switch input.PurityVerdict {
+	case "invalid_or_unavailable":
+		return PurityFail
+	case "partial_compatible":
+		return PurityWarn
+	}
+	switch input.PurityModelIdentityStatus {
+	case "family_mismatch", "cross_vendor_alias", "protocol_model_vendor_mismatch", "wrapper_vendor_signal_mismatch":
+		return PurityFail
+	case "response_model_missing", "probe_model_fallback", "version_downgrade", "tier_downgrade", "reasoning_tokens_mismatch":
+		return PurityWarn
+	}
+	if input.PurityTokenAuditStatus == PurityFail {
+		return PurityWarn
+	}
+	if input.PurityScore > 0 && input.PurityScore < 50 {
+		return PurityFail
+	}
+	if input.PurityScore >= 50 && input.PurityScore < 70 {
+		return PurityWarn
+	}
+	if input.PurityStatus == PurityWarn {
+		return PurityWarn
+	}
+	if positivePurityVerdict(input.PurityVerdict) || (input.PurityStatus == PurityPass && input.PurityVerdict == "") {
+		return PurityPass
+	}
+	return PurityUnknown
+}
+
+func positivePurityVerdict(value string) bool {
+	switch value {
+	case "official_openai", "openai_compatible", "official_claude", "claude_compatible", "official_gemini", "gemini_compatible":
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalModelFamily(value string) string {

@@ -975,6 +975,12 @@ export interface LocalAccountOpsRow {
   key_capacity_status?: string
   model_scope?: string
   model_match_status?: string
+  purity_status?: string
+  purity_verdict?: string
+  purity_report_id?: string
+  purity_model?: string
+  purity_score?: number
+  purity_checked_at?: string | null
 }
 
 export type LocalAccountOpsAction = 'set_schedulable' | 'add_to_groups' | 'remove_from_groups'

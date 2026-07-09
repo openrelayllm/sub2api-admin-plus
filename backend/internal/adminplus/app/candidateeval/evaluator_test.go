@@ -98,6 +98,51 @@ func TestEvaluateBlocksExplicitlyUnsupportedModelScope(t *testing.T) {
 	require.Equal(t, ModelMatchUnsupported, result.ModelMatchStatus)
 }
 
+func TestEvaluateBlocksExplicitPurityFailure(t *testing.T) {
+	result := Evaluate(baseInput(Input{
+		PurityVerdict: "invalid_or_unavailable",
+	}))
+
+	require.Equal(t, StatusBlocked, result.CandidateStatus)
+	require.Equal(t, "purity_failed", result.BlockedReason)
+	require.Equal(t, SourcePurity, result.CheckSource)
+	require.Equal(t, PurityFail, result.PurityStatus)
+}
+
+func TestEvaluateDegradesPurityRiskWhenChannelIsAvailable(t *testing.T) {
+	result := Evaluate(baseInput(Input{
+		PurityVerdict: "partial_compatible",
+	}))
+
+	require.Equal(t, StatusDegraded, result.CandidateStatus)
+	require.Equal(t, "purity_risk", result.BlockedReason)
+	require.Equal(t, SourcePurity, result.CheckSource)
+	require.Equal(t, PurityWarn, result.PurityStatus)
+}
+
+func TestEvaluateKeepsUnknownPurityAvailable(t *testing.T) {
+	result := Evaluate(baseInput(Input{
+		PurityStatus: "unknown",
+	}))
+
+	require.Equal(t, StatusAvailable, result.CandidateStatus)
+	require.Empty(t, result.BlockedReason)
+	require.Equal(t, SourceChannelMonitor, result.CheckSource)
+	require.Equal(t, PurityUnknown, result.PurityStatus)
+}
+
+func TestEvaluateDoesNotHideChannelFailureWithPurityWarning(t *testing.T) {
+	result := Evaluate(baseInput(Input{
+		ChannelCheckStatus: "remote_unavailable",
+		PurityVerdict:      "partial_compatible",
+	}))
+
+	require.Equal(t, StatusBlocked, result.CandidateStatus)
+	require.Equal(t, "channel_monitor_failed", result.BlockedReason)
+	require.Equal(t, SourceChannelMonitor, result.CheckSource)
+	require.Equal(t, PurityWarn, result.PurityStatus)
+}
+
 func TestApplyToLocalAccountOpsRow(t *testing.T) {
 	row := &adminplusdomain.LocalAccountOpsRow{
 		SupplierID:                   7,
@@ -256,6 +301,21 @@ func baseInput(overrides Input) Input {
 	}
 	if overrides.SupplierExternalGroupID != "" {
 		input.SupplierExternalGroupID = overrides.SupplierExternalGroupID
+	}
+	if overrides.PurityStatus != "" {
+		input.PurityStatus = overrides.PurityStatus
+	}
+	if overrides.PurityVerdict != "" {
+		input.PurityVerdict = overrides.PurityVerdict
+	}
+	if overrides.PurityModelIdentityStatus != "" {
+		input.PurityModelIdentityStatus = overrides.PurityModelIdentityStatus
+	}
+	if overrides.PurityTokenAuditStatus != "" {
+		input.PurityTokenAuditStatus = overrides.PurityTokenAuditStatus
+	}
+	if overrides.PurityScore != 0 {
+		input.PurityScore = overrides.PurityScore
 	}
 	if overrides.EffectiveRateMultiplier != 0 {
 		input.EffectiveRateMultiplier = overrides.EffectiveRateMultiplier

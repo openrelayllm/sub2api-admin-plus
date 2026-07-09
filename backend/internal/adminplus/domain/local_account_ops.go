@@ -21,6 +21,10 @@ type LocalAccountOpsRow struct {
 	LocalAccountUpdatedAt         time.Time  `json:"local_account_updated_at"`
 	LocalAccountGroupIDs          []int64    `json:"local_account_group_ids,omitempty"`
 	LocalAccountGroupNames        []string   `json:"local_account_group_names,omitempty"`
+	LocalAccountProxyID           int64      `json:"local_account_proxy_id,omitempty"`
+	LocalAccountProxyName         string     `json:"local_account_proxy_name,omitempty"`
+	LocalAccountProxyStatus       string     `json:"local_account_proxy_status,omitempty"`
+	LocalAccountProxyExpiresAt    *time.Time `json:"local_account_proxy_expires_at,omitempty"`
 
 	SupplierAccountID            int64  `json:"supplier_account_id,omitempty"`
 	SupplierID                   int64  `json:"supplier_id,omitempty"`
@@ -61,10 +65,16 @@ type LocalAccountOpsRow struct {
 	DriftStatus         string     `json:"drift_status"`
 	LastLocalSyncAt     *time.Time `json:"last_local_sync_at,omitempty"`
 
-	CandidateStatus   string `json:"candidate_status,omitempty"`
-	BlockedReason     string `json:"blocked_reason,omitempty"`
-	CheckSource       string `json:"check_source,omitempty"`
-	KeyCapacityStatus string `json:"key_capacity_status,omitempty"`
-	ModelScope        string `json:"model_scope,omitempty"`
-	ModelMatchStatus  string `json:"model_match_status,omitempty"`
+	CandidateStatus   string     `json:"candidate_status,omitempty"`
+	BlockedReason     string     `json:"blocked_reason,omitempty"`
+	CheckSource       string     `json:"check_source,omitempty"`
+	KeyCapacityStatus string     `json:"key_capacity_status,omitempty"`
+	ModelScope        string     `json:"model_scope,omitempty"`
+	ModelMatchStatus  string     `json:"model_match_status,omitempty"`
+	PurityStatus      string     `json:"purity_status,omitempty"`
+	PurityVerdict     string     `json:"purity_verdict,omitempty"`
+	PurityReportID    string     `json:"purity_report_id,omitempty"`
+	PurityModel       string     `json:"purity_model,omitempty"`
+	PurityScore       int        `json:"purity_score,omitempty"`
+	PurityCheckedAt   *time.Time `json:"purity_checked_at,omitempty"`
 }

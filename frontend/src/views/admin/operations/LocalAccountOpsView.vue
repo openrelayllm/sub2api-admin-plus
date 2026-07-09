@@ -316,6 +316,9 @@
                     <span class="badge" :class="driftStatusClass(row.drift_status)">
                       {{ driftStatusLabel(row.drift_status) }}
                     </span>
+                    <span v-if="showPurityBadge(row)" class="badge" :class="purityStatusClass(row.purity_status)">
+                      {{ purityStatusLabel(row.purity_status) }}
+                    </span>
                   </div>
                   <div v-if="row.channel_error_message" class="mt-1 max-w-[240px] truncate text-xs text-rose-500">
                     {{ row.channel_error_message }}
@@ -323,6 +326,9 @@
                   <div v-if="row.blocked_reason" class="mt-1 max-w-[240px] truncate text-xs text-amber-600 dark:text-amber-300">
                     {{ blockedReasonLabel(row.blocked_reason) }}
                     <span v-if="row.check_source"> · {{ checkSourceLabel(row.check_source) }}</span>
+                  </div>
+                  <div v-if="showPurityBadge(row)" class="mt-1 max-w-[240px] truncate text-xs text-gray-500 dark:text-dark-400" :title="purityTitle(row)">
+                    {{ puritySummary(row) }}
                   </div>
                   <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                     {{ row.last_channel_check_at ? formatDateTime(row.last_channel_check_at) : '未检测' }}
@@ -1257,6 +1263,7 @@ function visibleLocalGroups(row: LocalAccountOpsRow): string[] {
 
 function rowNeedsAction(row: LocalAccountOpsRow): boolean {
   if (row.drift_status && !['synced', 'unbound'].includes(row.drift_status)) return true
+  if (['fail', 'warn'].includes(String(row.purity_status || '').toLowerCase())) return true
   if (['insufficient', 'unknown'].includes(row.balance_status) && row.drift_status !== 'unbound') return true
   return ['request_error', 'remote_unavailable', 'probe_failed', 'slow_first_token', 'slow_total'].includes(row.channel_check_status)
 }
@@ -1389,7 +1396,8 @@ function checkSourceLabel(value?: string): string {
     balance: '余额',
     local_state: '本地状态',
     channel_monitor: '通道监控',
-    active_probe: '实测'
+    active_probe: '实测',
+    purity: '纯度检测'
   }[value || ''] || value || '-'
 }
 
@@ -1420,8 +1428,60 @@ function blockedReasonLabel(value?: string): string {
     local_account_state_drift: '原后台变更待处理',
     local_account_metadata_drift: '本地账号元数据漂移',
     key_local_account_mismatch: 'Key 绑定账号不一致',
-    rate_missing: '倍率缺失'
+    rate_missing: '倍率缺失',
+    purity_failed: '纯度检测失败',
+    purity_risk: '纯度检测有风险'
   }[value || ''] || value || '-'
+}
+
+function showPurityBadge(row: LocalAccountOpsRow): boolean {
+  const status = String(row.purity_status || '').toLowerCase()
+  return Boolean(row.purity_checked_at || (status && status !== 'unknown'))
+}
+
+function purityStatusLabel(value?: string): string {
+  return {
+    pass: '纯度通过',
+    warn: '纯度风险',
+    fail: '纯度失败',
+    unknown: '纯度未知'
+  }[value || ''] || value || '-'
+}
+
+function purityStatusClass(value?: string): string {
+  if (value === 'pass') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+  if (value === 'fail') return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'
+  if (value === 'warn') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  return 'bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200'
+}
+
+function purityVerdictLabel(value?: string): string {
+  return {
+    official_openai: '官方 OpenAI',
+    openai_compatible: 'OpenAI 兼容',
+    official_claude: '官方 Claude',
+    claude_compatible: 'Claude 兼容',
+    official_gemini: '官方 Gemini',
+    gemini_compatible: 'Gemini 兼容',
+    partial_compatible: '部分兼容',
+    invalid_or_unavailable: '无效或不可用',
+    unknown: '未知'
+  }[value || ''] || value || ''
+}
+
+function puritySummary(row: LocalAccountOpsRow): string {
+  const parts: string[] = []
+  if (row.purity_model) parts.push(row.purity_model)
+  const verdict = purityVerdictLabel(row.purity_verdict)
+  if (verdict) parts.push(verdict)
+  if (Number(row.purity_score || 0) > 0) parts.push(`${row.purity_score}分`)
+  if (row.purity_checked_at) parts.push(formatDateTime(row.purity_checked_at))
+  return parts.length ? parts.join(' · ') : purityStatusLabel(row.purity_status)
+}
+
+function purityTitle(row: LocalAccountOpsRow): string {
+  const report = row.purity_report_id ? `报告 ${row.purity_report_id}` : '最近一次纯度检测'
+  return `${report}：${puritySummary(row)}`
 }
 
 function driftStatusLabel(value?: string): string {

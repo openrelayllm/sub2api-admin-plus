@@ -270,6 +270,42 @@ func TestServiceGenerateCandidateEvaluationCreatesKeyCapacityAction(t *testing.T
 	require.Contains(t, action.Signals, "supplier_group_id=1001")
 }
 
+func TestServiceGenerateCandidateEvaluationCreatesPurityActions(t *testing.T) {
+	svc := NewRuleService()
+
+	result, err := svc.Generate(context.Background(), GenerateInput{
+		CandidateEvaluations: []CandidateSignal{
+			{
+				SupplierID:              7,
+				SupplierGroupID:         1001,
+				LocalSub2APIAccountID:   42,
+				CandidateStatus:         "blocked",
+				BlockedReason:           "purity_failed",
+				CheckSource:             "purity",
+				EffectiveRateMultiplier: 0.1,
+			},
+			{
+				SupplierID:              8,
+				SupplierGroupID:         1002,
+				LocalSub2APIAccountID:   43,
+				CandidateStatus:         "degraded",
+				BlockedReason:           "purity_risk",
+				CheckSource:             "purity",
+				EffectiveRateMultiplier: 0.15,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	failed := requireAction(t, result.Items, adminplusdomain.ActionTypeReviewCredential, "candidate_purity_failed")
+	require.Equal(t, adminplusdomain.ActionSeverityWarning, failed.Severity)
+	require.Contains(t, failed.Signals, "blocked_reason=purity_failed")
+	require.Contains(t, failed.Signals, "check_source=purity")
+	risk := requireAction(t, result.Items, adminplusdomain.ActionTypeReviewCredential, "candidate_purity_risk")
+	require.Equal(t, adminplusdomain.ActionSeverityInfo, risk.Severity)
+	require.Contains(t, risk.Signals, "blocked_reason=purity_risk")
+}
+
 func TestServiceGenerateSupplierKeyCapacityActions(t *testing.T) {
 	svc := NewRuleService()
 

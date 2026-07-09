@@ -1279,11 +1279,6 @@ func schedulerActionObjectID(actionID string) int64 {
 	return value
 }
 
-func (s *Service) localRoutingActions(ctx context.Context, now time.Time, settings adminplusdomain.SchedulerSettings) []adminplusdomain.SchedulerAction {
-	actions, _ := s.localRoutingActionsAndSignals(ctx, now, settings)
-	return actions
-}
-
 func (s *Service) localRoutingActionsAndSignals(ctx context.Context, now time.Time, settings adminplusdomain.SchedulerSettings) ([]adminplusdomain.SchedulerAction, actionsapp.GenerateInput) {
 	if s == nil || s.candidateReader == nil {
 		return nil, actionsapp.GenerateInput{}
@@ -1793,6 +1788,12 @@ func purityReportSnapshot(report *purityapp.PublicReport, accountID int64, provi
 	if report.TokenAudit != nil {
 		out["token_audit_status"] = report.TokenAudit.Status
 		out["token_audit_summary"] = report.TokenAudit.Summary
+	}
+	if report.ModelIdentity != nil {
+		out["model_identity_status"] = report.ModelIdentity.Status
+		out["model_identity_reason"] = report.ModelIdentity.Reason
+		out["response_model"] = report.ModelIdentity.ResponseModel
+		out["response_vendor"] = report.ModelIdentity.ResponseVendor
 	}
 	return out
 }

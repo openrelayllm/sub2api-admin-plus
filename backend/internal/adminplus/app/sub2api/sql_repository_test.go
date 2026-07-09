@@ -250,6 +250,12 @@ func TestSQLRepositoryListLocalAccountOpsReadsBindingsAndHealth(t *testing.T) {
 			"usable",
 			"synced",
 			now,
+			"pass",
+			"official_openai",
+			"purity-report-1",
+			"gpt-4o",
+			91,
+			checkAt,
 		))
 
 	items, err := repo.ListLocalAccountOps(context.Background(), LocalAccountOpsFilter{
@@ -280,6 +286,13 @@ func TestSQLRepositoryListLocalAccountOpsReadsBindingsAndHealth(t *testing.T) {
 	require.Equal(t, "synced", items[0].DriftStatus)
 	require.NotNil(t, items[0].LastChannelCheckAt)
 	require.Equal(t, checkAt, *items[0].LastChannelCheckAt)
+	require.Equal(t, "pass", items[0].PurityStatus)
+	require.Equal(t, "official_openai", items[0].PurityVerdict)
+	require.Equal(t, "purity-report-1", items[0].PurityReportID)
+	require.Equal(t, "gpt-4o", items[0].PurityModel)
+	require.Equal(t, 91, items[0].PurityScore)
+	require.NotNil(t, items[0].PurityCheckedAt)
+	require.Equal(t, checkAt, *items[0].PurityCheckedAt)
 }
 
 func TestSQLRepositoryPreviewLocalAccountOpsActionBlocksEmptyPool(t *testing.T) {
@@ -1192,6 +1205,12 @@ func newLocalAccountOpsRows() *sqlmock.Rows {
 		"balance_status",
 		"drift_status",
 		"last_local_sync_at",
+		"purity_status",
+		"purity_verdict",
+		"purity_report_id",
+		"purity_model",
+		"purity_score",
+		"purity_checked_at",
 	})
 }
 

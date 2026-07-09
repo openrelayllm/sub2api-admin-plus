@@ -1300,6 +1300,11 @@ function moneyLabel(cents: number, currency: string): string {
 function candidateReasonText(value?: string): string {
   if (value === 'recharge_required') return '余额不足'
   if (value === 'balance_unknown') return '余额未知'
+  if (value === 'purity_failed') return '纯度失败'
+  if (value === 'purity_risk') return '纯度风险'
+  if (value === 'key_capacity_exhausted') return 'Key 配额已满'
+  if (value === 'channel_monitor_failed') return '通道监控不可用'
+  if (value === 'channel_active_probe_failed') return '实测失败'
   return value || '余额阻断'
 }
 
