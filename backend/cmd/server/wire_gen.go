@@ -244,7 +244,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	sub2apiRoutingPort := sub2api.ProvideRoutingPort(sub2apiSQLRepository, configConfig, httpClient)
 	sub2apiService := sub2api.ProvideService(sub2apiSQLRepository, sub2apiRoutingPort, runtimeRepository, recorder)
 	actionsSQLRepository := actions.NewSQLRepository(db)
-	actionsService := actions.ProvideService(actionsSQLRepository, suppliersService)
+	actionsService := actions.ProvideService(actionsSQLRepository, suppliersService, notificationsService)
 	schedulerService := scheduler.ProvideService(schedulerSQLRepository, suppliersService, extensionService, suppliergroupsService, ratesService, balancesService, healthService, usagecostsService, costsService, channelchecksService, purityService, sessionsService, sub2apiService, sub2apiService, actionsService)
 	kanbanService := kanban.ProvideService(kanbanSQLRepository, sitecatalogService, schedulerService)
 	kanbanHandler := adminplus.NewKanbanHandler(kanbanService)
