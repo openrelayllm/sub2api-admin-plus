@@ -793,7 +793,28 @@ const selectedPurityRows = computed(() => selectedAccountIds.value
   .map((id) => rows.value.find((row) => row.local_sub2api_account_id === id))
   .filter((row): row is LocalAccountOpsRow => Boolean(row && supportsPurity(row)))
 )
-const stalePurityRows = computed(() => rows.value.filter((row) => supportsPurity(row) && purityIsStale(row)))
+const purityModelTagOptions = computed<PurityModelTagOption[]>(() => {
+  const counts = new Map<string, { label: string; count: number }>()
+  rows.value.forEach((row) => {
+    if (!supportsPurity(row) || !purityIsStale(row)) return
+    purityModelTagsForRow(row).forEach((tag) => {
+      const current = counts.get(tag.value)
+      if (current) current.count += 1
+      else counts.set(tag.value, { label: tag.label, count: 1 })
+    })
+  })
+  return Array.from(counts.entries())
+    .map(([value, item]) => ({ value, label: `${item.label} (${item.count})`, count: item.count }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+})
+const stalePurityRows = computed(() => rows.value
+  .filter((row) => supportsPurity(row) && purityIsStale(row))
+  .filter((row) => purityRowMatchesSelectedTag(row))
+)
+const selectStalePurityLabel = computed(() => {
+  const count = stalePurityRows.value.length
+  return selectedPurityModelTag.value ? `选过期纯度 ${count}` : '选过期纯度'
+})
 const bulkActionDisabled = computed(() => actionBusy.value || syncBusy.value || selectedAccountIds.value.length === 0)
 const groupActionDisabled = computed(() => bulkActionDisabled.value || selectedGroupId.value <= 0)
 const pendingActionTitle = computed(() => pendingPayload.value ? actionTitle(pendingPayload.value) : '账号调度操作')
@@ -872,6 +893,7 @@ async function loadRows() {
     pruneSupplierGroupFilter()
     rows.value = opsResult.items
     pruneSelection()
+    prunePurityModelTag()
     pagination.total = opsResult.total || 0
     pagination.pages = opsResult.pages || 0
     pagination.page = opsResult.page || pagination.page
@@ -981,10 +1003,16 @@ function clearSelection() {
 function selectStalePurityRows() {
   const ids = stalePurityRows.value.map((row) => row.local_sub2api_account_id)
   if (ids.length === 0) {
-    appStore.showWarning('当前页没有纯度过期账号')
+    appStore.showWarning(selectedPurityModelTag.value ? '当前页没有匹配模型/能力的纯度过期账号' : '当前页没有纯度过期账号')
     return
   }
   selectedAccountSet.value = new Set(ids)
+}
+
+function prunePurityModelTag() {
+  if (!selectedPurityModelTag.value) return
+  if (purityModelTagOptions.value.some((option) => option.value === selectedPurityModelTag.value)) return
+  selectedPurityModelTag.value = ''
 }
 
 function pruneSelection() {
@@ -1655,6 +1683,36 @@ function showPurityBadge(row: LocalAccountOpsRow): boolean {
 
 function purityIsStale(row?: LocalAccountOpsRow): boolean {
   return String(row?.purity_freshness_status || '').toLowerCase() === 'stale'
+}
+
+function purityRowMatchesSelectedTag(row: LocalAccountOpsRow): boolean {
+  const selected = selectedPurityModelTag.value
+  if (!selected) return true
+  return purityModelTagsForRow(row).some((tag) => tag.value === selected)
+}
+
+function purityModelTagsForRow(row: LocalAccountOpsRow): Array<{ value: string; label: string }> {
+  const tags: Array<{ value: string; label: string }> = []
+  const family = normalizeModelTag(row.supplier_group_model_family)
+  if (family) tags.push({ value: `family:${family}`, label: `能力 ${row.supplier_group_model_family}` })
+  const spec = normalizeModelTag(row.supplier_group_model_spec)
+  if (spec) tags.push({ value: `spec:${spec}`, label: `规格 ${row.supplier_group_model_spec}` })
+  const purityModel = normalizeModelTag(row.purity_model)
+  if (purityModel) tags.push({ value: `model:${purityModel}`, label: `检测模型 ${row.purity_model}` })
+  return dedupePurityTags(tags)
+}
+
+function normalizeModelTag(value?: string): string {
+  return String(value || '').trim().toLowerCase()
+}
+
+function dedupePurityTags(tags: Array<{ value: string; label: string }>): Array<{ value: string; label: string }> {
+  const seen = new Set<string>()
+  return tags.filter((tag) => {
+    if (!tag.value || seen.has(tag.value)) return false
+    seen.add(tag.value)
+    return true
+  })
 }
 
 function purityBadgeLabel(row: LocalAccountOpsRow): string {
