@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Annotated tag to publish, for example v0.43.2'
+        description: 'Annotated tag to publish, for example v0.43.3'
         required: true
         type: string
       deploy_railway:

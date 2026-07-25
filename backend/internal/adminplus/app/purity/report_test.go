@@ -206,3 +206,30 @@ func TestPublicReportCCTestCompatFields(t *testing.T) {
 	require.NotNil(t, eventReport["dimension_matrix"])
 	require.NotNil(t, eventReport["assessment"])
 }
+
+func TestProgressReportScorePolicyDimensionsMarshalAsArrays(t *testing.T) {
+	report := &PublicReport{
+		Provider:    ProviderAnthropic,
+		ReportID:    "report-progress",
+		APIBaseHost: "relay.example.com",
+		ModelID:     "claude-opus-4-8",
+		CheckedAt:   time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC),
+	}
+	var emitted PublicCheckEvent
+
+	emitProgress(report, func(event PublicCheckEvent) {
+		emitted = event
+	}, 1, "tag")
+
+	raw, err := json.Marshal(emitted)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	eventReport, ok := payload["report"].(map[string]any)
+	require.True(t, ok)
+	for _, key := range []string{"score_policy", "scorePolicy"} {
+		policy, ok := eventReport[key].(map[string]any)
+		require.True(t, ok, "%s must be an object", key)
+		require.Equal(t, []any{}, policy["dimensions"], "%s.dimensions must be an array", key)
+	}
+}

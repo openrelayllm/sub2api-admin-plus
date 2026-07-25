@@ -79,6 +79,12 @@ func syncReportCompat(report *PublicReport) {
 	if report == nil {
 		return
 	}
+	if report.ScorePolicy.Dimensions == nil {
+		report.ScorePolicy.Dimensions = []ScorePolicyDimension{}
+	}
+	if report.ScorePolicy.ExcludedDimensions == nil {
+		report.ScorePolicy.ExcludedDimensions = []string{}
+	}
 	report.StepNameCompat = report.StepName
 	report.AccessModeCompat = report.AccessMode
 	report.BillingModeCompat = report.BillingMode
@@ -286,8 +292,8 @@ func buildPublicSummary(report *PublicReport) map[string]any {
 
 func cloneScorePolicy(value ScorePolicyResult) ScorePolicyResult {
 	out := value
-	out.Dimensions = append([]ScorePolicyDimension(nil), value.Dimensions...)
-	out.ExcludedDimensions = append([]string(nil), value.ExcludedDimensions...)
+	out.Dimensions = append([]ScorePolicyDimension{}, value.Dimensions...)
+	out.ExcludedDimensions = append([]string{}, value.ExcludedDimensions...)
 	return out
 }
 
