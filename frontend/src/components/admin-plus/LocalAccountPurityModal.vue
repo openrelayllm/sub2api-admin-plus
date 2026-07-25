@@ -27,8 +27,8 @@
             value-key="id"
             label-key="display_name"
             class="min-w-[220px]"
-            :placeholder="loadingModels ? '加载中...' : '选择模型'"
-            empty-text="暂无模型"
+            :placeholder="loadingModels ? t('purity.ui.loadingModels') : t('purity.ui.selectModel')"
+            :empty-text="t('purity.ui.noModels')"
           />
           <label class="inline-flex min-h-9 items-center gap-2 text-xs text-gray-600 dark:text-dark-300">
             <input
@@ -42,20 +42,20 @@
           <button type="button" class="btn btn-primary btn-sm" :disabled="runStatus === 'running' || !selectedModelId || !isSupportedAccount" @click="startCheck">
             <Icon v-if="runStatus === 'running'" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
             <Icon v-else name="play" size="sm" :stroke-width="2" />
-            <span>{{ runStatus === 'running' ? '检测中' : '开始检测' }}</span>
+            <span>{{ runStatus === 'running' ? t('purity.ui.checking') : t('purity.ui.start') }}</span>
           </button>
         </div>
       </div>
 
       <div v-if="!isSupportedAccount" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-200">
-        仅支持 OpenAI 或 Claude API Key 账号执行纯度检测。
+        {{ t('purity.ui.unsupportedAccount') }}
       </div>
       <div v-if="fatalReportError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-500/40 dark:bg-red-900/20 dark:text-red-200">
-        <div class="font-semibold">检测失败</div>
+        <div class="font-semibold">{{ t('purity.ui.checkFailed') }}</div>
         <div class="mt-1 break-words">{{ fatalReportError }}</div>
       </div>
       <div v-else-if="probeIssueMessage" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-200">
-        <div class="font-semibold">部分探针异常</div>
+        <div class="font-semibold">{{ t('purity.ui.partialProbeIssue') }}</div>
         <div class="mt-1 break-words">{{ probeIssueMessage }}</div>
       </div>
 
@@ -71,7 +71,7 @@
           </div>
           <div class="mt-4 text-center">
             <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ verdictLabel }}</div>
-            <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ assessmentDisplayTitle || report?.summary || runningSummary }}</div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ assessmentDisplayTitle || runningSummary }}</div>
           </div>
           <div class="mt-4">
             <div class="mb-1 flex items-center justify-between text-xs text-gray-500 dark:text-dark-400">
@@ -85,11 +85,11 @@
           <div class="mt-4 grid grid-cols-2 gap-2 text-center text-xs">
             <div class="rounded-md bg-white p-2 dark:bg-dark-600">
               <div class="font-semibold text-gray-900 dark:text-gray-100">{{ report?.compatibility_score ?? '-' }}</div>
-              <div class="text-gray-500 dark:text-dark-400">兼容分</div>
+              <div class="text-gray-500 dark:text-dark-400">{{ t('purity.ui.compatibilityScore') }}</div>
             </div>
             <div class="rounded-md bg-white p-2 dark:bg-dark-600">
               <div class="font-semibold text-gray-900 dark:text-gray-100">{{ report?.official_score ?? '-' }}</div>
-              <div class="text-gray-500 dark:text-dark-400">官方分</div>
+              <div class="text-gray-500 dark:text-dark-400">{{ t('purity.ui.officialScore') }}</div>
             </div>
           </div>
         </div>
@@ -211,15 +211,15 @@
                   <span class="min-w-[64px] text-right text-xs font-semibold text-gray-900 dark:text-gray-100">{{ dimensionScoreLabel(dimension) }}</span>
                 </summary>
                 <div class="space-y-3 border-t border-gray-100 px-3 py-3 text-xs dark:border-dark-600">
-                  <p class="leading-5 text-gray-600 dark:text-dark-300">{{ dimension.message }}</p>
+                  <p class="leading-5 text-gray-600 dark:text-dark-300">{{ dimensionDisplayMessage(dimension) }}</p>
                   <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                       <span class="text-gray-400">{{ t('purity.detail.category') }}：</span>
-                      <span class="text-gray-700 dark:text-dark-300">{{ dimension.category }}</span>
+                      <span class="text-gray-700 dark:text-dark-300">{{ dimensionCategoryLabel(dimension.category) }}</span>
                     </div>
                     <div>
                       <span class="text-gray-400">{{ t('purity.detail.mode') }}：</span>
-                      <span class="text-gray-700 dark:text-dark-300">{{ dimension.mode || '-' }}</span>
+                      <span class="text-gray-700 dark:text-dark-300">{{ dimensionModeLabel(dimension.mode) }}</span>
                     </div>
                     <div>
                       <span class="text-gray-400">{{ t('purity.detail.sourceChecks') }}：</span>
@@ -227,7 +227,7 @@
                     </div>
                     <div>
                       <span class="text-gray-400">{{ t('purity.detail.limitations') }}：</span>
-                      <span class="break-words text-gray-700 dark:text-dark-300">{{ dimension.limitations?.join('; ') || '-' }}</span>
+                      <span class="break-words text-gray-700 dark:text-dark-300">{{ dimensionLimitationsLabel(dimension.limitations) }}</span>
                     </div>
                   </div>
                   <dl v-if="safePurityDetailEntries(dimension.details).length" class="grid gap-2 rounded-md bg-gray-50 p-2 dark:bg-dark-600">
@@ -240,11 +240,11 @@
                     <div class="font-semibold text-gray-700 dark:text-dark-300">{{ t('purity.detail.sourceResults') }}</div>
                     <details v-for="check in sourceChecksForDimension(dimension)" :key="check.id" class="rounded-md border border-gray-200 bg-white dark:border-dark-500 dark:bg-dark-700">
                       <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2">
-                        <span class="font-medium text-gray-800 dark:text-gray-100">{{ check.name }}</span>
+                        <span class="font-medium text-gray-800 dark:text-gray-100">{{ checkDisplayName(check) }}</span>
                         <span :class="checkStatusClass(check.status)">{{ check.score }}/{{ check.max_score }}</span>
                       </summary>
                       <div class="border-t border-gray-100 px-2.5 py-2 dark:border-dark-600">
-                        <p class="text-gray-500 dark:text-dark-400">{{ check.message }}</p>
+                        <p class="text-gray-500 dark:text-dark-400">{{ checkDisplayMessage(check) }}</p>
                         <dl v-if="safePurityDetailEntries(check.details).length" class="mt-2 space-y-1">
                           <div v-for="entry in safePurityDetailEntries(check.details)" :key="entry[0]" class="grid gap-1 sm:grid-cols-[130px_minmax(0,1fr)]">
                             <dt class="font-medium text-gray-400">{{ purityDetailKeyLabel(entry[0]) }}</dt>
@@ -264,7 +264,7 @@
         <div v-if="tokenAuditRequested" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
           <div class="mb-3 flex items-center justify-between gap-3">
             <div>
-              <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">Token 用量审计</div>
+              <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('purity.detail.tokenAudit') }}</div>
               <div class="text-xs text-gray-500 dark:text-dark-400">{{ tokenAuditSummary }}</div>
             </div>
             <span class="badge" :class="tokenAuditBadgeClass">{{ tokenAuditStatusLabel }}</span>
@@ -300,21 +300,21 @@
             </div>
           </div>
           <div class="mt-2 flex justify-end gap-3 text-[10px] text-gray-500 dark:text-dark-400">
-            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-gray-400 dark:bg-dark-400" />官方基线</span>
-            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-emerald-400" />Usage 估算</span>
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-gray-400 dark:bg-dark-400" />{{ t('purity.ui.audit.officialBaseline') }}</span>
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-emerald-400" />{{ t('purity.ui.audit.usageEstimate') }}</span>
           </div>
           <div class="mt-3 overflow-x-auto rounded-md border border-gray-200 bg-white dark:border-dark-500 dark:bg-dark-800">
             <table class="min-w-[780px] table-fixed text-left text-xs text-gray-950 dark:text-gray-100">
               <thead class="text-gray-700 dark:text-dark-300">
                 <tr>
-                  <th class="w-12 py-1 pr-2 font-medium">轮次</th>
-                  <th class="w-24 py-1 pr-2 font-medium">模式</th>
-                  <th class="w-16 py-1 pr-2 font-medium text-right">耗时</th>
-                  <th class="w-24 py-1 pr-2 font-medium text-right">输入</th>
-                  <th class="w-20 py-1 pr-2 font-medium text-right">输出</th>
-                  <th class="w-24 py-1 pr-2 font-medium text-right">缓存创建</th>
-                  <th class="w-24 py-1 pr-2 font-medium text-right">缓存读取</th>
-                  <th class="w-24 py-1 pr-2 font-medium text-right">Usage 估算</th>
+                  <th class="w-12 py-1 pr-2 font-medium">{{ t('purity.ui.audit.round') }}</th>
+                  <th class="w-24 py-1 pr-2 font-medium">{{ t('purity.ui.audit.mode') }}</th>
+                  <th class="w-16 py-1 pr-2 font-medium text-right">{{ t('purity.ui.audit.latency') }}</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">{{ t('purity.ui.audit.input') }}</th>
+                  <th class="w-20 py-1 pr-2 font-medium text-right">{{ t('purity.ui.audit.output') }}</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">{{ t('purity.ui.audit.cacheCreation') }}</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">{{ t('purity.ui.audit.cacheRead') }}</th>
+                  <th class="w-24 py-1 pr-2 font-medium text-right">{{ t('purity.ui.audit.usageEstimate') }}</th>
                   <th class="w-20 py-1 pr-2 font-medium text-right">{{ tokenAuditSampleRatioHeader }}</th>
                 </tr>
               </thead>
@@ -364,11 +364,11 @@
           <div class="mt-3 max-h-[300px] space-y-2 overflow-y-auto pr-1">
             <details v-for="check in reportChecks" :key="check.id" class="rounded-md bg-gray-50 dark:bg-dark-600">
               <summary class="flex cursor-pointer list-none items-center justify-between gap-2 p-2">
-                <span class="text-xs font-medium text-gray-800 dark:text-gray-100">{{ check.name }}</span>
+                <span class="text-xs font-medium text-gray-800 dark:text-gray-100">{{ checkDisplayName(check) }}</span>
                 <span class="text-xs" :class="checkStatusClass(check.status)">{{ check.score }}/{{ check.max_score }}</span>
               </summary>
               <div class="border-t border-gray-200 px-2 pb-2 pt-1.5 text-xs dark:border-dark-500">
-                <div class="leading-5 text-gray-500 dark:text-dark-400">{{ check.message }}</div>
+                <div class="leading-5 text-gray-500 dark:text-dark-400">{{ checkDisplayMessage(check) }}</div>
                 <dl v-if="safePurityDetailEntries(check.details).length" class="mt-2 space-y-1">
                   <div v-for="entry in safePurityDetailEntries(check.details)" :key="entry[0]" class="grid gap-1 sm:grid-cols-[120px_minmax(0,1fr)]">
                     <dt class="font-medium text-gray-400">{{ purityDetailKeyLabel(entry[0]) }}</dt>
@@ -393,15 +393,15 @@
 
     <template #footer>
       <div class="flex flex-wrap justify-end gap-3">
-        <button type="button" class="btn btn-secondary" @click="handleClose">关闭</button>
+        <button type="button" class="btn btn-secondary" @click="handleClose">{{ t('purity.ui.close') }}</button>
         <button type="button" class="btn btn-secondary" :disabled="!canDownloadPDF || runStatus === 'running'" @click="downloadPDF">
           <Icon name="download" size="sm" :stroke-width="2" />
-          <span>下载 PDF</span>
+          <span>{{ t('purity.ui.downloadPDF') }}</span>
         </button>
         <button type="button" class="btn btn-primary" :disabled="runStatus === 'running' || !selectedModelId || !isSupportedAccount" @click="startCheck">
           <Icon v-if="runStatus === 'running'" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
           <Icon v-else name="shield" size="sm" :stroke-width="2" />
-          <span>{{ runStatus === 'running' ? '检测中' : report ? '重新检测' : '开始检测' }}</span>
+          <span>{{ runStatus === 'running' ? t('purity.ui.checking') : report ? t('purity.ui.rerun') : t('purity.ui.start') }}</span>
         </button>
       </div>
     </template>
@@ -482,6 +482,89 @@ const { t } = useI18n({
   messages: {
     zh: {
       purity: {
+        ui: {
+          dialogTitle: '{provider} API 纯度检测',
+          loadingModels: '加载中...',
+          selectModel: '选择模型',
+          noModels: '暂无模型',
+          start: '开始检测',
+          rerun: '重新检测',
+          checking: '检测中',
+          close: '关闭',
+          downloadPDF: '下载 PDF',
+          unsupportedAccount: '仅支持 OpenAI、Claude 或 Gemini API Key 账号执行纯度检测。',
+          checkFailed: '检测失败',
+          partialProbeIssue: '部分探针异常',
+          compatibilityScore: '兼容分',
+          officialScore: '官方分',
+          preparing: '准备检测',
+          waitingStart: '等待开始',
+          runningSummary: '后端探针正在执行：{step}',
+          notStarted: '尚未开始检测',
+          loadingModelsFailed: '加载模型失败',
+          emptyResponse: '响应体为空',
+          eventParseFailed: '无法解析检测事件：{event}',
+          validationNames: {
+            llm_fingerprint: 'LLM 指纹验证',
+            schema_integrity: '结构完整性',
+            behavior: '行为验证',
+            signature: '签名校验',
+            multimodal: '多模态能力',
+            token_audit: 'Token 用量审计',
+            model_identity: '模型身份验证',
+            wrapper_fingerprint: '包装指纹验证'
+          },
+          validationWaiting: {
+            llm_fingerprint: '等待模型列表和 Base 域名探测',
+            schema_integrity: '等待协议 schema 探测',
+            behavior: '等待工具调用和流式事件探测',
+            signature: '等待 usage 与协议签名探测',
+            multimodal: '等待图像输入探测',
+            token_audit: '等待 R1-R11 用量审计',
+            model_identity: '等待请求模型与响应模型比对',
+            wrapper_fingerprint: '等待中转、反代和兼容网关指纹聚合'
+          },
+          steps: {
+            tag: 'LLM 指纹验证',
+            structure: '结构完整性',
+            behavior: '行为验证',
+            signature: '签名校验',
+            multimodal: '多模态能力',
+            token_audit: 'Token 用量审计',
+            evaluate: '最终评估'
+          },
+          audit: {
+            officialBaseline: '官方基线',
+            usageEstimate: 'Usage 估算',
+            billingMultiplier: '平台计费倍率',
+            usageRatio: 'Usage 比值',
+            cacheHitRate: '缓存命中率',
+            platformRatio: '平台倍率',
+            round: '轮次',
+            mode: '模式',
+            latency: '耗时',
+            input: '输入',
+            output: '输出',
+            cacheCreation: '缓存创建',
+            cacheRead: '缓存读取',
+            collecting: '采集中 · {progress}',
+            waitingSamples: '等待样本',
+            notStarted: '尚未开始',
+            waitingFailedSamples: '等待失败诊断样本',
+            waitingAuditSamples: '等待审计样本',
+            diagnosticRounds: '{count} 轮仅返回诊断',
+            geminiCacheNotice: 'Gemini 未返回或未命中的缓存字段以 0 展示；缓存创建字段不可确认，缓存读取 0 表示本轮未观察到命中。',
+            multiplierNotice: '平台计费倍率 {billing}；Usage 比值 {ratio}。两者口径不同，前者来自账号配置或 /v1/usage 扣费增量。',
+            geminiRatioNotice: 'Usage 比值 {ratio}；Gemini usageMetadata 只能确认本轮 token 统计，平台计费倍率需结合账号配置或 /v1/usage 扣费增量。',
+            unknownRatioNotice: 'Usage 比值暂无法确认，需结合每轮 usage 字段和平台账单复核。',
+            badRatioNotice: 'Usage 比值 {ratio}，明显高于常见范围，可能存在异常扣费或 Token 统计混淆。',
+            warnRatioNotice: 'Usage 比值 {ratio}，高于常见范围，建议结合平台单价或倍率复核。',
+            goodRatioNotice: 'Usage 比值 {ratio}，当前未发现明显超额消耗；平台计费倍率需结合账号配置或账单复核。',
+            modelList: '模型列表',
+            firstToken: '首 Token',
+            totalLatency: '总耗时'
+          }
+        },
         verdict: {
           official_openai: 'OpenAI 官方',
           openai_compatible: 'OpenAI 兼容',
@@ -600,6 +683,85 @@ const { t } = useI18n({
             not_applicable: '不适用',
             unsupported_by_upstream: '上游不支持'
           },
+          dimensionMessage: {
+            pass: '该维度已执行，关联探针均通过。',
+            warn: '该维度已执行，但存在需要复核的证据。',
+            fail: '该维度关联探针未通过。',
+            not_run: '本轮未执行该主动探针，不计为通过或失败。',
+            not_applicable: '该维度不适用于当前协议或渠道。',
+            unsupported_by_upstream: '该能力不在当前上游渠道的官方支持范围内。'
+          },
+          checkMessage: {
+            pass: '探针已通过，并返回预期的协议行为。',
+            warn: '探针已完成，但证据仍需复核。',
+            fail: '探针未返回预期的协议行为。'
+          },
+          checkNames: {
+            base_url: 'Base URL 探测',
+            models_schema: '模型列表结构',
+            responses_schema: 'Responses 非流式结构',
+            responses_structured_output: '结构化输出',
+            responses_store_include: '推理状态与 include',
+            tool_call: '强制工具调用',
+            usage: 'Usage 字段',
+            streaming: '流式事件',
+            multimodal: '多模态输入',
+            chat_completions: 'Chat Completions 兼容',
+            chat_completions_n: '多候选输出',
+            model_identity: '模型身份一致性',
+            channel_attribution: '上游渠道归因',
+            wrapper_fingerprint: '网关包装指纹',
+            token_audit: 'Token 用量审计',
+            claude_messages_schema: 'Messages 非流式结构',
+            claude_tool_use: '强制工具调用',
+            claude_usage: 'Usage 字段',
+            claude_streaming: 'Messages 流式事件',
+            claude_multimodal: '多模态输入',
+            claude_signature_provenance: 'Thinking 签名来源',
+            claude_thinking_signature: 'Thinking 签名结构',
+            claude_thinking_budget: 'Thinking 预算约束',
+            claude_cache_control_overflow: '缓存控制边界'
+          },
+          categories: {
+            identity: '模型身份',
+            model_identity: '模型身份',
+            protocol: '协议结构',
+            capability: '能力',
+            channel_attribution: '渠道归因',
+            official_behavior: '官方行为',
+            behavior: '行为',
+            request_integrity: '请求完整性',
+            multimodal: '多模态',
+            gateway: '网关证据'
+          },
+          modes: {
+            identity: '模型身份校验',
+            stream: '流式协议',
+            non_stream: '非流式协议',
+            provider_native: '厂商原生行为',
+            provider_constraint: '厂商约束',
+            channel_evidence: '渠道证据',
+            behavior_and_provenance: '行为与来源证据',
+            official_behavior: '官方行为',
+            encrypted_reasoning_behavior: '加密推理行为',
+            json_schema: 'JSON Schema',
+            client_tool: '客户端工具调用',
+            synthetic_image: '合成图片',
+            evidence_only: '仅证据，不计分'
+          },
+          limitationCodes: {
+            managed_websearch_unsupported: '上游渠道不提供 Anthropic 托管 WebSearch。',
+            managed_websearch_unsupported_by_bedrock: 'AWS Bedrock 不提供 Anthropic 托管 WebSearch。',
+            anthropic_managed_websearch_not_applicable: 'Anthropic 托管 WebSearch 不适用于当前协议。',
+            gateway_fingerprint_not_protocol_score: '网关指纹仅作为证据展示，不降低协议兼容分。',
+            active_probe_not_implemented: '当前版本未执行该主动完整性探针。',
+            versioned_knowledge_probe_not_run: '本轮未执行版本化知识探针。',
+            synthetic_document_probe_not_run: '本轮未执行合成文档探针。',
+            signature_probe_not_applicable: '当前协议没有适用的同类签名来源探针。',
+            structured_output_probe_not_run: '本轮未执行当前协议的结构化输出探针。',
+            managed_websearch_not_probed: '托管 WebSearch 可能产生外部搜索费用，本轮未主动探测。'
+          },
+          limitationsSummary: '{count} 项能力限制，详见检测维度 Detail',
           assessmentKind: {
             official_native: '原生官方渠道',
             official_cloud_channel: '官方云渠道',
@@ -638,6 +800,89 @@ const { t } = useI18n({
     },
     en: {
       purity: {
+        ui: {
+          dialogTitle: '{provider} API purity check',
+          loadingModels: 'Loading...',
+          selectModel: 'Select a model',
+          noModels: 'No models available',
+          start: 'Start check',
+          rerun: 'Run again',
+          checking: 'Checking',
+          close: 'Close',
+          downloadPDF: 'Download PDF',
+          unsupportedAccount: 'Only OpenAI, Claude, or Gemini API key accounts are supported.',
+          checkFailed: 'Check failed',
+          partialProbeIssue: 'Some probes reported issues',
+          compatibilityScore: 'Compatibility',
+          officialScore: 'Official score',
+          preparing: 'Preparing',
+          waitingStart: 'Waiting to start',
+          runningSummary: 'Backend probes are running: {step}',
+          notStarted: 'No check has started',
+          loadingModelsFailed: 'Failed to load models',
+          emptyResponse: 'The response body is empty',
+          eventParseFailed: 'Unable to parse detection event: {event}',
+          validationNames: {
+            llm_fingerprint: 'LLM fingerprint',
+            schema_integrity: 'Structure integrity',
+            behavior: 'Behavior validation',
+            signature: 'Signature validation',
+            multimodal: 'Multimodal capability',
+            token_audit: 'Token usage audit',
+            model_identity: 'Model identity validation',
+            wrapper_fingerprint: 'Wrapper fingerprint validation'
+          },
+          validationWaiting: {
+            llm_fingerprint: 'Waiting for model-list and Base URL probes',
+            schema_integrity: 'Waiting for protocol schema probes',
+            behavior: 'Waiting for tool-call and streaming probes',
+            signature: 'Waiting for usage and signature probes',
+            multimodal: 'Waiting for image-input probes',
+            token_audit: 'Waiting for the R1-R11 usage audit',
+            model_identity: 'Waiting to compare requested and response models',
+            wrapper_fingerprint: 'Waiting for relay, proxy, and compatible-gateway fingerprint aggregation'
+          },
+          steps: {
+            tag: 'LLM fingerprint',
+            structure: 'Structure integrity',
+            behavior: 'Behavior validation',
+            signature: 'Signature validation',
+            multimodal: 'Multimodal capability',
+            token_audit: 'Token usage audit',
+            evaluate: 'Final assessment'
+          },
+          audit: {
+            officialBaseline: 'Official baseline',
+            usageEstimate: 'Usage estimate',
+            billingMultiplier: 'Platform billing multiplier',
+            usageRatio: 'Usage ratio',
+            cacheHitRate: 'Cache hit rate',
+            platformRatio: 'Platform ratio',
+            round: 'Round',
+            mode: 'Mode',
+            latency: 'Latency',
+            input: 'Input',
+            output: 'Output',
+            cacheCreation: 'Cache creation',
+            cacheRead: 'Cache read',
+            collecting: 'Collecting · {progress}',
+            waitingSamples: 'Waiting for samples',
+            notStarted: 'Not started',
+            waitingFailedSamples: 'Waiting for failed diagnostic samples',
+            waitingAuditSamples: 'Waiting for audit samples',
+            diagnosticRounds: '{count} diagnostic-only round(s)',
+            geminiCacheNotice: 'Missing or unobserved Gemini cache fields are shown as zero. Cache creation cannot be confirmed; a cache-read value of zero means no hit was observed in this round.',
+            multiplierNotice: 'Platform billing multiplier {billing}; usage ratio {ratio}. These use different measurement bases. The former comes from account configuration or the /v1/usage billing delta.',
+            geminiRatioNotice: 'Usage ratio {ratio}. Gemini usageMetadata confirms only this request\'s token counts; verify the platform billing multiplier through account configuration or the /v1/usage billing delta.',
+            unknownRatioNotice: 'The usage ratio is unavailable; verify the per-round usage fields and platform bill.',
+            badRatioNotice: 'Usage ratio {ratio} is well above the common range and may indicate abnormal billing or token-count confusion.',
+            warnRatioNotice: 'Usage ratio {ratio} is above the common range; verify the platform price or multiplier.',
+            goodRatioNotice: 'Usage ratio {ratio} shows no obvious excess consumption. Verify the platform billing multiplier through account configuration or billing data.',
+            modelList: 'Model list',
+            firstToken: 'First token',
+            totalLatency: 'Total latency'
+          }
+        },
         verdict: {
           official_openai: 'Official OpenAI',
           openai_compatible: 'OpenAI compatible',
@@ -756,6 +1001,85 @@ const { t } = useI18n({
             not_applicable: 'Not applicable',
             unsupported_by_upstream: 'Unsupported upstream'
           },
+          dimensionMessage: {
+            pass: 'This dimension ran and all linked probes passed.',
+            warn: 'This dimension ran, but some evidence needs review.',
+            fail: 'One or more probes linked to this dimension failed.',
+            not_run: 'This active probe was not run and is neither a pass nor a failure.',
+            not_applicable: 'This dimension does not apply to the current protocol or channel.',
+            unsupported_by_upstream: 'This capability is outside the upstream channel\'s official support boundary.'
+          },
+          checkMessage: {
+            pass: 'The probe passed and returned the expected protocol behavior.',
+            warn: 'The probe completed, but its evidence needs review.',
+            fail: 'The probe did not return the expected protocol behavior.'
+          },
+          checkNames: {
+            base_url: 'Base URL probe',
+            models_schema: 'Model list schema',
+            responses_schema: 'Responses non-stream schema',
+            responses_structured_output: 'Structured output',
+            responses_store_include: 'Reasoning state and include',
+            tool_call: 'Forced tool call',
+            usage: 'Usage fields',
+            streaming: 'Streaming events',
+            multimodal: 'Multimodal input',
+            chat_completions: 'Chat Completions compatibility',
+            chat_completions_n: 'Multiple-choice output',
+            model_identity: 'Model identity consistency',
+            channel_attribution: 'Upstream channel attribution',
+            wrapper_fingerprint: 'Gateway wrapper fingerprint',
+            token_audit: 'Token usage audit',
+            claude_messages_schema: 'Messages non-stream schema',
+            claude_tool_use: 'Forced tool call',
+            claude_usage: 'Usage fields',
+            claude_streaming: 'Messages streaming events',
+            claude_multimodal: 'Multimodal input',
+            claude_signature_provenance: 'Thinking signature provenance',
+            claude_thinking_signature: 'Thinking signature structure',
+            claude_thinking_budget: 'Thinking budget constraint',
+            claude_cache_control_overflow: 'Cache-control boundary'
+          },
+          categories: {
+            identity: 'Model identity',
+            model_identity: 'Model identity',
+            protocol: 'Protocol structure',
+            capability: 'Capability',
+            channel_attribution: 'Channel attribution',
+            official_behavior: 'Official behavior',
+            behavior: 'Behavior',
+            request_integrity: 'Request integrity',
+            multimodal: 'Multimodal',
+            gateway: 'Gateway evidence'
+          },
+          modes: {
+            identity: 'Model identity validation',
+            stream: 'Streaming protocol',
+            non_stream: 'Non-streaming protocol',
+            provider_native: 'Provider-native behavior',
+            provider_constraint: 'Provider constraint',
+            channel_evidence: 'Channel evidence',
+            behavior_and_provenance: 'Behavior and provenance evidence',
+            official_behavior: 'Official behavior',
+            encrypted_reasoning_behavior: 'Encrypted reasoning behavior',
+            json_schema: 'JSON Schema',
+            client_tool: 'Client tool calling',
+            synthetic_image: 'Synthetic image',
+            evidence_only: 'Evidence only, not scored'
+          },
+          limitationCodes: {
+            managed_websearch_unsupported: 'The upstream channel does not provide Anthropic managed WebSearch.',
+            managed_websearch_unsupported_by_bedrock: 'AWS Bedrock does not provide Anthropic managed WebSearch.',
+            anthropic_managed_websearch_not_applicable: 'Anthropic managed WebSearch does not apply to this protocol.',
+            gateway_fingerprint_not_protocol_score: 'Gateway fingerprints are evidence only and do not reduce the protocol score.',
+            active_probe_not_implemented: 'This active integrity probe was not run in the current release.',
+            versioned_knowledge_probe_not_run: 'The versioned knowledge probe was not run.',
+            synthetic_document_probe_not_run: 'The synthetic document probe was not run.',
+            signature_probe_not_applicable: 'No equivalent signature provenance probe applies to this protocol.',
+            structured_output_probe_not_run: 'The protocol-specific structured output probe was not run.',
+            managed_websearch_not_probed: 'Managed WebSearch was not actively probed because it may incur external search cost.'
+          },
+          limitationsSummary: '{count} capability limitation(s); see the dimension details',
           assessmentKind: {
             official_native: 'Official native channel',
             official_cloud_channel: 'Official cloud channel',
@@ -805,16 +1129,6 @@ const validationDefinitions: ValidationDefinition[] = [
   { id: 'model_identity', name: '模型身份验证', message: '等待请求模型与响应模型比对' },
   { id: 'wrapper_fingerprint', name: '包装指纹验证', message: '等待中转、反代和兼容网关指纹聚合' }
 ]
-
-const stepLabels: Record<string, string> = {
-  tag: 'LLM 指纹验证',
-  structure: '结构完整性',
-  behavior: '行为验证',
-  signature: '签名校验',
-  multimodal: '多模态能力',
-  token_audit: 'Token 用量审计',
-  evaluate: '最终评估'
-}
 
 const activeValidationByStep: Record<string, string> = {
   tag: 'llm_fingerprint',
@@ -867,7 +1181,7 @@ const providerLabel = computed(() => {
   if (isGeminiProvider.value) return 'Gemini'
   return 'OpenAI'
 })
-const dialogTitle = computed(() => `${providerLabel.value} API 纯度检测`)
+const dialogTitle = computed(() => t('purity.ui.dialogTitle', { provider: providerLabel.value }))
 const displayScore = computed(() => report.value?.score ?? (started.value ? 0 : '-'))
 const scoreRingStyle = computed(() => {
   const score = typeof displayScore.value === 'number' ? displayScore.value : 0
@@ -893,16 +1207,22 @@ const verdictLabel = computed(() => {
   return started.value ? t('purity.verdict.running') : t('purity.verdict.waiting')
 })
 const currentStepName = computed(() => report.value?.step_name || stepName.value)
-const stepLabel = computed(() => stepLabels[currentStepName.value] || (started.value ? '准备检测' : '等待开始'))
+const stepLabel = computed(() => currentStepName.value
+  ? t(`purity.ui.steps.${currentStepName.value}`)
+  : started.value
+    ? t('purity.ui.preparing')
+    : t('purity.ui.waitingStart'))
 const progressPercent = computed(() => {
   const value = normalizeProgress(report.value?.progress ?? progress.value)
   return Math.round(value * 100)
 })
-const runningSummary = computed(() => runStatus.value === 'running' ? `后端探针正在执行：${stepLabel.value}` : '尚未开始检测')
+const runningSummary = computed(() => runStatus.value === 'running'
+  ? t('purity.ui.runningSummary', { step: stepLabel.value })
+  : t('purity.ui.notStarted'))
 const currentRunningValidation = computed(() => activeValidationByStep[currentStepName.value] || '')
 const fatalReportError = computed(() => {
   if (report.value?.status === 'error' || report.value?.error) {
-    return report.value?.error || metrics.value.error_message || '检测失败'
+    return report.value?.error || metrics.value.error_message || t('purity.ui.checkFailed')
   }
   return ''
 })
@@ -917,9 +1237,11 @@ const displayedValidations = computed<DisplayValidation[]>(() => validationDefin
     if (result) {
       return {
         id: definition.id,
-        name: result.name || definition.name,
+        name: validationDisplayName(definition),
         status: result.status as DisplayStatus,
-        message: result.message || definition.message
+        message: result.status === 'pass' || result.status === 'warn' || result.status === 'fail'
+          ? t(`purity.detail.checkMessage.${result.status}`)
+          : validationWaitingMessage(definition)
       }
     }
     return {
@@ -937,9 +1259,12 @@ const scoreBreakdownItems = computed(() => {
         label: scoreDimensionLabel(dimension.id),
         max: dimension.max_score
       }))
-    : defaultScoreDefinitions.filter((definition) => definition.key !== 'token_audit')
+    : defaultScoreDefinitions
+        .filter((definition) => definition.key !== 'token_audit')
+        .map((definition) => ({ ...definition, label: scoreDimensionLabel(definition.key) }))
+  const tokenDefinition = defaultScoreDefinitions.find((definition) => definition.key === 'token_audit')!
   const definitions = tokenAuditRequested.value
-    ? [...policyDefinitions, defaultScoreDefinitions.find((definition) => definition.key === 'token_audit')!]
+    ? [...policyDefinitions, { ...tokenDefinition, label: scoreDimensionLabel(tokenDefinition.key) }]
     : policyDefinitions
   return definitions.map((definition) => {
     const rawValue = source[definition.key] ?? 0
@@ -1018,7 +1343,7 @@ const assessmentFacts = computed(() => {
     },
     {
       label: t('purity.detail.limitationsFact'),
-      value: limitations.length ? limitations.join('; ') : t('purity.detail.noLimitations')
+      value: limitations.length ? t('purity.detail.limitationsSummary', { count: limitations.length }) : t('purity.detail.noLimitations')
     }
   ]
 })
@@ -1036,11 +1361,18 @@ const scorePolicyDisplayName = computed(() => {
   return known.has(id) ? t(`purity.detail.scorePolicyNames.${id}`) : id
 })
 const tokenAuditSummary = computed(() => {
-  if (tokenAudit.value) return `${tokenAudit.value.summary} · ${auditSamplesForTable.value.length}/${tokenAudit.value.sample_count || 11}${failedAuditSampleCount.value > 0 ? ` · ${failedAuditSampleCount.value} 轮仅返回诊断` : ''}`
-  if (auditSamples.value.length > 0) return `采集中 · ${tokenAuditProgress.value || `${auditSamples.value.length}/11`}`
-  return started.value ? '等待样本' : '尚未开始'
+  if (tokenAudit.value) {
+    const diagnostic = failedAuditSampleCount.value > 0
+      ? ` · ${t('purity.ui.audit.diagnosticRounds', { count: failedAuditSampleCount.value })}`
+      : ''
+    return `${auditSamplesForTable.value.length}/${tokenAudit.value.sample_count || 11}${diagnostic}`
+  }
+  if (auditSamples.value.length > 0) {
+    return t('purity.ui.audit.collecting', { progress: tokenAuditProgress.value || `${auditSamples.value.length}/11` })
+  }
+  return started.value ? t('purity.ui.audit.waitingSamples') : t('purity.ui.audit.notStarted')
 })
-const emptyAuditTableText = computed(() => failedAuditSampleCount.value > 0 ? '等待失败诊断样本' : '等待审计样本')
+const emptyAuditTableText = computed(() => failedAuditSampleCount.value > 0 ? t('purity.ui.audit.waitingFailedSamples') : t('purity.ui.audit.waitingAuditSamples'))
 const tokenAuditMetricCards = computed(() => {
   const audit = tokenAudit.value
   const totals = tokenAuditCostTotals(audit)
@@ -1048,13 +1380,13 @@ const tokenAuditMetricCards = computed(() => {
   const billingMultiplier = audit?.billing_multiplier ?? audit?.billingMultiplier
   const hasBillingMultiplier = typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)
   const cards = [
-    { label: '官方基线', value: formatUSD(totals.officialBaselineUSD), tone: 'neutral' as TokenAuditTone },
-    { label: 'Usage 估算', value: formatUSD(totals.actualCostUSD), tone: ratio > 0 ? multiplierTone(ratio) : 'neutral' as TokenAuditTone },
+    { label: t('purity.ui.audit.officialBaseline'), value: formatUSD(totals.officialBaselineUSD), tone: 'neutral' as TokenAuditTone },
+    { label: t('purity.ui.audit.usageEstimate'), value: formatUSD(totals.actualCostUSD), tone: ratio > 0 ? multiplierTone(ratio) : 'neutral' as TokenAuditTone },
     hasBillingMultiplier
-      ? { label: '平台计费倍率', value: formatMultiplier(billingMultiplier), tone: 'good' as TokenAuditTone }
-      : { label: '平台计费倍率', value: '-', tone: 'neutral' as TokenAuditTone },
-    { label: 'Usage 比值', value: formatMultiplier(ratio), tone: multiplierTone(ratio) },
-    { label: '缓存命中率', value: formatPercent(audit?.cacheHitRate ?? audit?.cache_hit_rate), tone: audit?.cacheHitRate || audit?.cache_hit_rate ? 'good' as TokenAuditTone : 'neutral' as TokenAuditTone }
+      ? { label: t('purity.ui.audit.billingMultiplier'), value: formatMultiplier(billingMultiplier), tone: 'good' as TokenAuditTone }
+      : { label: t('purity.ui.audit.billingMultiplier'), value: '-', tone: 'neutral' as TokenAuditTone },
+    { label: t('purity.ui.audit.usageRatio'), value: formatMultiplier(ratio), tone: multiplierTone(ratio) },
+    { label: t('purity.ui.audit.cacheHitRate'), value: formatPercent(audit?.cacheHitRate ?? audit?.cache_hit_rate), tone: audit?.cacheHitRate || audit?.cache_hit_rate ? 'good' as TokenAuditTone : 'neutral' as TokenAuditTone }
   ]
   return cards
 })
@@ -1062,7 +1394,7 @@ const tokenAuditRatio = computed(() => tokenAuditDisplayRatio(tokenAudit.value))
 const tokenAuditRatioTone = computed(() => multiplierTone(tokenAuditRatio.value))
 const tokenAuditBillingMultiplier = computed(() => tokenAudit.value?.billing_multiplier ?? tokenAudit.value?.billingMultiplier)
 const hasTokenAuditBillingMultiplier = computed(() => typeof tokenAuditBillingMultiplier.value === 'number' && Number.isFinite(tokenAuditBillingMultiplier.value))
-const tokenAuditSampleRatioHeader = computed(() => hasTokenAuditBillingMultiplier.value ? '平台倍率' : 'Usage 比值')
+const tokenAuditSampleRatioHeader = computed(() => hasTokenAuditBillingMultiplier.value ? t('purity.ui.audit.platformRatio') : t('purity.ui.audit.usageRatio'))
 const geminiCacheFieldNotice = computed(() => {
   if (!isGeminiProvider.value) return ''
   const samples = auditSamplesForTable.value
@@ -1070,20 +1402,20 @@ const geminiCacheFieldNotice = computed(() => {
   const missingCacheCreate = samples.some((sample) => tokenAuditSampleRow(sample).cacheCreation.available === false)
   const missingCacheRead = samples.some((sample) => tokenAuditSampleRow(sample).cacheRead.available === false)
   if (!missingCacheCreate && !missingCacheRead) return ''
-  return 'Gemini 未返回或未命中的缓存字段以 0 展示；缓存创建字段不可确认，缓存读取 0 表示本轮未观察到命中。'
+  return t('purity.ui.audit.geminiCacheNotice')
 })
 const tokenAuditNoticeText = computed(() => {
   const ratio = tokenAuditRatio.value
   const billingMultiplier = tokenAuditBillingMultiplier.value
   const cacheNotice = geminiCacheFieldNotice.value ? ` ${geminiCacheFieldNotice.value}` : ''
   if (typeof billingMultiplier === 'number' && Number.isFinite(billingMultiplier)) {
-    return `平台计费倍率 ${formatMultiplier(billingMultiplier)}；Usage 比值 ${formatMultiplier(ratio)}。两者口径不同，前者来自账号配置或 /v1/usage 扣费增量。${cacheNotice}`
+    return `${t('purity.ui.audit.multiplierNotice', { billing: formatMultiplier(billingMultiplier), ratio: formatMultiplier(ratio) })}${cacheNotice}`
   }
-  if (isGeminiProvider.value) return `Usage 比值 ${formatMultiplier(ratio)}；Gemini usageMetadata 只能确认本轮 token 统计，平台计费倍率需结合账号配置或 /v1/usage 扣费增量。${cacheNotice}`
-  if (!ratio) return 'Usage 比值暂无法确认，需结合每轮 usage 字段和平台账单复核。'
-  if (tokenAuditRatioTone.value === 'bad') return `Usage 比值 ${formatMultiplier(ratio)}，明显高于常见范围，可能存在异常扣费或 Token 统计混淆。`
-  if (tokenAuditRatioTone.value === 'warn') return `Usage 比值 ${formatMultiplier(ratio)}，高于常见范围，建议结合平台单价/倍率复核。`
-  return `Usage 比值 ${formatMultiplier(ratio)}，当前未发现明显超额消耗；平台计费倍率需结合账号配置或账单复核。${cacheNotice}`
+  if (isGeminiProvider.value) return `${t('purity.ui.audit.geminiRatioNotice', { ratio: formatMultiplier(ratio) })}${cacheNotice}`
+  if (!ratio) return t('purity.ui.audit.unknownRatioNotice')
+  if (tokenAuditRatioTone.value === 'bad') return t('purity.ui.audit.badRatioNotice', { ratio: formatMultiplier(ratio) })
+  if (tokenAuditRatioTone.value === 'warn') return t('purity.ui.audit.warnRatioNotice', { ratio: formatMultiplier(ratio) })
+  return `${t('purity.ui.audit.goodRatioNotice', { ratio: formatMultiplier(ratio) })}${cacheNotice}`
 })
 const tokenAuditNoticeClass = computed(() => {
   if (tokenAudit.value?.status === 'fail') return auditToneNoticeClass('bad')
@@ -1093,13 +1425,13 @@ const tokenAuditNoticeClass = computed(() => {
 const tokenAuditStatusLabel = computed(() => validationStatusLabel((tokenAudit.value?.status || (auditSamples.value.length > 0 ? 'running' : 'idle')) as DisplayStatus))
 const tokenAuditBadgeClass = computed(() => validationBadgeClass((tokenAudit.value?.status || (auditSamples.value.length > 0 ? 'running' : 'idle')) as DisplayStatus))
 const metricCards = computed(() => [
-  { label: '模型列表', value: latencyLabel(metrics.value.models_latency_ms) },
+  { label: t('purity.ui.audit.modelList'), value: latencyLabel(metrics.value.models_latency_ms) },
   {
     label: currentProvider.value === 'anthropic' ? 'Messages' : isGeminiProvider.value ? 'GenerateContent' : 'Responses',
     value: latencyLabel(currentProvider.value === 'anthropic' ? metrics.value.messages_latency_ms : isGeminiProvider.value ? metrics.value.generate_content_latency_ms || metrics.value.responses_latency_ms : metrics.value.responses_latency_ms)
   },
-  { label: '首 Token', value: latencyLabel(metrics.value.stream_first_token_ms) },
-  { label: '总耗时', value: latencyLabel(metrics.value.latency_ms) }
+  { label: t('purity.ui.audit.firstToken'), value: latencyLabel(metrics.value.stream_first_token_ms) },
+  { label: t('purity.ui.audit.totalLatency'), value: latencyLabel(metrics.value.latency_ms) }
 ])
 const modelIdentity = computed(() => report.value?.model_identity || report.value?.modelIdentity || null)
 const wrapperSignals = computed(() => {
@@ -1157,7 +1489,7 @@ async function loadModels() {
     selectedModelId.value = preferredModel(models)
   } catch (error) {
     availableModels.value = []
-    errorMessage.value = (error as { message?: string }).message || '加载模型失败'
+    errorMessage.value = (error as { message?: string }).message || t('purity.ui.loadingModelsFailed')
     runStatus.value = 'error'
   } finally {
     loadingModels.value = false
@@ -1241,7 +1573,7 @@ async function startCheck() {
       throw new Error(await responseErrorMessage(response))
     }
     if (!response.body) {
-      throw new Error('响应体为空')
+      throw new Error(t('purity.ui.emptyResponse'))
     }
     await readNDJSON(response.body)
     if (runStatus.value === 'running') runStatus.value = 'success'
@@ -1251,7 +1583,7 @@ async function startCheck() {
       return
     }
     runStatus.value = 'error'
-    errorMessage.value = error instanceof Error ? error.message : '检测失败'
+    errorMessage.value = error instanceof Error ? error.message : t('purity.ui.checkFailed')
   } finally {
     abortController = null
   }
@@ -1289,7 +1621,7 @@ function handleEventLine(line: string) {
   try {
     handleEvent(JSON.parse(trimmed) as PurityCheckEvent)
   } catch {
-    errorMessage.value = `无法解析检测事件: ${trimmed.slice(0, 120)}`
+    errorMessage.value = t('purity.ui.eventParseFailed', { event: trimmed.slice(0, 120) })
   }
 }
 
@@ -1326,7 +1658,7 @@ function handleEvent(event: PurityCheckEvent) {
       }
       break
     case 'error':
-      errorMessage.value = event.error_message || '检测失败'
+      errorMessage.value = event.error_message || t('purity.ui.checkFailed')
       runStatus.value = 'error'
       break
   }
@@ -1411,6 +1743,39 @@ function channelDisplayName(channel?: string): string {
     google_vertex: 'Google Vertex AI',
     google_ai_studio: 'Google AI Studio',
     openai_native: 'OpenAI API',
+    azure_openai: 'Azure OpenAI',
+    alibaba_bailian: 'Alibaba Cloud Model Studio',
+    baidu_wenxin: 'Baidu Wenxin',
+    baidu_qianfan: 'Baidu Qianfan',
+    ai360: '360 AI',
+    zhipu_bigmodel: 'Zhipu BigModel',
+    tencent_hunyuan: 'Tencent Hunyuan',
+    moonshot: 'Moonshot AI',
+    perplexity: 'Perplexity AI',
+    yi: '01.AI',
+    cohere: 'Cohere',
+    minimax: 'MiniMax',
+    siliconflow: 'SiliconFlow',
+    mistral: 'Mistral AI',
+    deepseek: 'DeepSeek',
+    volcengine_ark: 'Volcengine Ark',
+    xai: 'xAI',
+    zai_coding: 'Z.AI Coding',
+    kimi_coding: 'Kimi Coding',
+    openai_codex_subscription: 'OpenAI Codex Subscription',
+    openrouter: 'OpenRouter',
+    cloudflare_workers_ai: 'Cloudflare Workers AI',
+    dify: 'Dify',
+    coze: 'Coze',
+    fastgpt: 'FastGPT',
+    submodel: 'Submodel',
+    openai_sb: 'OpenAI-SB',
+    openaimax: 'OpenAIMax',
+    ohmygpt: 'OhMyGPT',
+    caipacity: 'CaiPac',
+    aiproxy: 'AIProxy',
+    api2gpt: 'API2GPT',
+    aigc2d: 'AIGC2D',
     anthropic_compatible: 'Claude-compatible',
     openai_compatible: 'OpenAI-compatible',
     gemini_compatible: 'Gemini-compatible',
@@ -1449,6 +1814,104 @@ function dimensionDisplayName(dimension: PurityDimensionResult): string {
     'fingerprint'
   ])
   return known.has(dimension.id) ? t(`purity.detail.dimensionNames.${dimension.id}`) : dimension.name
+}
+
+function dimensionDisplayMessage(dimension: PurityDimensionResult): string {
+  return t(`purity.detail.dimensionMessage.${dimension.status}`)
+}
+
+const knownDimensionCategories = new Set([
+  'identity',
+  'model_identity',
+  'protocol',
+  'capability',
+  'channel_attribution',
+  'official_behavior',
+  'behavior',
+  'request_integrity',
+  'multimodal',
+  'gateway'
+])
+
+function dimensionCategoryLabel(category: string): string {
+  return knownDimensionCategories.has(category) ? t(`purity.detail.categories.${category}`) : t('purity.detail.unknown')
+}
+
+const knownDimensionModes = new Set([
+  'identity',
+  'stream',
+  'non_stream',
+  'provider_native',
+  'provider_constraint',
+  'channel_evidence',
+  'behavior_and_provenance',
+  'official_behavior',
+  'encrypted_reasoning_behavior',
+  'json_schema',
+  'client_tool',
+  'synthetic_image',
+  'evidence_only'
+])
+
+function dimensionModeLabel(mode?: string): string {
+  if (!mode) return '-'
+  return knownDimensionModes.has(mode) ? t(`purity.detail.modes.${mode}`) : t('purity.detail.unknown')
+}
+
+const knownLimitationCodes = new Set([
+  'managed_websearch_unsupported',
+  'managed_websearch_unsupported_by_bedrock',
+  'anthropic_managed_websearch_not_applicable',
+  'gateway_fingerprint_not_protocol_score',
+  'active_probe_not_implemented',
+  'versioned_knowledge_probe_not_run',
+  'synthetic_document_probe_not_run',
+  'signature_probe_not_applicable',
+  'structured_output_probe_not_run',
+  'managed_websearch_not_probed'
+])
+
+function limitationCodeLabel(code: string): string {
+  return knownLimitationCodes.has(code) ? t(`purity.detail.limitationCodes.${code}`) : t('purity.detail.unknown')
+}
+
+function dimensionLimitationsLabel(limitations?: string[]): string {
+  return limitations?.length ? limitations.map(limitationCodeLabel).join(' ') : '-'
+}
+
+const knownCheckNames = new Set([
+  'base_url',
+  'models_schema',
+  'responses_schema',
+  'responses_structured_output',
+  'responses_store_include',
+  'tool_call',
+  'usage',
+  'streaming',
+  'multimodal',
+  'chat_completions',
+  'chat_completions_n',
+  'model_identity',
+  'channel_attribution',
+  'wrapper_fingerprint',
+  'token_audit',
+  'claude_messages_schema',
+  'claude_tool_use',
+  'claude_usage',
+  'claude_streaming',
+  'claude_multimodal',
+  'claude_signature_provenance',
+  'claude_thinking_signature',
+  'claude_thinking_budget',
+  'claude_cache_control_overflow'
+])
+
+function checkDisplayName(check: PurityCheckResult): string {
+  return knownCheckNames.has(check.id) ? t(`purity.detail.checkNames.${check.id}`) : check.id
+}
+
+function checkDisplayMessage(check: PurityCheckResult): string {
+  return t(`purity.detail.checkMessage.${check.status}`)
 }
 
 function scoreDimensionLabel(id: string): string {
@@ -1618,26 +2081,24 @@ function findPreferredModel(models: LocalAccountTestModel[], candidates: string[
 
 function validationDisplayName(definition: ValidationDefinition): string {
   if (isGeminiProvider.value) {
-    if (definition.id === 'schema_integrity') return 'GenerateContent 结构完整性'
-    if (definition.id === 'multimodal') return 'InlineData 多模态'
-    return definition.name
+    if (definition.id === 'schema_integrity') return `GenerateContent ${t('purity.ui.validationNames.schema_integrity')}`
+    if (definition.id === 'multimodal') return `InlineData ${t('purity.ui.validationNames.multimodal')}`
+    return t(`purity.ui.validationNames.${definition.id}`)
   }
-  if (currentProvider.value !== 'anthropic') return definition.name
-  if (definition.id === 'schema_integrity') return 'Messages 结构完整性'
-  if (definition.id === 'multimodal') return 'Image Block 多模态'
-  return definition.name
+  if (currentProvider.value === 'anthropic' && definition.id === 'schema_integrity') return `Messages ${t('purity.ui.validationNames.schema_integrity')}`
+  if (currentProvider.value === 'anthropic' && definition.id === 'multimodal') return `Image Block ${t('purity.ui.validationNames.multimodal')}`
+  return t(`purity.ui.validationNames.${definition.id}`)
 }
 
 function validationWaitingMessage(definition: ValidationDefinition): string {
   if (isGeminiProvider.value) {
-    if (definition.id === 'schema_integrity') return '等待 GenerateContent schema 探测'
-    if (definition.id === 'multimodal') return '等待 inlineData 探测'
-    return definition.message
+    if (definition.id === 'schema_integrity') return `GenerateContent: ${t('purity.ui.validationWaiting.schema_integrity')}`
+    if (definition.id === 'multimodal') return `inlineData: ${t('purity.ui.validationWaiting.multimodal')}`
+    return t(`purity.ui.validationWaiting.${definition.id}`)
   }
-  if (currentProvider.value !== 'anthropic') return definition.message
-  if (definition.id === 'schema_integrity') return '等待 Messages schema 探测'
-  if (definition.id === 'multimodal') return '等待 image block 探测'
-  return definition.message
+  if (currentProvider.value === 'anthropic' && definition.id === 'schema_integrity') return `Messages: ${t('purity.ui.validationWaiting.schema_integrity')}`
+  if (currentProvider.value === 'anthropic' && definition.id === 'multimodal') return `image block: ${t('purity.ui.validationWaiting.multimodal')}`
+  return t(`purity.ui.validationWaiting.${definition.id}`)
 }
 
 function modelIdentityReasonLabel(reason?: string): string {

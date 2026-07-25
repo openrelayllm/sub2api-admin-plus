@@ -52,7 +52,6 @@ func signatureFingerprintDetails(fingerprints []signature.Fingerprint, model str
 	registry, registryErr := signature.DefaultRegistry()
 	for _, fingerprint := range fingerprints {
 		item := map[string]any{
-			"dedup_hash":            fingerprint.DedupHash,
 			"decoded_length_bucket": fingerprint.DecodedLengthBucket,
 			"top_level_fields":      append([]int(nil), fingerprint.TopLevelFields...),
 			"envelope_fields":       append([]int(nil), fingerprint.EnvelopeFields...),

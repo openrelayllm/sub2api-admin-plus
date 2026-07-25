@@ -104,9 +104,9 @@ func applyAssessmentClassification(report *PublicReport, result *AssessmentResul
 		result.ReasonCodes = appendUniqueString(result.ReasonCodes, "wrapper_obfuscation_signal")
 	case result.WrapperMode == "transparent":
 		result.Kind = assessmentKindTransparentRelay
-	case result.Channel == "aws_bedrock" || result.Channel == "google_vertex":
+	case attribution.ChannelKind(result.Channel) == attribution.ChannelKindOfficialCloud:
 		result.Kind = assessmentKindOfficialCloud
-	case result.Channel == "anthropic_native" || result.Channel == "openai_native" || result.Channel == "google_ai_studio":
+	case attribution.ChannelKind(result.Channel) == attribution.ChannelKindOfficialNative:
 		result.Kind = assessmentKindOfficialNative
 	default:
 		result.Kind = assessmentKindCompatible
@@ -158,8 +158,6 @@ func assessmentSummary(report *PublicReport, result *AssessmentResult) string {
 	}
 	if report.CheckTokenUsage {
 		parts = append(parts, fmt.Sprintf("Token 用量审计：%s", meteringStatusDisplayName(result.MeteringStatus)))
-	} else {
-		parts = append(parts, "Token 用量异常审计：未启用，不参与本次结论")
 	}
 	parts = append(parts, fmt.Sprintf("维度覆盖：已执行 %d/%d，已评分 %d 项", result.DimensionExecuted, result.DimensionTotal, result.DimensionScored))
 	return strings.Join(parts, "。") + "。"
@@ -238,6 +236,72 @@ func channelDisplayName(channel string) string {
 		return "Google AI Studio"
 	case "openai_native":
 		return "OpenAI API"
+	case "azure_openai":
+		return "Azure OpenAI"
+	case "alibaba_bailian":
+		return "Alibaba Cloud Model Studio"
+	case "baidu_wenxin":
+		return "Baidu Wenxin"
+	case "baidu_qianfan":
+		return "Baidu Qianfan"
+	case "ai360":
+		return "360 AI"
+	case "zhipu_bigmodel":
+		return "Zhipu BigModel"
+	case "tencent_hunyuan":
+		return "Tencent Hunyuan"
+	case "moonshot":
+		return "Moonshot AI"
+	case "perplexity":
+		return "Perplexity AI"
+	case "yi":
+		return "01.AI"
+	case "cohere":
+		return "Cohere"
+	case "minimax":
+		return "MiniMax"
+	case "siliconflow":
+		return "SiliconFlow"
+	case "mistral":
+		return "Mistral AI"
+	case "deepseek":
+		return "DeepSeek"
+	case "volcengine_ark":
+		return "Volcengine Ark"
+	case "xai":
+		return "xAI"
+	case "zai_coding":
+		return "Z.AI Coding"
+	case "kimi_coding":
+		return "Kimi Coding"
+	case "openai_codex_subscription":
+		return "OpenAI Codex Subscription"
+	case "openrouter":
+		return "OpenRouter"
+	case "cloudflare_workers_ai":
+		return "Cloudflare Workers AI"
+	case "dify":
+		return "Dify"
+	case "coze":
+		return "Coze"
+	case "fastgpt":
+		return "FastGPT"
+	case "submodel":
+		return "Submodel"
+	case "openai_sb":
+		return "OpenAI-SB"
+	case "openaimax":
+		return "OpenAIMax"
+	case "ohmygpt":
+		return "OhMyGPT"
+	case "caipacity":
+		return "CaiPac"
+	case "aiproxy":
+		return "AIProxy"
+	case "api2gpt":
+		return "API2GPT"
+	case "aigc2d":
+		return "AIGC2D"
 	case "kiro":
 		return "Kiro"
 	case "antigravity":

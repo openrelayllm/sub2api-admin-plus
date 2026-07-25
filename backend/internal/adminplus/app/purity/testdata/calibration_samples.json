@@ -326,13 +326,24 @@
     {
       "sample_id": "synthetic-qwen-openai-protocol-mismatch-001",
       "sample_kind": "synthetic",
-      "name": "qwen_under_openai_protocol_is_not_official_identity",
+      "name": "qwen_under_openai_compatible_protocol_keeps_identity",
       "provider": "openai",
       "model_id": "qwen3.7-max",
       "expected_model": "qwen3.7-max",
       "response_model": "qwen3.7-max",
-      "want_status": "fail",
-      "want_reason": "protocol_model_vendor_mismatch"
+      "want_status": "pass",
+      "want_reason": "exact_match"
+    },
+    {
+      "sample_id": "synthetic-qwen-anthropic-compatible-pass-001",
+      "sample_kind": "synthetic",
+      "name": "qwen_under_anthropic_compatible_protocol_keeps_identity",
+      "provider": "anthropic",
+      "model_id": "qwen3.7-max",
+      "expected_model": "qwen3.7-max",
+      "response_model": "qwen3.7-max",
+      "want_status": "pass",
+      "want_reason": "exact_match"
     },
     {
       "sample_id": "synthetic-native-gemini-pass-001",

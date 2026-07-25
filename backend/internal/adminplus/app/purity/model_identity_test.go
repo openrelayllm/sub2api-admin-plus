@@ -55,30 +55,32 @@ func TestModelIdentityDetectsCrossVendorAndKeepsChannelSignalsSeparate(t *testin
 	require.Equal(t, modelIdentityReasonExactMatch, forceMappedReport.ModelIdentity.Reason)
 	require.Equal(t, []string{"antigravity"}, forceMappedReport.ModelIdentity.Evidence["wrapper_signals"])
 }
-func TestModelIdentityDetectsProtocolVendorMismatchForceMappingAlias(t *testing.T) {
-	report := &PublicReport{
-		Provider:      ProviderOpenAI,
-		ModelID:       "claude-opus-4.66",
-		ExpectedModel: "claude-opus-4.66",
-		ResponseModel: "claude-opus-4.66",
+func TestModelIdentityKeepsProtocolAndModelVendorIndependent(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		vendor   string
+	}{
+		{name: "qwen over openai compatible", provider: ProviderOpenAI, model: "qwen3.7-max", vendor: "qwen"},
+		{name: "qwen over anthropic compatible", provider: ProviderAnthropic, model: "qwen3.7-max", vendor: "qwen"},
+		{name: "claude over openai compatible", provider: ProviderOpenAI, model: "claude-opus-4-8", vendor: "anthropic"},
 	}
-	check := buildModelIdentityCheck(report)
-	require.Equal(t, CheckStatusFail, check.Status)
-	require.Equal(t, modelIdentityReasonProtocolVendorMismatch, report.ModelIdentity.Reason)
-	require.Equal(t, "anthropic", report.ModelIdentity.RequestedVendor)
-	require.Equal(t, "openai", report.ModelIdentity.Evidence["protocol_expected_vendor"])
-
-	claudeReport := &PublicReport{
-		Provider:      ProviderAnthropic,
-		ModelID:       "gpt-5.5",
-		ExpectedModel: "gpt-5.5",
-		ResponseModel: "gpt-5.5",
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := &PublicReport{
+				Provider:      test.provider,
+				ModelID:       test.model,
+				ExpectedModel: test.model,
+				ResponseModel: test.model,
+			}
+			check := buildModelIdentityCheck(report)
+			require.Equal(t, CheckStatusPass, check.Status)
+			require.Equal(t, modelIdentityReasonExactMatch, report.ModelIdentity.Reason)
+			require.Equal(t, test.vendor, report.ModelIdentity.RequestedVendor)
+			require.Equal(t, test.vendor, report.ModelIdentity.ResponseVendor)
+		})
 	}
-	claudeCheck := buildModelIdentityCheck(claudeReport)
-	require.Equal(t, CheckStatusFail, claudeCheck.Status)
-	require.Equal(t, modelIdentityReasonProtocolVendorMismatch, claudeReport.ModelIdentity.Reason)
-	require.Equal(t, "openai", claudeReport.ModelIdentity.RequestedVendor)
-	require.Equal(t, "anthropic", claudeReport.ModelIdentity.Evidence["protocol_expected_vendor"])
 }
 func TestModelIdentityDetectsUnexpectedReasoningTokens(t *testing.T) {
 	report := &PublicReport{

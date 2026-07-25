@@ -111,12 +111,6 @@ func evaluateModelIdentity(report *PublicReport) ModelIdentityResult {
 		result.Reason = modelIdentityReasonResponseModelMissing
 		return result
 	}
-	if expectedVendor := protocolExpectedVendor(reportProvider(report)); expectedVendor != "" && requested.Vendor != "" && requested.Vendor != expectedVendor {
-		result.Status = CheckStatusFail
-		result.Reason = modelIdentityReasonProtocolVendorMismatch
-		result.Evidence["protocol_expected_vendor"] = expectedVendor
-		return result
-	}
 	// Anthropic-compatible requests may legitimately be served by Bedrock or
 	// Vertex. A gateway capability list is therefore not model identity evidence
 	// for Claude; only explicit model/response facts and calibrated signatures are.
@@ -358,19 +352,6 @@ func versionString(version []int) string {
 		parts = append(parts, strconv.Itoa(value))
 	}
 	return strings.Join(parts, ".")
-}
-
-func protocolExpectedVendor(provider string) string {
-	switch strings.TrimSpace(provider) {
-	case ProviderOpenAI:
-		return "openai"
-	case ProviderAnthropic:
-		return "anthropic"
-	case ProviderGemini:
-		return "google"
-	default:
-		return ""
-	}
 }
 
 func wrapperVendorMismatch(requestedVendor string, signals []string) string {

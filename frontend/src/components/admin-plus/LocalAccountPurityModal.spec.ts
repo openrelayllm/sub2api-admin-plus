@@ -20,10 +20,11 @@ vi.mock('vue-i18n', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-i18n')>()),
   useI18n: (options: { messages?: Record<string, Record<string, unknown>> }) => ({
     t: (key: string, values?: Record<string, string | number>) => {
+      const locale = localStorage.getItem('sub2api_locale') === 'en' ? 'en' : 'zh'
       const message = key.split('.').reduce<unknown>((current, part) => {
         if (!current || typeof current !== 'object') return undefined
         return (current as Record<string, unknown>)[part]
-      }, options.messages?.zh)
+      }, options.messages?.[locale])
       const text = typeof message === 'string' ? message : key
       return Object.entries(values || {}).reduce((result, [name, value]) => result.replaceAll(`{${name}}`, String(value)), text)
     }
@@ -203,6 +204,123 @@ describe('LocalAccountPurityModal', () => {
     expect(wrapper.text()).not.toContain('Token 用量审计未评分')
     expect(wrapper.text()).not.toContain('sk-dimension-secret')
     expect(wrapper.text()).not.toContain('Bearer secret-value')
+
+    wrapper.unmount()
+  })
+
+  it('localizes backend dimension and check text in English', async () => {
+    localStorage.setItem('sub2api_locale', 'en')
+    apiMocks.listLocalAccountTestModels.mockResolvedValue([{ id: 'claude-opus-4-8', display_name: 'Claude Opus 4.8' }])
+    const report = {
+      provider: 'anthropic',
+      report_id: 'report-admin-en',
+      api_base_host: 'relay.example.com',
+      model_id: 'claude-opus-4-8',
+      expected_model: 'claude-opus-4-8',
+      response_model: 'claude-opus-4-8',
+      check_token_usage: false,
+      status: 'done',
+      progress: 1,
+      score: 100,
+      official_score: 100,
+      compatibility_score: 100,
+      protocol_score: 100,
+      verdict: 'claude_compatible',
+      summary: '后端中文摘要不应显示',
+      assessment: {
+        kind: 'official_cloud_channel',
+        status: 'limited',
+        channel: 'aws_bedrock',
+        channel_status: 'identified',
+        channel_confidence: 0.96,
+        identity_status: 'pass',
+        protocol_status: 'high',
+        wrapper_mode: 'none',
+        metering_status: 'not_tested',
+        dimension_total: 12,
+        dimension_executed: 1,
+        dimension_scored: 0,
+        limitations: ['WebSearch：上游不支持'],
+        reason_codes: []
+      },
+      dimension_matrix: [{
+        id: 'websearch',
+        name: '后端 WebSearch',
+        category: 'capability',
+        status: 'unsupported_by_upstream',
+        score: 0,
+        max_score: 10,
+        scored: false,
+        message: 'AWS Bedrock 官方能力边界不支持 Anthropic 托管 WebSearch。',
+        mode: 'provider_native',
+        source_check_ids: ['claude_messages_schema'],
+        limitations: ['managed_websearch_unsupported_by_bedrock'],
+        details: {}
+      }],
+      validations: [],
+      checks: [{
+        id: 'claude_messages_schema',
+        name: 'Messages 非流式结构',
+        status: 'pass',
+        score: 20,
+        max_score: 20,
+        message: '结构通过。',
+        details: {}
+      }],
+      metrics: {},
+      checked_at: '2026-07-25T00:00:00Z'
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(`${JSON.stringify({ type: 'report', report_id: report.report_id, report })}\n`, {
+      headers: { 'Content-Type': 'application/x-ndjson' }
+    })))
+
+    const wrapper = mount(LocalAccountPurityModal, {
+      attachTo: document.body,
+      props: {
+        show: false,
+        account: {
+          id: 7,
+          name: 'Claude test account',
+          platform: 'anthropic',
+          type: 'apikey',
+          status: 'active',
+          schedulable: true,
+          concurrency: 1,
+          priority: 1,
+          rate_multiplier: 1,
+          auto_pause_on_expired: false,
+          created_at: '2026-07-25T00:00:00Z',
+          updated_at: '2026-07-25T00:00:00Z'
+        }
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            props: ['show', 'title'],
+            template: '<div v-if="show"><slot /><slot name="footer" /></div>'
+          },
+          Select: {
+            props: ['modelValue', 'options'],
+            emits: ['update:modelValue'],
+            template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option v-for="item in options" :key="item.id" :value="item.id">{{ item.display_name }}</option></select>'
+          },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await wrapper.get('select').setValue('claude-opus-4-8')
+    const startButton = wrapper.findAll('button').find((button) => button.text().includes('Start check'))
+    await startButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Official cloud channel · AWS Bedrock · claude-opus-4-8')
+    expect(wrapper.text()).toContain('This capability is outside the upstream channel\'s official support boundary.')
+    expect(wrapper.text()).toContain('AWS Bedrock does not provide Anthropic managed WebSearch.')
+    expect(wrapper.text()).toContain('Messages non-stream schema')
+    expect(wrapper.text()).not.toMatch(/后端中文|官方能力边界|结构通过|managed_websearch_unsupported_by_bedrock/)
 
     wrapper.unmount()
   })

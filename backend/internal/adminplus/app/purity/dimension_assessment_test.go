@@ -63,6 +63,8 @@ func TestBuildAssessmentClassifiesChannelsAndConflicts(t *testing.T) {
 		{name: "bedrock direct", channel: "aws_bedrock", channelStatus: attribution.StatusIdentified, identity: CheckStatusPass, wantKind: assessmentKindOfficialCloud},
 		{name: "bedrock transparent relay", channel: "aws_bedrock", channelStatus: attribution.StatusIdentified, wrapper: []string{"cloudflare"}, identity: CheckStatusPass, wantKind: assessmentKindTransparentRelay},
 		{name: "vertex", channel: "google_vertex", channelStatus: attribution.StatusIdentified, identity: CheckStatusPass, wantKind: assessmentKindOfficialCloud},
+		{name: "azure openai", channel: "azure_openai", channelStatus: attribution.StatusIdentified, identity: CheckStatusPass, wantKind: assessmentKindOfficialCloud},
+		{name: "deepseek direct", channel: "deepseek", channelStatus: attribution.StatusIdentified, identity: CheckStatusPass, wantKind: assessmentKindOfficialNative},
 		{name: "unknown compatible", channel: "unknown", channelStatus: attribution.StatusUnknown, identity: CheckStatusPass, wantKind: assessmentKindCompatible},
 		{name: "identity conflict", channel: "anthropic_native", channelStatus: attribution.StatusIdentified, identity: CheckStatusFail, wantKind: assessmentKindIdentityConflict},
 		{name: "channel conflict", channel: "unknown", channelStatus: attribution.StatusConflicted, identity: CheckStatusPass, wantKind: assessmentKindChannelConflicted},
@@ -76,9 +78,15 @@ func TestBuildAssessmentClassifiesChannelsAndConflicts(t *testing.T) {
 			require.Equal(t, test.wantKind, result.Kind)
 			require.Equal(t, "not_tested", result.MeteringStatus)
 			require.Contains(t, result.ReasonCodes, "token_audit_not_requested")
-			require.Contains(t, result.Summary, "Token 用量异常审计：未启用")
+			require.NotContains(t, result.Summary, "Token 用量")
 		})
 	}
+
+	report := assessmentFixture("anthropic_native", attribution.StatusIdentified, CheckStatusPass)
+	report.CheckTokenUsage = true
+	report.MeteringStatus = capabilityStatusSupported
+	result := buildAssessment(report)
+	require.Contains(t, result.Summary, "Token 用量审计：通过")
 }
 
 func assessmentFixture(channel string, channelStatus string, identityStatus string) *PublicReport {

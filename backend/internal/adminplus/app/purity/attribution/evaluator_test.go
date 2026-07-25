@@ -86,3 +86,47 @@ func TestEvaluateOfficialVertexEndpoint(t *testing.T) {
 	require.Equal(t, "google_vertex", result.Channel)
 	require.InDelta(t, 0.99, result.Confidence, 0.001)
 }
+
+func TestEvaluateKnownLanguageModelEndpoints(t *testing.T) {
+	tests := []struct {
+		host    string
+		channel string
+		kind    string
+	}{
+		{host: "api.deepseek.com", channel: "deepseek", kind: ChannelKindOfficialNative},
+		{host: "dashscope.aliyuncs.com", channel: "alibaba_bailian", kind: ChannelKindOfficialNative},
+		{host: "api.moonshot.cn", channel: "moonshot", kind: ChannelKindOfficialNative},
+		{host: "open.bigmodel.cn", channel: "zhipu_bigmodel", kind: ChannelKindOfficialNative},
+		{host: "ark.cn-beijing.volces.com", channel: "volcengine_ark", kind: ChannelKindOfficialNative},
+		{host: "api.x.ai", channel: "xai", kind: ChannelKindOfficialNative},
+		{host: "api.z.ai", channel: "zai_coding", kind: ChannelKindOfficialNative},
+		{host: "api.kimi.com", channel: "kimi_coding", kind: ChannelKindOfficialNative},
+		{host: "chatgpt.com", channel: "openai_codex_subscription", kind: ChannelKindOfficialNative},
+		{host: "tenant.openai.azure.com", channel: "azure_openai", kind: ChannelKindOfficialCloud},
+		{host: "api.cloudflare.com", channel: "cloudflare_workers_ai", kind: ChannelKindOfficialCloud},
+		{host: "openrouter.ai", channel: "openrouter", kind: ChannelKindAggregator},
+		{host: "api.dify.ai", channel: "dify", kind: ChannelKindAggregator},
+		{host: "api.coze.cn", channel: "coze", kind: ChannelKindAggregator},
+		{host: "fastgpt.run", channel: "fastgpt", kind: ChannelKindAggregator},
+		{host: "llm.submodel.ai", channel: "submodel", kind: ChannelKindAggregator},
+		{host: "api.aiproxy.io", channel: "aiproxy", kind: ChannelKindAggregator},
+	}
+
+	for _, test := range tests {
+		t.Run(test.channel, func(t *testing.T) {
+			result := Evaluate(Input{Provider: "openai", Host: test.host})
+
+			require.Equal(t, StatusIdentified, result.Status)
+			require.Equal(t, test.channel, result.Channel)
+			require.Equal(t, test.kind, ChannelKind(result.Channel))
+			require.InDelta(t, 0.99, result.Confidence, 0.001)
+		})
+	}
+}
+
+func TestEvaluateDoesNotTreatLookalikeCloudHostAsOfficial(t *testing.T) {
+	result := Evaluate(Input{Provider: "openai", Host: "bedrock.amazonaws.com.attacker.example"})
+
+	require.Equal(t, StatusUnknown, result.Status)
+	require.Equal(t, "openai_compatible", result.Channel)
+}

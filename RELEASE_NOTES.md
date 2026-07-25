@@ -1,38 +1,37 @@
 # Release Notes
 
-## v0.43.1 - 2026-07-25
+## v0.43.2 - 2026-07-25
 
 ### 新增
 
-- 新增渠道评分策略契约，按 Anthropic 原生、AWS Bedrock、Google Vertex、OpenAI 原生、Google AI Studio 和兼容协议选择独立评分基线。
-- Claude thinking signature Detail 新增脱敏字段结构、指纹摘要、分类状态、渠道和置信度，不保存或返回原始签名。
-- Admin Plus 与公开检测页同步展示评分渠道、评分维度上限和本渠道排除项。
+- 新增渠道端点注册表，参考 new-api 主流语言模型适配器识别 Anthropic、OpenAI、Google、AWS Bedrock、Azure OpenAI、阿里百炼、百度、智谱、腾讯混元、Moonshot、DeepSeek、Mistral、xAI、火山方舟和 Cloudflare Workers AI 等稳定官方渠道。
+- 独立识别 OpenRouter、Dify、Coze、FastGPT、Submodel、AIProxy 等聚合或应用平台，以及 Kimi Coding、Z.AI Coding 和 OpenAI Codex Subscription；来源已识别不再等同于模型官方原生渠道。
+- 新增渠道评分策略契约：先判定协议和上游渠道，再选择 Anthropic 原生、AWS Bedrock、Google Vertex、OpenAI 原生、Google AI Studio 或兼容协议基线。
+- 检测 Detail 同时展示逐维度状态、得分、来源探针、渠道证据、评分基线、能力边界和脱敏技术字段，并保持默认折叠。
 
 ### 改进
 
-- 模型身份与渠道来源彻底解耦；new-api 支持的多来源能力列表不再被误用为当前 Claude 请求的模型身份冲突证据。
-- AWS Bedrock 和 Google Vertex 使用官方云渠道基线；Bedrock 不支持 Anthropic 托管 WebSearch 的能力边界不会被误扣为协议失败，完整透明中转可得 100 分。
-- Admin Plus 分值条使用后端返回的动态渠道权重，不再固定显示旧的 `20/30/30` 权重。
-- 公开页浅色主题补齐主文字、次级文字、状态色和深色 surface 映射，提升 Detail 在桌面和移动端的对比度。
-- 两端 Detail 与每项来源 Check 保持默认折叠，展开后显示逐项得分、渠道证据和脱敏技术细节。
-- 仅在用户勾选 Token 用量异常检测后显示验证项、计量轴、能力项、分值和审计面板。
+- 模型身份、协议兼容、渠道来源和网关包装完全解耦；Qwen、DeepSeek 等模型经兼容协议时不再被错误判为厂商身份冲突。
+- AWS Bedrock 和 Google Vertex 按官方云渠道能力评分，符合对应渠道规范时可得 100 分；Bedrock 不支持 Anthropic 托管 WebSearch 作为独立能力边界展示，不误扣其他 Messages 能力。
+- Token 用量异常检测保持默认关闭；未勾选时不发送额外 11 轮请求，也不显示验证项、计量轴、能力项、分值、结论或 PDF 章节。
+- Admin Plus 与公开检测页补齐中英文 Detail、探针、模式、限制和固定控件文案，不再在英文界面透传后端中文摘要或内部枚举。
+- 公开页 Detail 使用独立高对比度浅色主题层，桌面、移动端和英文视口的小字号文本均满足可读性要求。
 
-### 修复
+### 安全与准确性
 
-- 修复未启用 Token 审计时后台仍显示“未启用”卡片、验证项和分值占位的问题。
-- 修复公开页请求失败时丢失 `check_token_usage=false`、进而伪造 Token 审计失败项的问题。
-- 修复浅色页面中灰色 Detail 文本、状态文字和图标对比度不足的问题。
-- 清理渠道评分重构后不再使用的检查状态辅助函数，恢复发布 lint。
+- 公开 Detail 不返回内部去重哈希、完整 thinking signature、API Key 或认证字段。
+- 自定义地址、Dify/Coze、任务平台、本地推理和单纯模型名不会被提升为官方渠道强证据，避免多来源中转场景误报。
+- 检测器版本升级到 `channel-attribution/2026-07-25.3`。
 
 ### 测试
 
-- 增加 Bedrock 透明中转 100 分、多来源网关不误判模型身份、动态评分权重和失败路径不显示 Token 审计的回归测试。
-- 覆盖 purity 后端、handler、路由、仓储、Admin Plus 195 项前端测试和公开页 29 项测试，并完成两个前端的类型检查与生产构建。
-- 使用 Playwright 在桌面与移动视口验证浅色 Detail、Bedrock 基线、折叠层级、Token 审计隐藏和横向溢出。
+- 增加 Bedrock 透明中转、DeepSeek 官方端点兼容基线 100 分、多来源模型身份、签名脱敏、渠道端点和 Token 审计隐藏回归测试。
+- Admin Plus 前端 34 个测试文件、196 项测试通过；公开页 6 个测试文件、30 项测试通过。
+- Playwright 验证桌面、390px 移动端和英文视口无横向溢出、Detail 默认折叠、未启用 Token 审计不显示、英文不透传中文，且 Detail 低对比度项为 0。
 
 ### 发布
 
-- 更新版本号到 `0.43.1`。
+- 更新版本号到 `0.43.2`。
 - GitHub Release 只发布 Linux 资产：`linux_amd64`、`linux_arm64` 和 `checksums.txt`。
-- tag 发布同步发布 DockerHub 与 GHCR 多架构镜像：`0.43.1`、`latest`、`0.43` 和 `0`。
-- 裸机 systemd 部署通过 `sub2apiplus upgrade -v v0.43.1` 升级，保留 `0.42.0` 回滚路径。
+- tag 发布同步发布 DockerHub 与 GHCR 多架构镜像：`0.43.2`、`latest`、`0.43` 和 `0`。
+- 裸机 systemd 部署通过 `sub2apiplus upgrade -v v0.43.2` 升级。

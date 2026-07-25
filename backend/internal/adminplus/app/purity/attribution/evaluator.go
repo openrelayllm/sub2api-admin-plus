@@ -8,7 +8,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity/signature"
 )
 
-const DetectorVersion = "channel-attribution/2026-07-25.1"
+const DetectorVersion = "channel-attribution/2026-07-25.3"
 
 const (
 	StatusIdentified = "identified"
@@ -157,18 +157,8 @@ func collectEvidence(input Input) ([]Evidence, []string) {
 		limitations = appendUnique(limitations, "one_or_more_signatures_could_not_be_safely_parsed")
 	}
 
-	host := strings.ToLower(strings.TrimSpace(input.Host))
-	switch {
-	case hostNameEquals(host, "api.anthropic.com"):
-		appendEvidence(endpointEvidence("anthropic_native", "official_anthropic_endpoint", observedAt))
-	case hostNameEquals(host, "api.openai.com"):
-		appendEvidence(endpointEvidence("openai_native", "official_openai_endpoint", observedAt))
-	case hostNameEquals(host, "generativelanguage.googleapis.com"):
-		appendEvidence(endpointEvidence("google_ai_studio", "official_google_ai_endpoint", observedAt))
-	case strings.Contains(host, "bedrock") && strings.Contains(host, "amazonaws.com"):
-		appendEvidence(endpointEvidence("aws_bedrock", "official_aws_bedrock_endpoint", observedAt))
-	case strings.Contains(host, "aiplatform.googleapis.com") || strings.Contains(host, "vertex"):
-		appendEvidence(endpointEvidence("google_vertex", "official_google_vertex_endpoint", observedAt))
+	if endpoint, ok := matchEndpointProfile(input.Host); ok {
+		appendEvidence(endpointEvidence(endpoint.Channel, endpoint.Code, observedAt))
 	}
 
 	headers := mergeHeaders(input.HeaderSets)
@@ -388,11 +378,6 @@ func headerPresent(headers map[string]string, keys ...string) bool {
 		}
 	}
 	return false
-}
-
-func hostNameEquals(host string, expected string) bool {
-	host = strings.TrimSpace(strings.Split(host, ":")[0])
-	return strings.EqualFold(host, expected)
 }
 
 func normalizeLegacyChannel(channel string) string {
