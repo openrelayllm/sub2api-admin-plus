@@ -1,6 +1,6 @@
 # Release Notes
 
-## v0.43.0 - 2026-07-25
+## v0.43.1 - 2026-07-25
 
 ### 新增
 
@@ -22,6 +22,7 @@
 - 修复未启用 Token 审计时后台仍显示“未启用”卡片、验证项和分值占位的问题。
 - 修复公开页请求失败时丢失 `check_token_usage=false`、进而伪造 Token 审计失败项的问题。
 - 修复浅色页面中灰色 Detail 文本、状态文字和图标对比度不足的问题。
+- 清理渠道评分重构后不再使用的检查状态辅助函数，恢复发布 lint。
 
 ### 测试
 
@@ -31,7 +32,7 @@
 
 ### 发布
 
-- 更新版本号到 `0.43.0`。
+- 更新版本号到 `0.43.1`。
 - GitHub Release 只发布 Linux 资产：`linux_amd64`、`linux_arm64` 和 `checksums.txt`。
-- tag 发布同步发布 DockerHub 与 GHCR 多架构镜像：`0.43.0`、`latest`、`0.43` 和 `0`。
-- 裸机 systemd 部署通过 `sub2apiplus upgrade -v v0.43.0` 升级，保留 `0.42.0` 回滚路径。
+- tag 发布同步发布 DockerHub 与 GHCR 多架构镜像：`0.43.1`、`latest`、`0.43` 和 `0`。
+- 裸机 systemd 部署通过 `sub2apiplus upgrade -v v0.43.1` 升级，保留 `0.42.0` 回滚路径。

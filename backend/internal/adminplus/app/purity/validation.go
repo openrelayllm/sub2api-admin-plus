@@ -295,17 +295,3 @@ func hasValidation(validations []ValidationResult, id string) bool {
 	}
 	return false
 }
-
-func hasCheckStatus(checks []CheckResult, id string, statuses ...string) bool {
-	for _, check := range checks {
-		if check.ID != id {
-			continue
-		}
-		for _, status := range statuses {
-			if check.Status == status {
-				return true
-			}
-		}
-	}
-	return false
-}
