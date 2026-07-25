@@ -9,6 +9,10 @@ const (
 	scorePolicyGoogleVertex       = "google_vertex_claude"
 	scorePolicyOpenAINative       = "openai_responses_native"
 	scorePolicyGoogleAIStudio     = "google_ai_studio_native"
+	scoreFailureFullDimension     = "full_dimension_deduction"
+	clientImpactNone              = "none"
+	clientImpactLimited           = "limited"
+	clientImpactBreaking          = "breaking"
 )
 
 type scorePolicyDefinition struct {
@@ -56,11 +60,11 @@ func compatibleScorePolicy(channel string) scorePolicyDefinition {
 		Channel:  channel,
 		Baseline: "protocol_compatibility",
 		Dimensions: []ScorePolicyDimension{
-			{ID: "tag_check", ValidationID: "llm_fingerprint", MaxScore: 10},
-			{ID: "structure", ValidationID: "schema_integrity", MaxScore: 20},
-			{ID: "behavior", ValidationID: "behavior", MaxScore: 30},
-			{ID: "signature_proto", ValidationID: "signature", MaxScore: 30},
-			{ID: "multimodal", ValidationID: "multimodal", MaxScore: 10},
+			scorePolicyDimension("tag_check", "llm_fingerprint", 10, clientImpactBreaking),
+			scorePolicyDimension("structure", "schema_integrity", 20, clientImpactBreaking),
+			scorePolicyDimension("behavior", "behavior", 30, clientImpactLimited),
+			scorePolicyDimension("signature_proto", "signature", 30, clientImpactLimited),
+			scorePolicyDimension("multimodal", "multimodal", 10, clientImpactLimited),
 		},
 		ExcludedDimensions: []string{"websearch", "fingerprint"},
 	}
@@ -79,13 +83,23 @@ func awsBedrockScorePolicy() scorePolicyDefinition {
 		Channel:  "aws_bedrock",
 		Baseline: "aws_bedrock_messages",
 		Dimensions: []ScorePolicyDimension{
-			{ID: "tag_check", ValidationID: "llm_fingerprint", MaxScore: 10},
-			{ID: "structure", ValidationID: "schema_integrity", MaxScore: 25},
-			{ID: "behavior", ValidationID: "behavior", MaxScore: 35},
-			{ID: "signature_proto", ValidationID: "signature", MaxScore: 20},
-			{ID: "multimodal", ValidationID: "multimodal", MaxScore: 10},
+			scorePolicyDimension("tag_check", "llm_fingerprint", 10, clientImpactBreaking),
+			scorePolicyDimension("structure", "schema_integrity", 25, clientImpactBreaking),
+			scorePolicyDimension("behavior", "behavior", 35, clientImpactLimited),
+			scorePolicyDimension("signature_proto", "signature", 20, clientImpactLimited),
+			scorePolicyDimension("multimodal", "multimodal", 10, clientImpactLimited),
 		},
 		ExcludedDimensions: []string{"websearch", "fingerprint"},
+	}
+}
+
+func scorePolicyDimension(id string, validationID string, maxScore int, clientImpact string) ScorePolicyDimension {
+	return ScorePolicyDimension{
+		ID:            id,
+		ValidationID:  validationID,
+		MaxScore:      maxScore,
+		ClientImpact:  clientImpact,
+		FailurePolicy: scoreFailureFullDimension,
 	}
 }
 

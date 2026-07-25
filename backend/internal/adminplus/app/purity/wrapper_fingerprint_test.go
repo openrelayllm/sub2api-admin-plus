@@ -62,7 +62,6 @@ func TestWrapperFingerprintSignals_CoversSub2APIModelMappingLeak(t *testing.T) {
 
 	report.WrapperSignals = signals
 	require.True(t, hasWrapperObfuscationFingerprint(report))
-	require.Equal(t, 55, wrapperPurityScoreCap(report))
 }
 func TestWrapperFingerprintSignals_CoversNewAPIHeaderFingerprint(t *testing.T) {
 	signals := wrapperFingerprintSignals("relay.example.com", map[string]string{
@@ -98,14 +97,13 @@ func TestWrapperFingerprintSignals_CoversCLIProxyAPICodexAndSignatureBridge(t *t
 	require.Contains(t, signals, "cliproxyapi-model-mapping")
 	require.Contains(t, signals, "cliproxyapi-signature-bridge")
 }
-func TestWrapperPurityScoreCap_DistinguishesTransparentRelayAndObfuscation(t *testing.T) {
+func TestWrapperFingerprintDistinguishesTransparentRelayAndObfuscation(t *testing.T) {
 	transparent := &PublicReport{
 		Provider:       ProviderOpenAI,
 		WrapperSignals: []string{"cliproxyapi", "new-api", "sub2api"},
 	}
 	require.False(t, hasWrapperObfuscationFingerprint(transparent))
 	require.Equal(t, CheckStatusPass, buildWrapperFingerprintCheck(transparent).Status)
-	require.Equal(t, 100, wrapperPurityScoreCap(transparent))
 	require.Contains(t, summaryForReport(transparent), "透明中转/兼容网关")
 	require.Contains(t, summaryForReport(transparent), "未显示模型或协议混淆")
 
@@ -115,7 +113,6 @@ func TestWrapperPurityScoreCap_DistinguishesTransparentRelayAndObfuscation(t *te
 	}
 	require.True(t, hasWrapperObfuscationFingerprint(obfuscated))
 	require.Equal(t, CheckStatusFail, buildWrapperFingerprintCheck(obfuscated).Status)
-	require.Equal(t, 55, wrapperPurityScoreCap(obfuscated))
 	require.Contains(t, summaryForReport(obfuscated), "模型或协议混淆风险")
 }
 func TestWrapperFingerprintSignals_CoversNewAPIErrorBodyFingerprints(t *testing.T) {

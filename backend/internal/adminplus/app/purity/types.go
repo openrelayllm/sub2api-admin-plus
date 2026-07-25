@@ -99,6 +99,8 @@ type PublicReport struct {
 	MeteringStatusCompat        string               `json:"meteringStatus"`
 	ScorePolicy                 ScorePolicyResult    `json:"score_policy,omitempty"`
 	ScorePolicyCompat           ScorePolicyResult    `json:"scorePolicy,omitempty"`
+	ScoreAdjustments            []ScoreAdjustment    `json:"score_adjustments,omitempty"`
+	ScoreAdjustmentsCompat      []ScoreAdjustment    `json:"scoreAdjustments,omitempty"`
 	Verdict                     string               `json:"verdict"`
 	VerdictKey                  string               `json:"verdictKey,omitempty"`
 	Summary                     string               `json:"summary"`
@@ -212,9 +214,24 @@ type ScorePolicyResult struct {
 }
 
 type ScorePolicyDimension struct {
-	ID           string `json:"id"`
-	ValidationID string `json:"validation_id"`
-	MaxScore     int    `json:"max_score"`
+	ID            string `json:"id"`
+	ValidationID  string `json:"validation_id"`
+	MaxScore      int    `json:"max_score"`
+	ClientImpact  string `json:"client_impact"`
+	FailurePolicy string `json:"failure_policy"`
+}
+
+type ScoreAdjustment struct {
+	ID           string   `json:"id"`
+	Category     string   `json:"category"`
+	ReasonCode   string   `json:"reason_code"`
+	CaseID       string   `json:"case_id"`
+	ClientImpact string   `json:"client_impact"`
+	ImpactScope  string   `json:"impact_scope"`
+	BaseScore    int      `json:"base_score"`
+	Points       int      `json:"points"`
+	ResultScore  int      `json:"result_score"`
+	Evidence     []string `json:"evidence,omitempty"`
 }
 
 type CapabilityResult struct {

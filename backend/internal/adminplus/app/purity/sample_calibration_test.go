@@ -33,7 +33,6 @@ type wrapperCalibrationCase struct {
 	WantSignals      []string            `json:"want_signals"`
 	DenySignals      []string            `json:"deny_signals"`
 	WantObfuscation  bool                `json:"want_obfuscation"`
-	WantScoreCap     int                 `json:"want_score_cap"`
 }
 
 type modelIdentityCalibrationCase struct {
@@ -163,9 +162,6 @@ func TestCalibrationSamples_WrapperFingerprints(t *testing.T) {
 
 			report.WrapperSignals = signals
 			require.Equalf(t, tc.WantObfuscation, hasWrapperObfuscationFingerprint(report), "signals=%v", signals)
-			if tc.WantScoreCap > 0 {
-				require.Equal(t, tc.WantScoreCap, wrapperPurityScoreCap(report))
-			}
 		})
 	}
 }

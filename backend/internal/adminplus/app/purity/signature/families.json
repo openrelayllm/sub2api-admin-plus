@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-25.1",
+  "version": "2026-07-25.2",
   "families": [
     {
       "id": "anthropic-native-2026-07",
@@ -28,6 +28,21 @@
       "source_type": "authorized_redacted",
       "valid_from": "2026-07-25",
       "limitations": ["Calibrated samples do not yet cover every AWS region or inference profile"]
+    },
+    {
+      "id": "aws-bedrock-anthropic-mask-2026-07",
+      "channel": "aws_bedrock",
+      "model_families": ["claude"],
+      "required_top_level_fields": [2, 3],
+      "required_envelope_fields": [1, 2, 3, 4, 5],
+      "required_metadata_fields": [1, 2, 3, 5, 6, 7, 8, 11],
+      "forbidden_metadata_fields": [],
+      "min_samples": 1,
+      "sample_count": 1,
+      "source_type": "authorized_redacted",
+      "valid_from": "2026-07-25",
+      "limitations": ["This mixed family identifies the upstream but cannot determine which gateway component injected or retained the Anthropic-native metadata"],
+      "risk_codes": ["bedrock_anthropic_signature_mask"]
     }
   ]
 }

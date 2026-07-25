@@ -144,6 +144,7 @@ func cloneAttributionEvidence(evidence []attribution.Evidence) []attribution.Evi
 	out := append([]attribution.Evidence(nil), evidence...)
 	for index := range out {
 		out[index].Limitations = append([]string(nil), evidence[index].Limitations...)
+		out[index].RiskCodes = append([]string(nil), evidence[index].RiskCodes...)
 	}
 	return out
 }

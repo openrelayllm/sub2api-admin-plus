@@ -37,10 +37,10 @@
 - 后端已将纯度检测主流程从单一大文件拆分为 `openai.go`、`claude.go`、`report.go`、`evaluation.go`、`validation.go`、`events.go`、`http_probe.go`、`url.go`、`model_identity.go`、`wrapper_fingerprint.go`、`channel_signals.go` 等职责文件，`service.go` 保留对外入口和路由控制，并由 `architecture_test.go` 防止探针/评分/渠道细节回流。
 - 当前可执行的原生探针流为 OpenAI 协议、Anthropic Claude 协议与 Gemini API Key 协议；`openai-compatible`、`openai compat`、`claude-compatible`、`anthropic-compatible`、`gemini-compatible`、`google ai studio` 等 provider 别名会归一到对应协议流。Qwen、GLM、Doubao、MiniMax、Hunyuan、Kimi、Mimo 等当前作为兼容/包装信号和模型身份厂商识别参与评分，尚未实现独立原生探针流。
 - 渠道 detector 已按子文件夹拆分到 `backend/internal/adminplus/app/purity/channels/<channel>/detector.go`，覆盖 OpenAI、Claude、Gemini、Antigravity、Bedrock、CLIProxyAPI、new-api、sub2api、Qwen、GLM、Doubao、MiniMax、Hunyuan、Kimi、Mimo、xAI、DeepSeek。
-- `Base URL` 只作为链路信息，不单独扣分、不单独封顶、不禁止 `official_*` verdict；只有模型身份、协议、usage/cache、签名、SSE 或错误体混淆证据触发降级。
+- `Base URL` 只作为链路信息，不单独扣分、不禁止 `official_*` verdict。总分先按已识别渠道选择基线，再按客户端能力分项计分；仅来源不透明且不影响客户端时额外扣 5 分。
 - 已新增 `model_identity` 和 `wrapper_fingerprint` 检查项，并在报告中输出 `expected_model`、`response_model`、`wrapper_signals`、`model_identity` 及 camelCase 兼容字段。
-- Admin Plus Vue 前端已在纯度检测弹窗首屏展示请求模型、响应模型、模型身份、疑似上游厂商、包装信号，并补充 `model_identity` / `wrapper_fingerprint` 验证项，PDF 导出已包含模型身份、疑似上游厂商和包装证据。
-- 独立站 `proxyaiweb` React 前端已同步 schema、验证项、运行中/失败报告字段；结果页保留 verdict、核心指标、验证进度和 Token audit 报告，已移除重复的分数卡、证据卡和后端探针明细块；新增文案走 i18n，`src/lib/i18n.tsx` 仅保留运行时入口，翻译字典已拆到 `src/lib/i18n/`，PDF 导出已包含模型身份、疑似上游厂商和包装证据；模型控件支持 OpenAI/Claude/Gemini 官方预设、主流国产兼容模型预设和可编辑目标模型 ID。
+- Admin Plus Vue 前端已展示渠道评分基线、逐项分数、`client_impact`、`score_adjustments` 和可独立展开的 Detail；Token 用量异常检测默认关闭，未勾选时不展示相关验证、维度或面板。
+- 独立站 `proxyaiweb` React 前端已同步相同的评分与 Detail 契约，支持中英日韩 i18n；报告 Detail 默认折叠，`not_run` 与未请求的 Token 审计隐藏，`not_applicable` / `unsupported_by_upstream` 继续作为已判定结论展示；品牌链接会重新载入首页并清空当前检测状态。
 - OpenAI/Claude/Gemini Token audit 已增加独立总超时与单轮超时；OpenAI audit 已拆分为 `cache_probe` 与 `context_replay` 两类样本，前 8 轮使用稳定长前缀与同一 `prompt_cache_key` 观察 `cached_tokens` 字段，后 3 轮按 Codex HTTP 形态重放完整 input 历史，不再把普通 HTTP `previous_response_id` 作为主判定；Claude audit 独立走 Messages 历史重放、Claude Code 形态 system 分段和 `cache_control`，统计 `cache_creation_input_tokens` / `cache_read_input_tokens` 字段存在性、缓存读写和历史链完整性；Gemini audit 独立走 GenerateContent `contents` 历史重放、`systemInstruction` 和 `tools.functionDeclarations` 形态，统计 `usageMetadata.promptTokenCount` / `candidatesTokenCount` / `totalTokenCount` / `cachedContentTokenCount` 字段。参数不兼容时 OpenAI 会按规则降级为最小 Responses usage 请求，并在 `TokenAuditSample` 中透出 `status_code`、`error_class`、`error_message`。前端图表只绘制有 usage/成本的样本，明细表必须保留所有轮次的 0 值和失败诊断；倍率展示优先使用报告级 `overall_ratio/overallRatio`，再回退旧 `multiplier`；平台计费倍率单独展示为 `billing_multiplier/billingMultiplier`，来源可能是后台账号配置 `account_config`，也可能是在兼容站支持 `/v1/usage` 时由审计前后 `usage.total.actual_cost / usage.total.cost` 增量推导出的 `usage_delta`，不覆盖 usage 推导倍率。
 - OpenAI 兼容接口如果不支持 `/v1/responses` 但 `/v1/chat/completions` 可用，会执行 3 轮轻量 Chat Completions usage 回退审计，输出可展示的 `token_audit.samples/rows` 和 `chat_completions_audit_fallback` anomaly；该回退只验证 usage 是否可读，不等价于完整 Responses 上下文重放、缓存和成本倍率审计。
 - 网页/公开 API 默认仍阻断私网 Base URL，避免 SSRF；当请求真实 `RemoteAddr` 和 HTTP `Host` 都是本机回环地址时，允许 Claude Code / Codex 等本地客户端测试 `localhost` / `127.0.0.1` 上的本地反代。公网域名经本机反向代理进入时不因 `RemoteAddr=127.0.0.1` 自动放行。
@@ -503,26 +503,22 @@ Admin Plus 已经具备本地账号、供应商、渠道和检测能力。随着
 
 ## 12. 评分模型
 
-### 12.1 官方纯度评分
+### 12.1 渠道评分基线
 
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| tag_check | 10 | Base URL 链路信息、模型列表、基础 LLM 指纹 |
-| structure | 20 | 非流式结构完整性 |
-| behavior | 30 | 工具调用和流式行为 |
-| signature_proto | 30 | usage、签名、重放链、缓存协议 |
-| multimodal | 10 | 多模态输入能力 |
-| token_audit | 10 | token usage、缓存、成本倍率、重放链审计 |
-| model_identity | 20 | 模型身份一致性，作为扣分项或独立校正项 |
+| 基线 | tag_check | structure | behavior | signature_proto | multimodal | 排除项 |
+|------|----------:|----------:|---------:|----------------:|-----------:|--------|
+| compatible_protocol / Anthropic 原生 / OpenAI 原生 / Google AI Studio | 10 | 20 | 30 | 30 | 10 | websearch、fingerprint |
+| AWS Bedrock / Google Vertex Claude | 10 | 25 | 35 | 20 | 10 | websearch、fingerprint |
 
 说明：
 
+- 先使用 `channel_attribution` 选择 `score_policy`。AWS Bedrock 必须按 `aws_bedrock_messages` 评分，不能因不支持 Anthropic 托管 WebSearch 被误罚。
+- 每个评分维度都输出 `client_impact` 与 `failure_policy=full_dimension_deduction`，失败时该维度为 0。
 - 当 token audit 实际执行时，核心协议/行为/签名/多模态 100 分按 90% 折算，再叠加 token audit 的 0/5/10 分，避免 100+10 后封顶导致 warning 仍显示 100。
 - 用户主动跳过 token audit、或当前协议暂未实现多轮 token audit 时，token audit 只作为能力说明，不压低官方纯度分。
-- Base URL 官方域名只作为链路信息，不单独封顶、不单独禁止 official verdict。
+- Base URL 官方域名只作为链路信息，不单独扣分、不单独禁止 official verdict。
 - 存在透明中转信号时不直接按风险重罚；透明中转只说明链路形态，不说明模型不纯。
-- 存在混淆风险信号时 official_score 必须进一步封顶。
-- 模型身份 fail 时 official verdict 直接禁止。
+- 模型身份 fail 时对应 `tag_check` 维度满扣，并禁止 official verdict。
 
 ### 12.2 兼容评分
 
@@ -538,18 +534,17 @@ Admin Plus 已经具备本地账号、供应商、渠道和检测能力。随着
 
 兼容入口可以得高 compatibility_score，但仅凭协议兼容不能成为 official verdict；仍需通过模型身份、usage/cache、签名或等价官方行为证据。
 
-### 12.3 封顶规则
+### 12.3 扣分与调整规则
 
-| 条件 | official_score 上限 |
-|------|----------------------|
-| 仅 Base URL 为自定义/中转域名 | 不封顶 |
-| 仅存在透明中转信号，且未发现混淆证据 | 不封顶 |
-| 存在 Codex 身份混淆、ForceMapping/model alias 或签名桥接信号 | 55 |
-| Claude wrapper 且 signature 或 token audit 异常 | 45 |
-| 行为和签名同时失败 | 35 |
-| 模型身份 fail | 50 |
-| 跨厂商伪装且响应模型证据明确 | 40 |
-| 鉴权或基础连接失败 | 0 |
+| 条件 | 处理 |
+|------|------|
+| 评分维度对应 validation 失败 | 该维度执行 `full_dimension_deduction`，分数为 0 |
+| 模型身份冲突但 `tag_check` 原始分仍大于 0 | `PURITY-CLIENT-IDENTITY-001`：`tag_check` 满扣，`client_impact=breaking` |
+| 仅存在来源/包装不透明证据，且没有客户端能力失败 | 来源透明度扣 5 分，`client_impact=none` |
+| Bedrock 签名同时保留 Anthropic 原生 metadata | `PURITY-BEDROCK-MASK-001`：仍归因 AWS Bedrock，协议可得 100，总分 95 |
+| 同一证据已触发客户端能力分项失败 | 不再叠加来源透明度扣分 |
+| 仅 Base URL 或透明中转程序名 | 不扣分 |
+| 鉴权或基础连接失败 | 总分 0，verdict 为 invalid/unavailable |
 
 ## 13. 总体架构
 
@@ -598,7 +593,7 @@ backend/internal/adminplus/app/purity/
   types.go                   # 公共类型
   provider.go                # provider 常量和归一化
   report.go                  # report finalize、兼容字段、summary
-  evaluation.go              # verdict、score cap、summary policy
+  evaluation.go              # verdict、渠道评分、分项扣分与总分调整
   validation.go              # validation/check 聚合
   events.go                  # SSE event、clone、progress、metrics
   http_probe.go              # HTTP 请求、响应头、错误脱敏
@@ -656,7 +651,7 @@ backend/internal/adminplus/app/purity/
 | `claude/*` | Claude Messages、签名、Claude token audit | 不识别 OpenAI Responses 专属行为 |
 | `channels/*` | 单个渠道信号识别 | 不直接改分数、不发 HTTP |
 | `model_identity.go` | 模型名规范化、alias/降级/跨厂商判断 | 不发 HTTP、不依赖某个渠道实现 |
-| `evaluation.go` | verdict 和封顶规则 | 不解析 HTTP、不拼 payload |
+| `evaluation.go` | verdict、渠道评分、分项扣分和总分调整 | 不解析 HTTP、不拼 payload |
 | `report.go` | 报告字段、兼容字段、summary | 不执行检测 |
 
 ## 15. 核心流程图
@@ -874,7 +869,7 @@ sequenceDiagram
   Agg->>D: Detect(context)
   D-->>Agg: []signal
   Agg-->>Eval: wrapper_signals
-  Eval-->>Test: verdict/score cap 符合预期
+  Eval-->>Test: verdict/score policy/adjustment 符合预期
 ```
 
 ## 17. 数据对象
@@ -1033,10 +1028,10 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 
 1. 最终 verdict：官方 / 兼容 / 兼容受限 / 不可用。
 2. 分数和评分来源：报告契约保留总分、官方纯度分和兼容分；前端可按页面密度合并展示，避免重复堆叠分数卡。
-3. 是否存在包装/反代信号。
+3. 已识别渠道、评分基线、包装/反代信号与可审计总分调整。
 4. 请求模型和响应模型是否一致。
 
-公开页 `proxyaiweb` 应优先展示 verdict、核心指标、验证项和 Token audit。Admin Plus 弹窗可展示更完整的模型身份与包装证据。两端都不应把相同信息重复渲染为分数卡、证据卡和后端探针明细三套列表。
+公开页 `proxyaiweb` 与 Admin Plus 都必须提供默认折叠的 Detail，逐项展示分数、来源探针、`client_impact` 和 `score_adjustments`。未执行的 `not_run` 项不展示；未勾选 Token 用量异常检测时，相关验证、维度和面板全部隐藏。
 
 ### 19.2 检查项展示
 
@@ -1090,7 +1085,7 @@ Token audit 报告必须同时支持“有 usage 的可展示样本”和“无 
 | 模型身份 | 同名 pass、latest warn、版本降级 fail、跨厂商 fail、低配替代 fail、协议厂商与模型厂商不一致 fail |
 | Claude signature | 官方拒绝 invalid thinking.signature，兼容错误接受时 fail |
 | Token audit | OpenAI prompt_cache_key 与 Codex input 历史重放；Claude cache_control、Messages 历史重放、cache_creation/cache_read |
-| 评分 | 透明中转不封顶、混淆风险封顶、模型身份 fail 封顶 |
+| 评分 | 渠道基线、客户端失败项满扣、来源透明度 -5、同证据不重复处罚、标准 Bedrock 100 / mask 95 |
 | 报告兼容字段 | snake_case 与 camelCase 同步 |
 
 ### 21.2 集成测试

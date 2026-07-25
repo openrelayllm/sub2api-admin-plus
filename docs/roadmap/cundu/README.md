@@ -1104,6 +1104,7 @@ Claude Opus 4.8
 | Anthropic 原生 | pass | pass | anthropic_native/high | none | official_native |
 | Bedrock 直连 | pass | pass | aws_bedrock/high | none | official_cloud_channel |
 | Bedrock + new-api | pass | pass | aws_bedrock/high | new-api | transparent_relay |
+| Bedrock + Anthropic 元数据伪装 | pass | pass | aws_bedrock/high | obfuscating | compatibility_risk；协议 100，总分 95 |
 | Vertex 直连 | pass | pass | google_vertex/high | none | official_cloud_channel |
 | 未知兼容实现 | pass | pass | unknown | compatible | compatible |
 | 模型降级 | pass | fail | any | any | identity_conflict |
@@ -1111,7 +1112,37 @@ Claude Opus 4.8
 | 流/非流来源冲突 | pass | warn | conflicted | any | compatible_with_limitations |
 | 签名解析失败 | pass | pass | unknown | any | compatible，不因解析失败判非 Claude |
 
-### 14.1 parser 测试
+### 14.1 渠道基线与扣分规则
+
+评分顺序固定为：
+
+1. 先根据已识别渠道选择评分基线，例如 `aws_bedrock_messages`，不能用 Anthropic 原生能力要求误罚 Bedrock。
+2. 再对真实执行的客户端能力探针计分。结构、行为、签名、多模态或模型身份项失败时，执行
+   `failure_policy=full_dimension_deduction`，该项获得 0 分；该失败已经包含在基础分中，不得再次封顶或重复扣分。
+3. 只有客户端能力均未失败、但存在来源或包装不透明证据时，才执行来源透明度小额扣分。当前规则固定扣 5 分，
+   `client_impact=none`，并明确说明不影响本轮客户端使用。
+4. 同一证据同时符合能力失败和来源风险时，只保留能力项满扣，不再叠加来源透明度扣分。
+5. `not_run` 不参与结论且前端不展示；`not_applicable` 与 `unsupported_by_upstream` 是已经得出的渠道能力结论，应继续展示。
+
+当前可审计判例：
+
+| case_id | 条件 | 渠道 | 客户端影响 | 扣分 |
+| --- | --- | --- | --- | ---: |
+| `PURITY-BEDROCK-MASK-001` | 签名同时含 Bedrock 来源字段族和 Anthropic 原生 metadata 特征 | `aws_bedrock` | `none`，仅影响来源透明度 | 5 |
+| `PURITY-CLIENT-IDENTITY-001` | 模型身份验证失败，但身份维度原本仍获得分数 | 按已识别渠道 | `breaking` | 身份维度满扣 |
+
+`PURITY-BEDROCK-MASK-001` 的预期输出是：
+
+```text
+上游渠道：AWS Bedrock（identified）
+协议兼容：100/100
+包装模式：obfuscating
+客户端影响：none
+总分调整：100 - 5 = 95
+原因：影响渠道来源判断，不影响本轮 Messages、工具、流式、签名行为或多模态客户端能力
+```
+
+### 14.2 parser 测试
 
 - 空字符串、非法 Base64、超长 Base64。
 - 截断 varint、溢出 varint、field number 0。
@@ -1121,7 +1152,7 @@ Claude Opus 4.8
 - 随机二进制 fuzz。
 - 原生/Bedrock/Vertex 脱敏 fixtures。
 
-### 14.2 evaluator 测试
+### 14.3 evaluator 测试
 
 - 单一弱 header 不产生 high confidence。
 - 多个相关 header 不重复加权。
@@ -1130,7 +1161,7 @@ Claude Opus 4.8
 - 已知 wrapper + 已知 upstream 可同时输出。
 - unknown family 不触发 official/identity fail。
 
-### 14.3 端到端测试
+### 14.4 端到端测试
 
 - SSE 完整生命周期。
 - 非流 message。

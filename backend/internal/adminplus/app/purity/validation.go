@@ -228,6 +228,9 @@ func validationWeightedScore(report *PublicReport, validationID string, weight i
 		if validation.ID != validationID {
 			continue
 		}
+		if validation.Status == CheckStatusFail {
+			return 0
+		}
 		score, ok := validationCheckScore(report, validation, weight)
 		if ok {
 			return score

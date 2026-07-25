@@ -105,6 +105,7 @@ func syncReportCompat(report *PublicReport) {
 	report.MeteringScoreCompat = report.MeteringScore
 	report.MeteringStatusCompat = report.MeteringStatus
 	report.ScorePolicyCompat = cloneScorePolicy(report.ScorePolicy)
+	report.ScoreAdjustmentsCompat = cloneScoreAdjustments(report.ScoreAdjustments)
 	report.ChannelAttributionCompat = cloneChannelAttribution(report.ChannelAttribution)
 	report.CapabilityMatrixCompat = cloneCapabilityMatrix(report.CapabilityMatrix)
 	report.DimensionMatrixCompat = cloneDimensionMatrix(report.DimensionMatrix)
@@ -237,6 +238,7 @@ func buildPublicSummary(report *PublicReport) map[string]any {
 		"metering_score":          report.MeteringScore,
 		"metering_status":         report.MeteringStatus,
 		"score_policy":            report.ScorePolicy,
+		"score_adjustments":       report.ScoreAdjustments,
 		"verdict":                 report.Verdict,
 		"summary":                 report.Summary,
 		"error":                   report.Error,
@@ -294,6 +296,14 @@ func cloneScorePolicy(value ScorePolicyResult) ScorePolicyResult {
 	out := value
 	out.Dimensions = append([]ScorePolicyDimension{}, value.Dimensions...)
 	out.ExcludedDimensions = append([]string{}, value.ExcludedDimensions...)
+	return out
+}
+
+func cloneScoreAdjustments(values []ScoreAdjustment) []ScoreAdjustment {
+	out := append([]ScoreAdjustment(nil), values...)
+	for index := range out {
+		out[index].Evidence = append([]string(nil), values[index].Evidence...)
+	}
 	return out
 }
 

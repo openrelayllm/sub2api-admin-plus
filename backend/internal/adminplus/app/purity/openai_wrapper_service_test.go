@@ -84,7 +84,9 @@ func TestServiceRunPublicCheck_OpenAIWrapperObfuscationSignalsAreNotOfficial(t *
 	require.Contains(t, report.WrapperSignals, "openai-compatible")
 	require.Contains(t, report.WrapperSignals, "kimi")
 	require.Equal(t, CheckStatusFail, findCheck(t, report, "wrapper_fingerprint").Status)
-	require.LessOrEqual(t, report.Score, 65)
+	require.Equal(t, 0, report.Scores["tag_check"])
+	require.Len(t, report.ScoreAdjustments, 1)
+	require.Equal(t, "tag_check", report.ScoreAdjustments[0].ImpactScope)
 	require.Contains(t, report.Summary, "包装/中转")
 }
 

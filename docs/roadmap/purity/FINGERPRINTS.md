@@ -401,16 +401,18 @@ POST `/v1/messages` body 含 `Please write a 5-10 word title for the following c
 - `purity/model_signatures.go`：知识截止日期、分词答案、延迟区间、reasoning_tokens 期望的可更新特征库（对应 PRD 开放问题 #1 在线模型注册表）。
 - token usage 交叉验证可并入现有 `token_audit.go`。
 
-### 7.3 评分映射（衔接 PRD §12.3 封顶规则）
+### 7.3 评分映射（衔接 PRD §12.3 分项扣分与调整规则）
 
 | 新证据 | 建议处理 |
 |--------|----------|
-| 官方负向探针失败（store/thinking budget/signature/cache_control 约束未复刻） | 强烈否定 official verdict，official_score 封顶 ≤45 |
-| reasoning_tokens 与声称模型不符 / 行为探针显示降级 | model_identity fail，按 PRD 封顶 50 |
-| usage 交叉验证发现膨胀 | token_audit anomaly，扣分 + 报告价格风险 |
-| 网关精确头/错误体命中（透明中转） | 仅记录 wrapper_signal，**不封顶**（遵守 PRD AC-06）|
-| 桥接字段命中（`native_finish_reason`/伪 id/msg_ 改写） | 混淆风险信号，official_score 封顶 55 |
-| `/api/v1/settings/public` 等未鉴权配置泄露 | 强 wrapper_signal（透明中转），不封顶但提高渠道识别置信度 |
+| 官方负向探针失败（store/thinking budget/signature/cache_control 约束未复刻） | 对应 signature/behavior 维度满扣，并否定 official verdict |
+| reasoning_tokens 与声称模型不符 / 行为探针显示降级 | model_identity fail，`tag_check` 维度满扣 |
+| usage 交叉验证发现膨胀 | 仅在用户勾选 Token 审计时进入 token_audit 维度，并报告价格风险 |
+| 网关精确头/错误体命中（透明中转） | 仅记录 wrapper_signal，不扣分 |
+| 桥接字段命中（`native_finish_reason`/伪 id/msg_ 改写） | 若影响模型身份或客户端能力，满扣对应维度；若仅遮蔽来源且能力全通过，扣 5 分 |
+| `/api/v1/settings/public` 等未鉴权配置泄露 | 强 wrapper_signal，不扣分但提高渠道识别置信度 |
+
+禁止恢复 55/45/35 等任意总分封顶。评分必须能由 `score_policy` 的渠道基线、逐项分数和 `score_adjustments` 对账；同一证据只处罚一次。
 
 ### 7.4 隐私 / 合规约束（强制，对齐 PRD §20）
 

@@ -20,8 +20,7 @@
       ],
       "want_signals": ["sub2api"],
       "deny_signals": ["sub2api-model-mapping", "sub2api-protocol-bridge"],
-      "want_obfuscation": false,
-      "want_score_cap": 100
+      "want_obfuscation": false
     },
     {
       "sample_id": "synthetic-sub2api-weak-header-001",
@@ -34,8 +33,7 @@
         }
       ],
       "deny_signals": ["sub2api"],
-      "want_obfuscation": false,
-      "want_score_cap": 100
+      "want_obfuscation": false
     },
     {
       "sample_id": "synthetic-sub2api-model-mapping-001",
@@ -50,8 +48,7 @@
         "{\"requested_model\":\"claude-opus-4-8\",\"upstream_model\":\"gpt-5.4\",\"model_mapping_chain\":[\"account.model_mapping\"]}"
       ],
       "want_signals": ["sub2api-model-mapping"],
-      "want_obfuscation": true,
-      "want_score_cap": 55
+      "want_obfuscation": true
     },
     {
       "sample_id": "synthetic-cliproxyapi-codex-bridge-001",
@@ -85,8 +82,7 @@
         "cliproxyapi-model-mapping",
         "cliproxyapi-signature-bridge"
       ],
-      "want_obfuscation": true,
-      "want_score_cap": 55
+      "want_obfuscation": true
     },
     {
       "sample_id": "synthetic-cn-vendor-mix-001",
@@ -104,8 +100,7 @@
         }
       ],
       "want_signals": ["qwen", "glm", "doubao", "minimax", "hunyuan", "kimi", "mimo"],
-      "want_obfuscation": false,
-      "want_score_cap": 100
+      "want_obfuscation": false
     },
     {
       "sample_id": "synthetic-gemini-native-clean-001",
@@ -120,8 +115,7 @@
         "{\"models\":[{\"name\":\"models/gemini-3-pro-preview\",\"supportedGenerationMethods\":[\"generateContent\",\"streamGenerateContent\"]}]}"
       ],
       "deny_signals": ["gemini", "aistudio", "vertex"],
-      "want_obfuscation": false,
-      "want_score_cap": 100
+      "want_obfuscation": false
     }
   ],
   "token_audit_cases": [

@@ -63,7 +63,9 @@ func emitFinalReport(report *PublicReport, emit PublicCheckEventSink) {
 		report.StepName = "evaluate"
 		report.Progress = 1
 	}
-	report.Scores = scoreBreakdown(report)
+	if report.Scores == nil {
+		report.Scores = scoreBreakdown(report)
+	}
 	syncReportCompat(report)
 	emitPublicCheckEvent(emit, PublicCheckEvent{
 		Type:     PublicCheckEventReport,

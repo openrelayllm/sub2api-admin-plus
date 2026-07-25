@@ -101,33 +101,95 @@ func officialPurityScore(report *PublicReport, fallback int) int {
 	if score > 100 {
 		score = 100
 	}
-	if hasWrapperObfuscationFingerprint(report) {
-		score = minInt(score, wrapperPurityScoreCap(report))
-	}
-	if modelIdentityFailed(report) {
-		score = minInt(score, modelIdentityScoreCap(report))
-	}
+	report.ScoreAdjustments = nil
+	score = applyModelIdentityDimensionDeduction(report, breakdown, score)
+	score = applyProvenanceScoreAdjustment(report, score)
 	return score
 }
 
-func wrapperPurityScoreCap(report *PublicReport) int {
+func applyModelIdentityDimensionDeduction(report *PublicReport, breakdown map[string]int, score int) int {
+	if !modelIdentityFailed(report) || breakdown["tag_check"] <= 0 {
+		return score
+	}
+	adjustedBreakdown := make(map[string]int, len(breakdown))
+	for key, value := range breakdown {
+		adjustedBreakdown[key] = value
+	}
+	adjustedBreakdown["tag_check"] = 0
+	result := officialScoreFromBreakdown(report, adjustedBreakdown, 0)
+	if report.Scores != nil {
+		report.Scores["tag_check"] = 0
+	}
+	report.ScoreAdjustments = append(report.ScoreAdjustments, ScoreAdjustment{
+		ID:           "model_identity_dimension_deduction",
+		Category:     "client_capability",
+		ReasonCode:   "model_identity_conflict",
+		CaseID:       "PURITY-CLIENT-IDENTITY-001",
+		ClientImpact: clientImpactBreaking,
+		ImpactScope:  "tag_check",
+		BaseScore:    score,
+		Points:       result - score,
+		ResultScore:  result,
+		Evidence:     []string{firstNonEmptyString(report.ModelIdentity.Reason, "model_identity_mismatch")},
+	})
+	return result
+}
+
+func applyProvenanceScoreAdjustment(report *PublicReport, score int) int {
+	if !hasWrapperObfuscationFingerprint(report) || hasClientImpactFailure(report) {
+		return score
+	}
+	const penalty = 5
+	result := maxInt(0, score-penalty)
+	reasonCode := "wrapper_obfuscation_signal"
+	caseID := "PURITY-PROVENANCE-001"
+	adjustmentID := "provenance_transparency_penalty"
+	impactScope := "provenance_transparency_only"
+	evidence := wrapperObfuscationSignals(report)
+	if attributionHasReasonCode(report, "bedrock_anthropic_signature_mask") {
+		adjustmentID = "bedrock_anthropic_signature_mask_penalty"
+		reasonCode = "bedrock_anthropic_signature_mask"
+		caseID = "PURITY-BEDROCK-MASK-001"
+		impactScope = "channel_attribution_only"
+		evidence = []string{
+			"bedrock_metadata_family_present",
+			"anthropic_native_metadata_present",
+		}
+	}
+	report.ScoreAdjustments = append(report.ScoreAdjustments, ScoreAdjustment{
+		ID:           adjustmentID,
+		Category:     "provenance_transparency",
+		ReasonCode:   reasonCode,
+		CaseID:       caseID,
+		ClientImpact: clientImpactNone,
+		ImpactScope:  impactScope,
+		BaseScore:    score,
+		Points:       -penalty,
+		ResultScore:  result,
+		Evidence:     evidence,
+	})
+	return result
+}
+
+func hasClientImpactFailure(report *PublicReport) bool {
 	if report == nil {
-		return 35
+		return false
 	}
-	capValue := 100
-	if hasWrapperObfuscationFingerprint(report) {
-		capValue = 55
+	if modelIdentityFailed(report) {
+		return true
 	}
-	if report.Provider == ProviderOpenAI && validationFailedAfterProbe(report, "signature") {
-		capValue = 75
+	for _, dimension := range report.ScorePolicy.Dimensions {
+		for _, validation := range report.Validations {
+			if validation.ID != dimension.ValidationID || validation.Status != CheckStatusFail {
+				continue
+			}
+			if skipped, _ := validation.Details["skipped"].(bool); skipped {
+				continue
+			}
+			return true
+		}
 	}
-	if report.Provider == ProviderAnthropic && (validationFailedAfterProbe(report, "signature") || hasTokenAuditAnomaly(report, "claude_cache_accounting_missing", "cost_multiplier_anomaly")) {
-		capValue = 45
-	}
-	if validationFailedAfterProbe(report, "behavior") && validationFailedAfterProbe(report, "signature") {
-		capValue = 35
-	}
-	return capValue
+	return false
 }
 
 func validationFailedAfterProbe(report *PublicReport, id string) bool {
@@ -197,23 +259,26 @@ func wrapperObfuscationSignals(report *PublicReport) []string {
 	if hasTokenAuditAnomaly(report, "claude_cache_accounting_missing", "cost_multiplier_anomaly") {
 		signals = appendUniqueString(signals, "token_audit")
 	}
+	if attributionHasReasonCode(report, "bedrock_anthropic_signature_mask") {
+		signals = appendUniqueString(signals, "bedrock_anthropic_signature_mask")
+	}
 	return signals
+}
+
+func attributionHasReasonCode(report *PublicReport, expected string) bool {
+	if report == nil || report.ChannelAttribution == nil {
+		return false
+	}
+	for _, code := range report.ChannelAttribution.ReasonCodes {
+		if code == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func modelIdentityFailed(report *PublicReport) bool {
 	return report != nil && report.ModelIdentity != nil && report.ModelIdentity.Status == CheckStatusFail
-}
-
-func modelIdentityScoreCap(report *PublicReport) int {
-	if report == nil || report.ModelIdentity == nil {
-		return 50
-	}
-	switch report.ModelIdentity.Reason {
-	case modelIdentityReasonCrossVendorAlias, modelIdentityReasonProtocolVendorMismatch, modelIdentityReasonWrapperVendorSignalMismatch:
-		return 40
-	default:
-		return 50
-	}
 }
 
 func summaryForReport(report *PublicReport) string {

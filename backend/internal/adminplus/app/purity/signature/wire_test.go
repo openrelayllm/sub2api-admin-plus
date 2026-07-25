@@ -16,9 +16,11 @@ func TestAnalyzeAndClassifyCalibratedFamilies(t *testing.T) {
 		name     string
 		metadata []int
 		channel  string
+		riskCode string
 	}{
 		{name: "anthropic native", metadata: []int{1, 3, 5, 6, 7, 8, 11}, channel: "anthropic_native"},
 		{name: "aws bedrock", metadata: []int{1, 2, 3, 5, 6, 7, 8}, channel: "aws_bedrock"},
+		{name: "aws bedrock with anthropic mask", metadata: []int{1, 2, 3, 5, 6, 7, 8, 11}, channel: "aws_bedrock", riskCode: "bedrock_anthropic_signature_mask"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -32,7 +34,39 @@ func TestAnalyzeAndClassifyCalibratedFamilies(t *testing.T) {
 			classification := registry.Classify(fingerprint, "claude-opus-4-8")
 			require.Equal(t, ClassificationIdentified, classification.Status)
 			require.Equal(t, test.channel, classification.Channel)
-			require.GreaterOrEqual(t, classification.SampleCount, 3)
+			if test.riskCode != "" {
+				require.GreaterOrEqual(t, classification.SampleCount, 1)
+				require.Contains(t, classification.RiskCodes, test.riskCode)
+			} else {
+				require.GreaterOrEqual(t, classification.SampleCount, 3)
+				require.Empty(t, classification.RiskCodes)
+			}
+		})
+	}
+}
+
+func TestClassifyCalibratedFamiliesKeepsChannelCasesDistinct(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		metadata []int
+		channel  string
+		status   string
+	}{
+		{name: "standard bedrock", metadata: []int{1, 2, 3, 5, 6, 7, 8}, channel: "aws_bedrock", status: ClassificationIdentified},
+		{name: "masked bedrock", metadata: []int{1, 2, 3, 5, 6, 7, 8, 11}, channel: "aws_bedrock", status: ClassificationIdentified},
+		{name: "anthropic native", metadata: []int{1, 3, 5, 6, 7, 8, 11}, channel: "anthropic_native", status: ClassificationIdentified},
+		{name: "unknown family", metadata: []int{1, 3, 5, 6, 7, 8, 9}, status: ClassificationUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fingerprint, analyzeErr := Analyze(syntheticSignature(test.metadata))
+			require.NoError(t, analyzeErr)
+			classification := registry.Classify(fingerprint, "claude-opus-4-8")
+			require.Equal(t, test.status, classification.Status)
+			require.Equal(t, test.channel, classification.Channel)
 		})
 	}
 }

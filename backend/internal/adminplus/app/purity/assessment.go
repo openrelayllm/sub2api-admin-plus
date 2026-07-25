@@ -131,6 +131,9 @@ func assessmentTitle(report *PublicReport, result *AssessmentResult) string {
 	case assessmentKindIdentityConflict:
 		return fmt.Sprintf("模型身份冲突 · 请求 %s", firstNonEmptyString(report.ExpectedModel, report.ModelID))
 	case assessmentKindCompatibilityRisk:
+		if result.Channel != "unknown" {
+			return fmt.Sprintf("%s 上游 · 来源包装存在混淆风险 · %s", channel, model)
+		}
 		return fmt.Sprintf("兼容链路存在混淆风险 · %s", model)
 	case assessmentKindInvalidOrUnavailable:
 		return fmt.Sprintf("%s 接口不可用或协议不完整", providerDisplayName(report.Provider))

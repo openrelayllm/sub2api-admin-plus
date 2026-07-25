@@ -30,6 +30,7 @@ type Family struct {
 	SourceType              string   `json:"source_type"`
 	ValidFrom               string   `json:"valid_from"`
 	Limitations             []string `json:"limitations"`
+	RiskCodes               []string `json:"risk_codes"`
 }
 
 type Registry struct {
@@ -45,6 +46,7 @@ type Classification struct {
 	SampleCount int
 	SourceType  string
 	Limitations []string
+	RiskCodes   []string
 	Fingerprint Fingerprint
 }
 
@@ -107,6 +109,7 @@ func (registry Registry) Classify(fingerprint Fingerprint, model string) Classif
 		SampleCount: family.SampleCount,
 		SourceType:  family.SourceType,
 		Limitations: append([]string(nil), family.Limitations...),
+		RiskCodes:   append([]string(nil), family.RiskCodes...),
 		Fingerprint: fingerprint,
 	}
 }

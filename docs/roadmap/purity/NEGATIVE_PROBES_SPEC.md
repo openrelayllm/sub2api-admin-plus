@@ -23,8 +23,8 @@
 ## 2. 评分约定（重要，避免污染兼容分）
 
 - Claude 类负向探针 check **必须**有 `MaxScore>0` 并归入 **signature** validation 分组（不要新建独立 validation）。
-- 原因：`report.go` 把 `MaxScore>0` 且 `ID!="base_url"` 的 check 同时计入 official_score 和 compatibility_score。官方专属约束**不应**影响兼容分——但归入 signature 分组后，已有的 `wrapperPurityScoreCap`（`evaluation.go`）会在 `validationStatus(report,"signature")==Fail` 时把 official_score 封顶，**无需改评分逻辑**。
-- OpenAI `store:false` + `include:["reasoning.encrypted_content"]` 是正向探针，当前实现刻意采用 `MaxScore=0`，只驱动 `signature` validation 和官方分封顶，不污染兼容分。
+- 原因：探针归入 `signature` validation 后，由当前渠道的 `score_policy` 决定该维度权重；validation fail 时执行 `full_dimension_deduction`，不再使用任意总分封顶。
+- OpenAI `store:false` + `include:["reasoning.encrypted_content"]` 是正向探针，当前实现采用 `MaxScore=0`，只驱动 `signature` validation；失败时由渠道基线满扣签名维度，不单独污染原始兼容分。
 
 ## 3. 探针清单
 
@@ -56,7 +56,7 @@
 
 官方 codex 走 Responses，`store:false` + `include:["reasoning.encrypted_content"]`。许多兼容实现默认/要求 `store:true` 或不识别 include。
 
-- 这是**正向探针**（模仿官方行为，观察是否被正常接受），已落在 openai flow；当前实现刻意采用 `MaxScore=0`，只驱动 `signature` validation 和官方分封顶，不计入兼容分。
+- 这是**正向探针**（模仿官方行为，观察是否被正常接受），已落在 openai flow；当前实现采用 `MaxScore=0`，只驱动 `signature` validation，失败时按渠道基线满扣签名维度，不计入原始兼容分。
 - 更稳的负向信号是读响应头 `openai-model`（已加入 `http_probe.go` 白名单并接入 `model_identity`）：若存在且 != body/request model，按更可信响应模型来源参与身份校验，`model_identity.evidence` 会记录 `openai_model_header`、`response_body_model`、`response_model_source`。
 - reasoning_tokens 身份探针见 §3.4。
 
@@ -70,7 +70,7 @@
 
 每个新探针配 mock server 测试（参考 `service_test.go` 现有 `TestServiceRunPublicCheck_*`）：
 - 官方行为 mock（返回 400 拒绝）→ check pass，signature validation pass。
-- 兼容/包装 mock（返回 200 接受）→ check fail，signature validation fail，official_score 被封顶到 45，verdict 不为 official_claude。
+- 兼容/包装 mock（返回 200 接受）→ check fail，signature validation fail，当前渠道的 `signature_proto` 维度为 0，verdict 不为 official_claude；未知/兼容基线预期总分为 70，Bedrock/Vertex 基线预期总分为 80。
 - 余额不足 / 连接失败 → check fail 但不误判为"非官方"。
 
 ## 5. 已完成部分（Claude 已做，勿重复）

@@ -54,8 +54,8 @@ describe('LocalAccountPurityModal', () => {
       check_token_usage: false,
       status: 'done',
       progress: 1,
-      score: 96,
-      official_score: 96,
+      score: 95,
+      official_score: 95,
       compatibility_score: 98,
       protocol_score: 98,
       scores: {
@@ -70,14 +70,26 @@ describe('LocalAccountPurityModal', () => {
         channel: 'aws_bedrock',
         baseline: 'aws_bedrock_messages',
         dimensions: [
-          { id: 'tag_check', validation_id: 'llm_fingerprint', max_score: 10 },
-          { id: 'structure', validation_id: 'schema_integrity', max_score: 25 },
-          { id: 'behavior', validation_id: 'behavior', max_score: 35 },
-          { id: 'signature_proto', validation_id: 'signature', max_score: 20 },
-          { id: 'multimodal', validation_id: 'multimodal', max_score: 10 }
+          { id: 'tag_check', validation_id: 'llm_fingerprint', max_score: 10, client_impact: 'breaking', failure_policy: 'full_dimension_deduction' },
+          { id: 'structure', validation_id: 'schema_integrity', max_score: 25, client_impact: 'breaking', failure_policy: 'full_dimension_deduction' },
+          { id: 'behavior', validation_id: 'behavior', max_score: 35, client_impact: 'breaking', failure_policy: 'full_dimension_deduction' },
+          { id: 'signature_proto', validation_id: 'signature', max_score: 20, client_impact: 'breaking', failure_policy: 'full_dimension_deduction' },
+          { id: 'multimodal', validation_id: 'multimodal', max_score: 10, client_impact: 'limited', failure_policy: 'full_dimension_deduction' }
         ],
         excluded_dimensions: ['websearch', 'fingerprint']
       },
+      score_adjustments: [{
+        id: 'bedrock_anthropic_signature_mask_penalty',
+        category: 'provenance_transparency',
+        reason_code: 'bedrock_anthropic_signature_mask',
+        case_id: 'PURITY-BEDROCK-MASK-001',
+        client_impact: 'none',
+        impact_scope: 'channel_attribution_only',
+        base_score: 100,
+        points: -5,
+        result_score: 95,
+        evidence: ['bedrock_metadata_family_present', 'anthropic_native_metadata_present']
+      }],
       verdict: 'official_openai',
       summary: 'backend summary',
       assessment: {
@@ -200,6 +212,11 @@ describe('LocalAccountPurityModal', () => {
     expect(wrapper.text()).toContain('AWS Bedrock Messages 基线')
     expect(wrapper.text()).toContain('25/25')
     expect(wrapper.text()).toContain('35/35')
+    expect(wrapper.text()).toContain('总分调整判例')
+    expect(wrapper.text()).toContain('AWS Bedrock 来源伪装扣分')
+    expect(wrapper.text()).toContain('100 -5 = 95')
+    expect(wrapper.text()).toContain('不影响本轮客户端使用，仅影响来源透明度')
+    expect(wrapper.text()).toContain('PURITY-BEDROCK-MASK-001')
     expect(wrapper.text()).not.toContain('默认未启用')
     expect(wrapper.text()).not.toContain('Token 用量审计未评分')
     expect(wrapper.text()).not.toContain('sk-dimension-secret')

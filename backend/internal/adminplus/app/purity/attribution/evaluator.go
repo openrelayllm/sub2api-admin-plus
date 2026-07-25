@@ -8,7 +8,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity/signature"
 )
 
-const DetectorVersion = "channel-attribution/2026-07-25.3"
+const DetectorVersion = "channel-attribution/2026-07-25.4"
 
 const (
 	StatusIdentified = "identified"
@@ -33,6 +33,7 @@ type Evidence struct {
 	DetectorVersion string   `json:"detector_version"`
 	ObservedAt      string   `json:"observed_at,omitempty"`
 	Limitations     []string `json:"limitations,omitempty"`
+	RiskCodes       []string `json:"risk_codes,omitempty"`
 	sourceGroup     string
 	confidence      float64
 }
@@ -100,6 +101,11 @@ func Evaluate(input Input) Result {
 	result.Channel = channel
 	result.Evidence = publicEvidence(supporting)
 	result.ReasonCodes = []string{"channel_evidence_matched"}
+	for _, item := range supporting {
+		for _, code := range item.RiskCodes {
+			result.ReasonCodes = appendUnique(result.ReasonCodes, code)
+		}
+	}
 	if hasStrength(supporting, StrengthStrong) {
 		result.Status = StatusIdentified
 		result.Confidence = maxConfidence(supporting, 0.9)
@@ -133,16 +139,23 @@ func collectEvidence(input Input) ([]Evidence, []string) {
 		if classification.Status == signature.ClassificationIdentified {
 			strength = StrengthStrong
 		}
+		code := "signature_family_match"
+		summary := "Thinking signature 与已校准的脱敏结构族一致。"
+		if containsString(classification.RiskCodes, "bedrock_anthropic_signature_mask") {
+			code = "signature_family_match_with_anthropic_mask"
+			summary = "Thinking signature 命中 AWS Bedrock 结构族，同时保留或注入了 Anthropic 原生元数据特征。"
+		}
 		appendEvidence(Evidence{
 			Kind:        "signature_structure",
-			Code:        "signature_family_match",
+			Code:        code,
 			Channel:     classification.Channel,
 			Strength:    strength,
 			SourceType:  firstNonEmpty(classification.SourceType, "authorized_observation"),
-			Summary:     "Thinking signature 与已校准的脱敏结构族一致。",
+			Summary:     summary,
 			SampleCount: classification.SampleCount,
 			Transport:   observation.Transport,
 			Limitations: append([]string(nil), classification.Limitations...),
+			RiskCodes:   append([]string(nil), classification.RiskCodes...),
 			sourceGroup: "signature_" + observation.Transport,
 			confidence:  classification.Confidence,
 		})
@@ -218,6 +231,15 @@ func collectEvidence(input Input) ([]Evidence, []string) {
 		})
 	}
 	return dedupeEvidence(evidence), limitations
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func endpointEvidence(channel string, code string, _ string) Evidence {

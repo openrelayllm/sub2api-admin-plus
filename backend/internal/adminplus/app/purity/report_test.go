@@ -207,6 +207,31 @@ func TestPublicReportCCTestCompatFields(t *testing.T) {
 	require.NotNil(t, eventReport["assessment"])
 }
 
+func TestEmitFinalReportPreservesFinalizedScoreAdjustments(t *testing.T) {
+	report := &PublicReport{
+		Provider: ProviderOpenAI,
+		Status:   RunStatusDone,
+		Scores: map[string]int{
+			"tag_check": 0,
+			"schema":    25,
+		},
+		Validations: []ValidationResult{
+			{ID: "llm_fingerprint", Status: CheckStatusPass},
+			{ID: "schema_integrity", Status: CheckStatusPass},
+		},
+	}
+
+	var emitted PublicCheckEvent
+	emitFinalReport(report, func(event PublicCheckEvent) {
+		emitted = event
+	})
+
+	require.Equal(t, 0, report.Scores["tag_check"])
+	require.Equal(t, 0, emitted.Scores["tag_check"])
+	require.NotNil(t, emitted.Report)
+	require.Equal(t, 0, emitted.Report.Scores["tag_check"])
+}
+
 func TestProgressReportScorePolicyDimensionsMarshalAsArrays(t *testing.T) {
 	report := &PublicReport{
 		Provider:    ProviderAnthropic,

@@ -38,6 +38,38 @@ func TestEvaluateIdentifiesBedrockBehindTransparentWrapper(t *testing.T) {
 	require.Empty(t, result.Contradictions)
 }
 
+func TestEvaluateIdentifiesBedrockAndPreservesAnthropicMaskRisk(t *testing.T) {
+	classification := signature.Classification{
+		Channel:     "aws_bedrock",
+		Status:      signature.ClassificationIdentified,
+		Confidence:  0.96,
+		FamilyID:    "aws-bedrock-anthropic-mask-2026-07",
+		SampleCount: 1,
+		SourceType:  "authorized_redacted",
+		RiskCodes:   []string{"bedrock_anthropic_signature_mask"},
+	}
+	result := Evaluate(Input{
+		Provider:       "anthropic",
+		Host:           "relay.example.com",
+		Model:          "claude-opus-4-8",
+		WrapperSignals: []string{"new-api"},
+		Signatures: []SignatureObservation{
+			{Transport: "non_stream", Classification: classification},
+			{Transport: "stream", Classification: classification},
+		},
+		SignatureFound: 2,
+	})
+
+	require.Equal(t, StatusIdentified, result.Status)
+	require.Equal(t, "aws_bedrock", result.Channel)
+	require.Contains(t, result.ReasonCodes, "bedrock_anthropic_signature_mask")
+	require.Len(t, result.Evidence, 2)
+	for _, evidence := range result.Evidence {
+		require.Equal(t, "signature_family_match_with_anthropic_mask", evidence.Code)
+		require.Contains(t, evidence.RiskCodes, "bedrock_anthropic_signature_mask")
+	}
+}
+
 func TestEvaluateReportsStreamNonStreamConflict(t *testing.T) {
 	result := Evaluate(Input{
 		Provider: "anthropic",

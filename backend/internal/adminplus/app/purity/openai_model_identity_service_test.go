@@ -82,5 +82,8 @@ func TestServiceRunPublicCheck_OpenAIModelHeaderOverridesSpoofedBodyModel(t *tes
 	require.Equal(t, "gpt-5.4-mini", report.ModelIdentity.Evidence["openai_model_header"])
 	require.Equal(t, "openai-model", report.ModelIdentity.Evidence["response_model_source"])
 	require.Equal(t, VerdictOpenAICompatible, report.Verdict)
-	require.LessOrEqual(t, report.OfficialScore, 50)
+	require.Equal(t, 0, report.Scores["tag_check"])
+	require.Len(t, report.ScoreAdjustments, 1)
+	require.Equal(t, "tag_check", report.ScoreAdjustments[0].ImpactScope)
+	require.Equal(t, clientImpactBreaking, report.ScoreAdjustments[0].ClientImpact)
 }

@@ -172,14 +172,31 @@
           <span class="badge badge-secondary">{{ channelDisplayName(scorePolicy.channel) }}</span>
         </div>
         <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          <div v-for="dimension in scorePolicy.dimensions" :key="dimension.id" class="flex min-w-0 items-center justify-between gap-2 rounded-md bg-gray-50 px-2.5 py-2 text-xs dark:bg-dark-600">
-            <span class="truncate text-gray-600 dark:text-dark-300">{{ scoreDimensionLabel(dimension.id) }}</span>
-            <span class="font-semibold text-gray-900 dark:text-gray-100">{{ dimension.max_score }}</span>
+          <div v-for="dimension in scorePolicy.dimensions" :key="dimension.id" class="min-w-0 rounded-md bg-gray-50 px-2.5 py-2 text-xs dark:bg-dark-600">
+            <div class="flex items-center justify-between gap-2">
+              <span class="truncate text-gray-600 dark:text-dark-300">{{ scoreDimensionLabel(dimension.id) }}</span>
+              <span class="font-semibold text-gray-900 dark:text-gray-100">{{ dimension.max_score }}</span>
+            </div>
+            <div class="mt-1 text-[10px] leading-4 text-gray-500 dark:text-dark-400">{{ scoreDimensionRule(dimension) }}</div>
           </div>
         </div>
         <div v-if="scorePolicy.excluded_dimensions?.length" class="mt-3 text-xs leading-5 text-gray-500 dark:text-dark-400">
           <span class="font-semibold text-gray-700 dark:text-dark-300">{{ t('purity.detail.scoreExcluded') }}：</span>
           {{ scorePolicy.excluded_dimensions.map(scoreDimensionLabel).join(' · ') }}
+        </div>
+        <div v-if="scoreAdjustments.length" class="mt-4 border-t border-gray-200 pt-3 dark:border-dark-500">
+          <div class="mb-2 text-xs font-semibold text-gray-800 dark:text-gray-100">{{ t('purity.detail.scoreAdjustments') }}</div>
+          <div class="space-y-2">
+            <div v-for="adjustment in scoreAdjustments" :key="adjustment.id" class="rounded-md border border-red-200 bg-red-50 p-3 text-xs dark:border-red-500/40 dark:bg-red-900/20">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="font-semibold text-red-900 dark:text-red-100">{{ scoreAdjustmentTitle(adjustment.reason_code) }}</span>
+                <span class="font-semibold text-red-700 dark:text-red-200">{{ adjustment.base_score }} {{ adjustment.points }} = {{ adjustment.result_score }}</span>
+              </div>
+              <div class="mt-1 leading-5 text-red-800 dark:text-red-100">{{ scoreAdjustmentDescription(adjustment.reason_code) }}</div>
+              <div class="mt-1 leading-5 text-red-800 dark:text-red-100">{{ t(`purity.detail.clientImpact.${adjustment.client_impact}`) }}</div>
+              <div class="mt-1 font-mono text-[10px] text-red-700 dark:text-red-200">{{ adjustment.case_id }} · {{ adjustment.reason_code }}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -631,6 +648,17 @@ const { t } = useI18n({
           tokenAuditDisabled: '默认未启用，不发送额外 11 轮请求，也不参与本次判定。重新检测前勾选即可执行。',
           scorePolicy: '渠道评分基线',
           scoreExcluded: '本渠道基线不计分',
+          scoreAdjustments: '总分调整判例',
+          scoreAdjustmentBedrockMaskTitle: 'AWS Bedrock 来源伪装扣分',
+          scoreAdjustmentBedrockMaskDescription: '签名同时命中 Bedrock 来源字段与 Anthropic 原生元数据字段。上游仍识别为 AWS Bedrock，但网关未如实保持来源边界，因此按来源透明度判例扣 5 分。',
+          scoreAdjustmentModelIdentityTitle: '模型身份冲突满扣',
+          scoreAdjustmentModelIdentityDescription: '请求模型与上游返回的模型身份存在会影响客户端使用的冲突，因此该渠道基线中的 LLM 指纹维度执行满扣。',
+          scoreDimensionFullDeduction: '失败时该项满扣 {points} 分',
+          clientImpact: {
+            none: '不影响本轮客户端使用，仅影响来源透明度',
+            limited: '失败会影响部分客户端能力',
+            breaking: '失败会影响客户端核心使用'
+          },
           scorePolicyNames: {
             compatible_protocol: '兼容协议基线',
             anthropic_native_messages: 'Anthropic 原生 Messages 基线',
@@ -949,6 +977,17 @@ const { t } = useI18n({
           tokenAuditDisabled: 'Disabled by default. No additional 11-round audit is sent or used in this assessment. Enable it before rerunning to audit usage.',
           scorePolicy: 'Channel scoring baseline',
           scoreExcluded: 'Excluded from this channel baseline',
+          scoreAdjustments: 'Overall score adjustments',
+          scoreAdjustmentBedrockMaskTitle: 'AWS Bedrock provenance masking penalty',
+          scoreAdjustmentBedrockMaskDescription: 'The signature contains both Bedrock provenance fields and Anthropic-native metadata. The upstream remains AWS Bedrock, but the gateway obscures that boundary, so the provenance-transparency case deducts 5 points.',
+          scoreAdjustmentModelIdentityTitle: 'Full model-identity deduction',
+          scoreAdjustmentModelIdentityDescription: 'The requested model conflicts with the upstream response identity in a way that affects client usage, so the full LLM fingerprint dimension is deducted from this channel baseline.',
+          scoreDimensionFullDeduction: 'Failure deducts the full {points}-point dimension',
+          clientImpact: {
+            none: 'No observed client impact; provenance transparency only',
+            limited: 'Failure affects some client capabilities',
+            breaking: 'Failure affects core client usage'
+          },
           scorePolicyNames: {
             compatible_protocol: 'Compatible protocol baseline',
             anthropic_native_messages: 'Anthropic native Messages baseline',
@@ -1287,10 +1326,12 @@ const reportChecks = computed<PurityCheckResult[]>(() => {
 })
 const dimensions = computed<PurityDimensionResult[]>(() => {
   const snake = report.value?.dimension_matrix || []
-  return snake.length ? snake : report.value?.dimensionMatrix || []
+  const values = snake.length ? snake : report.value?.dimensionMatrix || []
+  return values.filter((dimension) => dimension.status !== 'not_run')
 })
 const assessment = computed(() => report.value?.assessment || report.value?.assessmentResult || null)
 const scorePolicy = computed(() => report.value?.score_policy || report.value?.scorePolicy || null)
+const scoreAdjustments = computed(() => report.value?.score_adjustments || report.value?.scoreAdjustments || [])
 const tokenAuditRequested = computed(() => {
   if (report.value) {
     const requested = report.value.check_token_usage ?? report.value.checkTokenUsage
@@ -1360,6 +1401,20 @@ const scorePolicyDisplayName = computed(() => {
   ])
   return known.has(id) ? t(`purity.detail.scorePolicyNames.${id}`) : id
 })
+function scoreAdjustmentTitle(reasonCode: string): string {
+  if (reasonCode === 'bedrock_anthropic_signature_mask') return t('purity.detail.scoreAdjustmentBedrockMaskTitle')
+  if (reasonCode === 'model_identity_conflict') return t('purity.detail.scoreAdjustmentModelIdentityTitle')
+  return reasonCode
+}
+
+function scoreAdjustmentDescription(reasonCode: string): string {
+  if (reasonCode === 'bedrock_anthropic_signature_mask') return t('purity.detail.scoreAdjustmentBedrockMaskDescription')
+  if (reasonCode === 'model_identity_conflict') return t('purity.detail.scoreAdjustmentModelIdentityDescription')
+  return reasonCode
+}
+function scoreDimensionRule(dimension: { max_score: number; client_impact: 'none' | 'limited' | 'breaking' }): string {
+  return `${t(`purity.detail.clientImpact.${dimension.client_impact}`)} · ${t('purity.detail.scoreDimensionFullDeduction', { points: dimension.max_score })}`
+}
 const tokenAuditSummary = computed(() => {
   if (tokenAudit.value) {
     const diagnostic = failedAuditSampleCount.value > 0

@@ -1299,6 +1299,8 @@ export interface PurityScorePolicyDimension {
   id: string
   validation_id: string
   max_score: number
+  client_impact: 'none' | 'limited' | 'breaking'
+  failure_policy: 'full_dimension_deduction'
 }
 
 export interface PurityScorePolicy {
@@ -1307,6 +1309,19 @@ export interface PurityScorePolicy {
   baseline: string
   dimensions: PurityScorePolicyDimension[]
   excluded_dimensions?: string[]
+}
+
+export interface PurityScoreAdjustment {
+  id: string
+  category: string
+  reason_code: string
+  case_id: string
+  client_impact: 'none' | 'limited' | 'breaking'
+  impact_scope: string
+  base_score: number
+  points: number
+  result_score: number
+  evidence?: string[]
 }
 
 export interface PurityValidationResult {
@@ -1492,6 +1507,7 @@ export interface PurityAttributionEvidence {
   detector_version: string
   observed_at?: string
   limitations?: string[]
+  risk_codes?: string[]
 }
 
 export interface PurityChannelAttributionResult {
@@ -1559,6 +1575,8 @@ export interface PurityReport {
   meteringStatus?: string
   score_policy?: PurityScorePolicy
   scorePolicy?: PurityScorePolicy
+  score_adjustments?: PurityScoreAdjustment[]
+  scoreAdjustments?: PurityScoreAdjustment[]
   verdict: string
   summary: string
   error?: string

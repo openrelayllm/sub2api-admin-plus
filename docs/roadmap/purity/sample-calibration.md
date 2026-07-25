@@ -13,7 +13,7 @@
 - 误伤透明中转：CLIProxyAPI、new-api、sub2api 等程序在不混淆模型、协议、usage/cache 和签名时可以是正常供应商形态，不能仅凭程序名降级。
 - 漏掉混淆行为：模型 alias、低版本冒充高版本、跨厂商协议桥接、usage/cache 改写、SSE model 回写等行为可能只在真实请求样本里出现。
 
-因此需要建立一套可回放、可脱敏、可审计的样本契约，用于校准 detector、评分封顶、模型身份一致性和前端报告解释。
+因此需要建立一套可回放、可脱敏、可审计的样本契约，用于校准 detector、渠道评分基线、分项扣分、模型身份一致性和前端报告解释。
 
 ## 2. 目标
 
@@ -176,7 +176,7 @@ Token audit 样本约束：
 - 国产兼容：`qwen-compatible`、`glm-compatible`、`doubao-compatible`、`minimax-compatible`、`hunyuan-compatible`、`kimi-compatible`、`mimo-compatible`、`deepseek-compatible`。
 - 模型身份：`model-version-downgrade`、`model-tier-downgrade`、`cross-vendor-alias`、`protocol-vendor-mismatch`。
 
-透明中转信号本身不要求降低 `official_score`；混淆风险和模型身份失败才参与评分封顶。
+透明中转信号本身不降低 `official_score`。模型身份或客户端能力失败按所选渠道基线将对应维度满扣；仅来源不透明、但客户端能力未失败时只扣 5 分，并记录 `case_id`、`client_impact` 与 `impact_scope`。同一证据不得重复处罚。
 
 ## 10. 写入流程
 
