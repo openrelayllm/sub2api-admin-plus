@@ -1295,6 +1295,20 @@ export interface PurityScoreBreakdown {
   [key: string]: number | undefined
 }
 
+export interface PurityScorePolicyDimension {
+  id: string
+  validation_id: string
+  max_score: number
+}
+
+export interface PurityScorePolicy {
+  id: string
+  channel?: string
+  baseline: string
+  dimensions: PurityScorePolicyDimension[]
+  excluded_dimensions?: string[]
+}
+
 export interface PurityValidationResult {
   id: string
   name: string
@@ -1543,6 +1557,8 @@ export interface PurityReport {
   meteringScore?: number
   metering_status?: string
   meteringStatus?: string
+  score_policy?: PurityScorePolicy
+  scorePolicy?: PurityScorePolicy
   verdict: string
   summary: string
   error?: string

@@ -57,6 +57,26 @@ describe('LocalAccountPurityModal', () => {
       official_score: 96,
       compatibility_score: 98,
       protocol_score: 98,
+      scores: {
+        tag_check: 10,
+        structure: 25,
+        behavior: 35,
+        signature_proto: 20,
+        multimodal: 10
+      },
+      score_policy: {
+        id: 'aws_bedrock_messages',
+        channel: 'aws_bedrock',
+        baseline: 'aws_bedrock_messages',
+        dimensions: [
+          { id: 'tag_check', validation_id: 'llm_fingerprint', max_score: 10 },
+          { id: 'structure', validation_id: 'schema_integrity', max_score: 25 },
+          { id: 'behavior', validation_id: 'behavior', max_score: 35 },
+          { id: 'signature_proto', validation_id: 'signature', max_score: 20 },
+          { id: 'multimodal', validation_id: 'multimodal', max_score: 10 }
+        ],
+        excluded_dimensions: ['websearch', 'fingerprint']
+      },
       verdict: 'official_openai',
       summary: 'backend summary',
       assessment: {
@@ -176,7 +196,11 @@ describe('LocalAccountPurityModal', () => {
     expect(wrapper.text()).toContain('原生官方渠道 · OpenAI API · gpt-5.5')
     expect(wrapper.text()).toContain('LLM 指纹验证')
     expect(wrapper.text()).toContain('10/10')
-    expect(wrapper.text()).toContain('默认未启用')
+    expect(wrapper.text()).toContain('AWS Bedrock Messages 基线')
+    expect(wrapper.text()).toContain('25/25')
+    expect(wrapper.text()).toContain('35/35')
+    expect(wrapper.text()).not.toContain('默认未启用')
+    expect(wrapper.text()).not.toContain('Token 用量审计未评分')
     expect(wrapper.text()).not.toContain('sk-dimension-secret')
     expect(wrapper.text()).not.toContain('Bearer secret-value')
 

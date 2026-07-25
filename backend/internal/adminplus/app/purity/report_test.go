@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity/attribution"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,6 +56,51 @@ func TestOfficialPurityScore_SkippedTokenAuditDoesNotLowerScore(t *testing.T) {
 
 	require.Equal(t, 100, report.OfficialScore)
 	require.Equal(t, 100, report.Score)
+}
+
+func TestOfficialPurityScore_BedrockTransparentRelayCanScoreOneHundred(t *testing.T) {
+	report := &PublicReport{
+		Provider:       ProviderAnthropic,
+		Status:         RunStatusDone,
+		ModelID:        "claude-opus-4-8",
+		ExpectedModel:  "claude-opus-4-8",
+		ResponseModel:  "claude-opus-4-8",
+		WrapperSignals: []string{"new-api", "gemini"},
+		ModelIdentity:  &ModelIdentityResult{Status: CheckStatusPass, Reason: modelIdentityReasonExactMatch},
+		ChannelAttribution: &attribution.Result{
+			Channel:    "aws_bedrock",
+			Status:     attribution.StatusIdentified,
+			Confidence: 0.96,
+		},
+		Checks: []CheckResult{
+			passCheck("base_url", "API Base 域名", 20, "ok", nil),
+			passCheck("claude_messages_schema", "Messages 非流式结构", 20, "ok", nil),
+			passCheck("claude_tool_use", "强制工具调用", 20, "ok", nil),
+			passCheck("claude_usage", "Usage 计量", 10, "ok", nil),
+			passCheck("claude_streaming", "Messages 流式事件", 15, "ok", nil),
+			passCheck("claude_thinking_signature", "Thinking 签名拒绝", 20, "ok", nil),
+			passCheck("claude_thinking_budget", "Thinking 预算约束", 10, "ok", nil),
+			passCheck("claude_cache_control_overflow", "Cache-Control 上限约束", 10, "ok", nil),
+			passCheck("claude_multimodal", "多模态输入", 10, "ok", nil),
+			{ID: "token_audit", Status: CheckStatusWarn, Details: map[string]any{"skipped": true}},
+		},
+		Validations: []ValidationResult{
+			{ID: "llm_fingerprint", Status: CheckStatusPass},
+			{ID: "schema_integrity", Status: CheckStatusPass},
+			{ID: "behavior", Status: CheckStatusPass},
+			{ID: "signature", Status: CheckStatusPass},
+			{ID: "multimodal", Status: CheckStatusPass},
+			{ID: "token_audit", Status: CheckStatusWarn},
+		},
+	}
+
+	finalizeReport(report)
+
+	require.Equal(t, 100, report.Score)
+	require.Equal(t, 100, report.OfficialScore)
+	require.Equal(t, assessmentKindTransparentRelay, report.Assessment.Kind)
+	require.Equal(t, "aws_bedrock", report.Assessment.Channel)
+	require.Equal(t, dimensionStatusUnsupportedByUpstream, dimensionByID(t, report.DimensionMatrix, "websearch").Status)
 }
 
 func TestPublicReportCCTestCompatFields(t *testing.T) {

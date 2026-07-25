@@ -303,15 +303,14 @@
     {
       "sample_id": "synthetic-wrapper-vendor-mismatch-001",
       "sample_kind": "synthetic",
-      "name": "wrapper_vendor_signal_mismatch",
+      "name": "wrapper_channel_signal_is_not_model_identity",
       "provider": "anthropic",
       "model_id": "claude-opus-4-8",
       "expected_model": "claude-opus-4-8",
       "response_model": "claude-opus-4-8",
       "wrapper_signals": ["antigravity"],
-      "want_status": "fail",
-      "want_reason": "wrapper_vendor_signal_mismatch",
-      "want_suspected_vendor": "google"
+      "want_status": "pass",
+      "want_reason": "exact_match"
     },
     {
       "sample_id": "synthetic-native-qwen-pass-001",

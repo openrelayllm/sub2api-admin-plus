@@ -30,7 +30,7 @@ func TestModelIdentityDetectsVersionAndTierDowngrade(t *testing.T) {
 	require.Equal(t, CheckStatusFail, claudeCheck.Status)
 	require.Equal(t, modelIdentityReasonVersionDowngrade, claudeReport.ModelIdentity.Reason)
 }
-func TestModelIdentityDetectsCrossVendorAndWrapperAlias(t *testing.T) {
+func TestModelIdentityDetectsCrossVendorAndKeepsChannelSignalsSeparate(t *testing.T) {
 	report := &PublicReport{
 		Provider:      ProviderAnthropic,
 		ModelID:       "claude-sonnet-latest",
@@ -50,10 +50,10 @@ func TestModelIdentityDetectsCrossVendorAndWrapperAlias(t *testing.T) {
 		ResponseModel:  "claude-opus-4-8",
 		WrapperSignals: []string{"antigravity"},
 	}
-	forceMappedCheck := buildModelIdentityCheck(forceMappedReport)
-	require.Equal(t, CheckStatusFail, forceMappedCheck.Status)
-	require.Equal(t, modelIdentityReasonWrapperVendorSignalMismatch, forceMappedReport.ModelIdentity.Reason)
-	require.Equal(t, "google", forceMappedReport.ModelIdentity.Evidence["suspected_upstream_vendor"])
+	channelSignalCheck := buildModelIdentityCheck(forceMappedReport)
+	require.Equal(t, CheckStatusPass, channelSignalCheck.Status)
+	require.Equal(t, modelIdentityReasonExactMatch, forceMappedReport.ModelIdentity.Reason)
+	require.Equal(t, []string{"antigravity"}, forceMappedReport.ModelIdentity.Evidence["wrapper_signals"])
 }
 func TestModelIdentityDetectsProtocolVendorMismatchForceMappingAlias(t *testing.T) {
 	report := &PublicReport{

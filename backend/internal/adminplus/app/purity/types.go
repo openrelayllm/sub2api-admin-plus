@@ -97,6 +97,8 @@ type PublicReport struct {
 	MeteringScoreCompat         int                  `json:"meteringScore"`
 	MeteringStatus              string               `json:"metering_status"`
 	MeteringStatusCompat        string               `json:"meteringStatus"`
+	ScorePolicy                 ScorePolicyResult    `json:"score_policy,omitempty"`
+	ScorePolicyCompat           ScorePolicyResult    `json:"scorePolicy,omitempty"`
 	Verdict                     string               `json:"verdict"`
 	VerdictKey                  string               `json:"verdictKey,omitempty"`
 	Summary                     string               `json:"summary"`
@@ -199,6 +201,20 @@ type ModelIdentityResult struct {
 	TierDelta                  string         `json:"tier_delta,omitempty"`
 	ModelListContainsRequested *bool          `json:"model_list_contains_requested,omitempty"`
 	Evidence                   map[string]any `json:"evidence,omitempty"`
+}
+
+type ScorePolicyResult struct {
+	ID                 string                 `json:"id"`
+	Channel            string                 `json:"channel,omitempty"`
+	Baseline           string                 `json:"baseline"`
+	Dimensions         []ScorePolicyDimension `json:"dimensions"`
+	ExcludedDimensions []string               `json:"excluded_dimensions,omitempty"`
+}
+
+type ScorePolicyDimension struct {
+	ID           string `json:"id"`
+	ValidationID string `json:"validation_id"`
+	MaxScore     int    `json:"max_score"`
 }
 
 type CapabilityResult struct {

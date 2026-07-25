@@ -26,6 +26,7 @@ func finalizeReport(report *PublicReport) {
 		return
 	}
 	ensureChannelAttribution(report)
+	report.ScorePolicy = resolveScorePolicy(report)
 	totalScore := 0
 	totalMax := 0
 	capabilityScore := 0
@@ -97,6 +98,7 @@ func syncReportCompat(report *PublicReport) {
 	report.OfficialBehaviorScoreCompat = report.OfficialBehaviorScore
 	report.MeteringScoreCompat = report.MeteringScore
 	report.MeteringStatusCompat = report.MeteringStatus
+	report.ScorePolicyCompat = cloneScorePolicy(report.ScorePolicy)
 	report.ChannelAttributionCompat = cloneChannelAttribution(report.ChannelAttribution)
 	report.CapabilityMatrixCompat = cloneCapabilityMatrix(report.CapabilityMatrix)
 	report.DimensionMatrixCompat = cloneDimensionMatrix(report.DimensionMatrix)
@@ -228,6 +230,7 @@ func buildPublicSummary(report *PublicReport) map[string]any {
 		"official_behavior_score": report.OfficialBehaviorScore,
 		"metering_score":          report.MeteringScore,
 		"metering_status":         report.MeteringStatus,
+		"score_policy":            report.ScorePolicy,
 		"verdict":                 report.Verdict,
 		"summary":                 report.Summary,
 		"error":                   report.Error,
@@ -278,6 +281,13 @@ func buildPublicSummary(report *PublicReport) map[string]any {
 			"anomalies":                     report.TokenAudit.Anomalies,
 		}
 	}
+	return out
+}
+
+func cloneScorePolicy(value ScorePolicyResult) ScorePolicyResult {
+	out := value
+	out.Dimensions = append([]ScorePolicyDimension(nil), value.Dimensions...)
+	out.ExcludedDimensions = append([]string(nil), value.ExcludedDimensions...)
 	return out
 }
 

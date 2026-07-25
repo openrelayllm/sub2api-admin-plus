@@ -164,23 +164,14 @@ func scoreBreakdown(report *PublicReport) map[string]int {
 	if report == nil {
 		return nil
 	}
-	out := map[string]int{
-		"tag_check":       0,
-		"structure":       0,
-		"behavior":        0,
-		"signature_proto": 0,
-		"multimodal":      0,
+	policy := report.ScorePolicy
+	if policy.ID == "" {
+		policy = resolveScorePolicy(report)
 	}
-	if hasCheckStatus(report.Checks, "base_url", CheckStatusPass, CheckStatusWarn) ||
-		hasCheckStatus(report.Checks, "models_schema", CheckStatusPass, CheckStatusWarn) ||
-		hasCheckStatus(report.Checks, "claude_messages_schema", CheckStatusPass, CheckStatusWarn) ||
-		hasCheckStatus(report.Checks, "gemini_models_schema", CheckStatusPass, CheckStatusWarn) {
-		out["tag_check"] = validationWeightedScore(report, "llm_fingerprint", 10)
+	out := make(map[string]int, len(policy.Dimensions)+1)
+	for _, dimension := range policy.Dimensions {
+		out[dimension.ID] = validationWeightedScore(report, dimension.ValidationID, dimension.MaxScore)
 	}
-	out["structure"] = validationWeightedScore(report, "schema_integrity", 20)
-	out["behavior"] = validationWeightedScore(report, "behavior", 30)
-	out["signature_proto"] = validationWeightedScore(report, "signature", 30)
-	out["multimodal"] = validationWeightedScore(report, "multimodal", 10)
 	if hasValidation(report.Validations, "token_audit") {
 		out["token_audit"] = validationWeightedScore(report, "token_audit", 10)
 	}

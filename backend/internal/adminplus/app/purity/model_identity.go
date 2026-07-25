@@ -117,11 +117,16 @@ func evaluateModelIdentity(report *PublicReport) ModelIdentityResult {
 		result.Evidence["protocol_expected_vendor"] = expectedVendor
 		return result
 	}
-	if suspectedVendor := wrapperVendorMismatch(requested.Vendor, reportWrapperSignals(report)); suspectedVendor != "" {
-		result.Status = CheckStatusFail
-		result.Reason = modelIdentityReasonWrapperVendorSignalMismatch
-		result.Evidence["suspected_upstream_vendor"] = suspectedVendor
-		return result
+	// Anthropic-compatible requests may legitimately be served by Bedrock or
+	// Vertex. A gateway capability list is therefore not model identity evidence
+	// for Claude; only explicit model/response facts and calibrated signatures are.
+	if reportProvider(report) != ProviderAnthropic {
+		if suspectedVendor := wrapperVendorMismatch(requested.Vendor, reportWrapperSignals(report)); suspectedVendor != "" {
+			result.Status = CheckStatusFail
+			result.Reason = modelIdentityReasonWrapperVendorSignalMismatch
+			result.Evidence["suspected_upstream_vendor"] = suspectedVendor
+			return result
+		}
 	}
 	if response.Canonical == "" {
 		result.Status = CheckStatusWarn
@@ -355,6 +360,19 @@ func versionString(version []int) string {
 	return strings.Join(parts, ".")
 }
 
+func protocolExpectedVendor(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case ProviderOpenAI:
+		return "openai"
+	case ProviderAnthropic:
+		return "anthropic"
+	case ProviderGemini:
+		return "google"
+	default:
+		return ""
+	}
+}
+
 func wrapperVendorMismatch(requestedVendor string, signals []string) string {
 	requestedVendor = strings.TrimSpace(requestedVendor)
 	if requestedVendor == "" {
@@ -368,19 +386,6 @@ func wrapperVendorMismatch(requestedVendor string, signals []string) string {
 		return vendor
 	}
 	return ""
-}
-
-func protocolExpectedVendor(provider string) string {
-	switch strings.TrimSpace(provider) {
-	case ProviderOpenAI:
-		return "openai"
-	case ProviderAnthropic:
-		return "anthropic"
-	case ProviderGemini:
-		return "google"
-	default:
-		return ""
-	}
 }
 
 func vendorFromWrapperSignal(signal string) string {

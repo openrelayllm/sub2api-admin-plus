@@ -41,8 +41,41 @@ func buildClaudeSignatureProvenanceCheck(report *PublicReport, nonStreamProbe ht
 			"stream_parse_errors":      streamProbe.SignatureParseErrors,
 			"stream_thinking_observed": streamProbe.SeenThinkingDelta,
 			"signature_after_thinking": streamProbe.SignatureAfterThinking,
+			"non_stream_fingerprints":  signatureFingerprintDetails(nonStream.Fingerprints, reportModelID(report)),
+			"stream_fingerprints":      signatureFingerprintDetails(streamProbe.SignatureFingerprints, reportModelID(report)),
 		},
 	}
+}
+
+func signatureFingerprintDetails(fingerprints []signature.Fingerprint, model string) []map[string]any {
+	details := make([]map[string]any, 0, len(fingerprints))
+	registry, registryErr := signature.DefaultRegistry()
+	for _, fingerprint := range fingerprints {
+		item := map[string]any{
+			"dedup_hash":            fingerprint.DedupHash,
+			"decoded_length_bucket": fingerprint.DecodedLengthBucket,
+			"top_level_fields":      append([]int(nil), fingerprint.TopLevelFields...),
+			"envelope_fields":       append([]int(nil), fingerprint.EnvelopeFields...),
+			"metadata_fields":       append([]int(nil), fingerprint.MetadataFields...),
+			"metadata_value_types":  fingerprint.MetadataValueTypes,
+		}
+		if registryErr == nil {
+			classification := registry.Classify(fingerprint, model)
+			item["classification_status"] = classification.Status
+			item["channel"] = classification.Channel
+			item["family_id"] = classification.FamilyID
+			item["confidence"] = classification.Confidence
+		}
+		details = append(details, item)
+	}
+	return details
+}
+
+func reportModelID(report *PublicReport) string {
+	if report == nil {
+		return ""
+	}
+	return firstNonEmptyString(report.ResponseModel, report.ExpectedModel, report.ModelID)
 }
 
 func analyzeClaudeThinkingProbe(probe *httpProbe) signature.JSONAnalysis {

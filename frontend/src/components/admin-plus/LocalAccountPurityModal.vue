@@ -163,6 +163,26 @@
         </div>
       </div>
 
+      <div v-if="scorePolicy" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('purity.detail.scorePolicy') }}</div>
+            <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ scorePolicyDisplayName }}</div>
+          </div>
+          <span class="badge badge-secondary">{{ channelDisplayName(scorePolicy.channel) }}</span>
+        </div>
+        <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <div v-for="dimension in scorePolicy.dimensions" :key="dimension.id" class="flex min-w-0 items-center justify-between gap-2 rounded-md bg-gray-50 px-2.5 py-2 text-xs dark:bg-dark-600">
+            <span class="truncate text-gray-600 dark:text-dark-300">{{ scoreDimensionLabel(dimension.id) }}</span>
+            <span class="font-semibold text-gray-900 dark:text-gray-100">{{ dimension.max_score }}</span>
+          </div>
+        </div>
+        <div v-if="scorePolicy.excluded_dimensions?.length" class="mt-3 text-xs leading-5 text-gray-500 dark:text-dark-400">
+          <span class="font-semibold text-gray-700 dark:text-dark-300">{{ t('purity.detail.scoreExcluded') }}：</span>
+          {{ scorePolicy.excluded_dimensions.map(scoreDimensionLabel).join(' · ') }}
+        </div>
+      </div>
+
       <details class="group rounded-lg border border-gray-200 bg-white dark:border-dark-500 dark:bg-dark-700" data-testid="purity-report-details">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
           <div>
@@ -240,7 +260,7 @@
             </div>
           </section>
 
-          <div class="grid gap-3 lg:grid-cols-[1fr_320px]">
+          <div class="grid gap-3" :class="tokenAuditRequested ? 'lg:grid-cols-[1fr_320px]' : 'grid-cols-1'">
         <div v-if="tokenAuditRequested" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
           <div class="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -337,11 +357,6 @@
               </tbody>
             </table>
           </div>
-        </div>
-
-        <div v-else class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 dark:border-dark-500 dark:bg-dark-600 dark:text-dark-300">
-          <div class="font-semibold text-gray-900 dark:text-gray-100">{{ t('purity.detail.tokenAudit') }}</div>
-          <div class="mt-1 text-xs leading-5">{{ t('purity.detail.tokenAuditDisabled') }}</div>
         </div>
 
         <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
@@ -531,6 +546,26 @@ const { t } = useI18n({
           rawChecks: '全部原始 Check 与得分',
           tokenAudit: 'Token 用量审计',
           tokenAuditDisabled: '默认未启用，不发送额外 11 轮请求，也不参与本次判定。重新检测前勾选即可执行。',
+          scorePolicy: '渠道评分基线',
+          scoreExcluded: '本渠道基线不计分',
+          scorePolicyNames: {
+            compatible_protocol: '兼容协议基线',
+            anthropic_native_messages: 'Anthropic 原生 Messages 基线',
+            aws_bedrock_messages: 'AWS Bedrock Messages 基线',
+            google_vertex_claude: 'Google Vertex Claude 基线',
+            openai_responses_native: 'OpenAI 原生 Responses 基线',
+            google_ai_studio_native: 'Google AI Studio 原生基线'
+          },
+          scoreDimensions: {
+            tag_check: 'LLM 指纹验证',
+            structure: '结构完整性',
+            behavior: '行为验证',
+            signature_proto: '签名校验',
+            multimodal: '多模态能力',
+            websearch: 'WebSearch',
+            fingerprint: '协议与网关指纹',
+            token_audit: 'Token 用量审计'
+          },
           unscored: '未评分',
           scored: '项已评分',
           channel: '上游渠道',
@@ -667,6 +702,26 @@ const { t } = useI18n({
           rawChecks: 'All raw checks and scores',
           tokenAudit: 'Token usage audit',
           tokenAuditDisabled: 'Disabled by default. No additional 11-round audit is sent or used in this assessment. Enable it before rerunning to audit usage.',
+          scorePolicy: 'Channel scoring baseline',
+          scoreExcluded: 'Excluded from this channel baseline',
+          scorePolicyNames: {
+            compatible_protocol: 'Compatible protocol baseline',
+            anthropic_native_messages: 'Anthropic native Messages baseline',
+            aws_bedrock_messages: 'AWS Bedrock Messages baseline',
+            google_vertex_claude: 'Google Vertex Claude baseline',
+            openai_responses_native: 'OpenAI native Responses baseline',
+            google_ai_studio_native: 'Google AI Studio native baseline'
+          },
+          scoreDimensions: {
+            tag_check: 'LLM fingerprint',
+            structure: 'Structure integrity',
+            behavior: 'Behavior validation',
+            signature_proto: 'Signature validation',
+            multimodal: 'Multimodal capability',
+            websearch: 'WebSearch',
+            fingerprint: 'Protocol and gateway fingerprint',
+            token_audit: 'Token usage audit'
+          },
           unscored: 'Unscored',
           scored: 'scored',
           channel: 'Upstream channel',
@@ -771,7 +826,7 @@ const activeValidationByStep: Record<string, string> = {
   evaluate: 'model_identity'
 }
 
-const scoreDefinitions: Array<{ key: ScoreBreakdownKey; label: string; max: number }> = [
+const defaultScoreDefinitions: Array<{ key: ScoreBreakdownKey; label: string; max: number }> = [
   { key: 'tag_check', label: '指纹', max: 10 },
   { key: 'structure', label: '结构', max: 20 },
   { key: 'behavior', label: '行为', max: 30 },
@@ -855,41 +910,45 @@ const probeIssueMessage = computed(() => {
   if (fatalReportError.value || !metrics.value.error_message) return ''
   return metrics.value.error_message
 })
-const displayedValidations = computed<DisplayValidation[]>(() => validationDefinitions.map((definition) => {
-  if (definition.id === 'token_audit' && !tokenAuditRequested.value) {
+const displayedValidations = computed<DisplayValidation[]>(() => validationDefinitions
+  .filter((definition) => definition.id !== 'token_audit' || tokenAuditRequested.value)
+  .map((definition) => {
+    const result = validations.value[definition.id]
+    if (result) {
+      return {
+        id: definition.id,
+        name: result.name || definition.name,
+        status: result.status as DisplayStatus,
+        message: result.message || definition.message
+      }
+    }
     return {
       ...definition,
-      status: 'idle',
-      message: t('purity.detail.tokenAuditDisabled')
+      name: validationDisplayName(definition),
+      message: validationWaitingMessage(definition),
+      status: started.value && runStatus.value === 'running' && currentRunningValidation.value === definition.id ? 'running' : 'idle'
     }
-  }
-  const result = validations.value[definition.id]
-  if (result) {
-    return {
-      id: definition.id,
-      name: result.name || definition.name,
-      status: result.status as DisplayStatus,
-      message: result.message || definition.message
-    }
-  }
-  return {
-    ...definition,
-    name: validationDisplayName(definition),
-    message: validationWaitingMessage(definition),
-    status: started.value && runStatus.value === 'running' && currentRunningValidation.value === definition.id ? 'running' : 'idle'
-  }
-}))
+  }))
 const scoreBreakdownItems = computed(() => {
   const source = report.value?.scores || scores.value
-  return scoreDefinitions.map((definition) => {
+  const policyDefinitions = scorePolicy.value?.dimensions?.length
+    ? scorePolicy.value.dimensions.map((dimension) => ({
+        key: dimension.id as ScoreBreakdownKey,
+        label: scoreDimensionLabel(dimension.id),
+        max: dimension.max_score
+      }))
+    : defaultScoreDefinitions.filter((definition) => definition.key !== 'token_audit')
+  const definitions = tokenAuditRequested.value
+    ? [...policyDefinitions, defaultScoreDefinitions.find((definition) => definition.key === 'token_audit')!]
+    : policyDefinitions
+  return definitions.map((definition) => {
     const rawValue = source[definition.key] ?? 0
     const value = Math.max(0, Math.min(definition.max, rawValue))
-    const unscored = definition.key === 'token_audit' && !tokenAuditRequested.value
     return {
       ...definition,
       value,
-      display: unscored ? t('purity.detail.unscored') : `${value}/${definition.max}`,
-      percent: unscored ? 0 : Math.round((value / definition.max) * 100)
+      display: `${value}/${definition.max}`,
+      percent: Math.round((value / definition.max) * 100)
     }
   })
 })
@@ -897,12 +956,16 @@ const validAuditSamples = computed(() => normalizedAuditSamples().filter(hasAudi
 const failedAuditSampleCount = computed(() => normalizedAuditSamples().filter((sample) => !hasAuditSampleData(sample)).length)
 const auditSamplesForChart = computed(() => validAuditSamples.value)
 const auditSamplesForTable = computed(() => normalizedAuditSamples())
-const reportChecks = computed<PurityCheckResult[]>(() => (report.value?.checks?.length ? report.value.checks : checks.value))
+const reportChecks = computed<PurityCheckResult[]>(() => {
+  const values = report.value?.checks?.length ? report.value.checks : checks.value
+  return values.filter((check) => check.id !== 'token_audit' || tokenAuditRequested.value)
+})
 const dimensions = computed<PurityDimensionResult[]>(() => {
   const snake = report.value?.dimension_matrix || []
   return snake.length ? snake : report.value?.dimensionMatrix || []
 })
 const assessment = computed(() => report.value?.assessment || report.value?.assessmentResult || null)
+const scorePolicy = computed(() => report.value?.score_policy || report.value?.scorePolicy || null)
 const tokenAuditRequested = computed(() => {
   if (report.value) {
     const requested = report.value.check_token_usage ?? report.value.checkTokenUsage
@@ -945,10 +1008,10 @@ const assessmentFacts = computed(() => {
       label: t('purity.detail.wrapper'),
       value: t(`purity.detail.wrapperMode.${value.wrapper_mode}`)
     },
-    {
+    ...(tokenAuditRequested.value ? [{
       label: t('purity.detail.metering'),
       value: meteringStatusDisplay(value.metering_status)
-    },
+    }] : []),
     {
       label: t('purity.detail.coverage'),
       value: `${value.dimension_executed}/${value.dimension_total} · ${value.dimension_scored} ${t('purity.detail.scored')}`
@@ -958,6 +1021,19 @@ const assessmentFacts = computed(() => {
       value: limitations.length ? limitations.join('; ') : t('purity.detail.noLimitations')
     }
   ]
+})
+const scorePolicyDisplayName = computed(() => {
+  const id = scorePolicy.value?.id
+  if (!id) return ''
+  const known = new Set([
+    'compatible_protocol',
+    'anthropic_native_messages',
+    'aws_bedrock_messages',
+    'google_vertex_claude',
+    'openai_responses_native',
+    'google_ai_studio_native'
+  ])
+  return known.has(id) ? t(`purity.detail.scorePolicyNames.${id}`) : id
 })
 const tokenAuditSummary = computed(() => {
   if (tokenAudit.value) return `${tokenAudit.value.summary} · ${auditSamplesForTable.value.length}/${tokenAudit.value.sample_count || 11}${failedAuditSampleCount.value > 0 ? ` · ${failedAuditSampleCount.value} 轮仅返回诊断` : ''}`
@@ -1373,6 +1449,11 @@ function dimensionDisplayName(dimension: PurityDimensionResult): string {
     'fingerprint'
   ])
   return known.has(dimension.id) ? t(`purity.detail.dimensionNames.${dimension.id}`) : dimension.name
+}
+
+function scoreDimensionLabel(id: string): string {
+  const known = new Set(['tag_check', 'structure', 'behavior', 'signature_proto', 'multimodal', 'websearch', 'fingerprint', 'token_audit'])
+  return known.has(id) ? t(`purity.detail.scoreDimensions.${id}`) : id
 }
 
 function dimensionStatusLabel(status: PurityDimensionStatus): string {
