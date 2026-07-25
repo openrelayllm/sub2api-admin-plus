@@ -64,9 +64,10 @@ func meteringIntegrityScore(report *PublicReport) (int, string) {
 			continue
 		}
 		status := capabilityStatusSupported
-		if check.Status == CheckStatusWarn {
+		switch check.Status {
+		case CheckStatusWarn:
 			status = capabilityStatusLimited
-		} else if check.Status == CheckStatusFail {
+		case CheckStatusFail:
 			status = capabilityStatusUnsupported
 		}
 		return percent(check.Score, check.MaxScore), status

@@ -200,7 +200,7 @@ func readClaudeStream(body io.Reader, started time.Time, now func() time.Time, r
 						signatureParts[blockIndex] = builder
 					}
 					if builder.Len()+len(part) <= 128*1024 {
-						builder.WriteString(part)
+						_, _ = builder.WriteString(part)
 					} else {
 						result.SignatureParseErrors++
 						finishedSignatures[blockIndex] = struct{}{}
