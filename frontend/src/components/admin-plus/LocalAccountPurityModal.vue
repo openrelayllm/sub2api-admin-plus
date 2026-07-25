@@ -30,6 +30,15 @@
             :placeholder="loadingModels ? '加载中...' : '选择模型'"
             empty-text="暂无模型"
           />
+          <label class="inline-flex min-h-9 items-center gap-2 text-xs text-gray-600 dark:text-dark-300">
+            <input
+              v-model="checkTokenUsage"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :disabled="runStatus === 'running'"
+            />
+            <span>{{ t('purity.detail.tokenAuditOption') }}</span>
+          </label>
           <button type="button" class="btn btn-primary btn-sm" :disabled="runStatus === 'running' || !selectedModelId || !isSupportedAccount" @click="startCheck">
             <Icon v-if="runStatus === 'running'" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
             <Icon v-else name="play" size="sm" :stroke-width="2" />
@@ -62,7 +71,7 @@
           </div>
           <div class="mt-4 text-center">
             <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ verdictLabel }}</div>
-            <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ report?.summary || runningSummary }}</div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ assessmentDisplayTitle || report?.summary || runningSummary }}</div>
           </div>
           <div class="mt-4">
             <div class="mb-1 flex items-center justify-between text-xs text-gray-500 dark:text-dark-400">
@@ -113,10 +122,10 @@
             <div v-for="item in scoreBreakdownItems" :key="item.key" class="rounded-lg border border-gray-200 bg-white p-3 dark:border-dark-500 dark:bg-dark-700">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-xs font-medium text-gray-600 dark:text-dark-300">{{ item.label }}</span>
-                <span class="text-xs font-semibold text-gray-900 dark:text-gray-100">{{ item.value }}/{{ item.max }}</span>
+                <span class="text-xs font-semibold text-gray-900 dark:text-gray-100">{{ item.display }}</span>
               </div>
               <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-600">
-                <div class="h-full rounded-full bg-primary-500 transition-all" :style="{ width: `${Math.round((item.value / item.max) * 100)}%` }" />
+                <div class="h-full rounded-full bg-primary-500 transition-all" :style="{ width: `${item.percent}%` }" />
               </div>
             </div>
           </div>
@@ -138,8 +147,101 @@
         </div>
       </div>
 
-      <div class="grid gap-3 lg:grid-cols-[1fr_320px]">
-        <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
+      <div v-if="assessment" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('purity.detail.assessment') }}</div>
+            <div class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ assessmentDisplayTitle }}</div>
+          </div>
+          <span class="badge" :class="assessmentStatusClass">{{ assessmentStatusLabel }}</span>
+        </div>
+        <div class="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+          <div v-for="item in assessmentFacts" :key="item.label" class="min-w-0">
+            <div class="text-gray-500 dark:text-dark-400">{{ item.label }}</div>
+            <div class="mt-0.5 break-words font-medium text-gray-900 dark:text-gray-100">{{ item.value }}</div>
+          </div>
+        </div>
+      </div>
+
+      <details class="group rounded-lg border border-gray-200 bg-white dark:border-dark-500 dark:bg-dark-700" data-testid="purity-report-details">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+          <div>
+            <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('purity.detail.title') }}</div>
+            <div class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ t('purity.detail.summary', { count: dimensions.length || 12 }) }}</div>
+          </div>
+          <Icon name="chevronDown" size="sm" class="transition-transform group-open:rotate-180" :stroke-width="2" />
+        </summary>
+
+        <div class="space-y-4 border-t border-gray-200 p-4 dark:border-dark-500">
+          <section>
+            <div class="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('purity.detail.dimensions') }}</div>
+            <div class="divide-y divide-gray-200 rounded-md border border-gray-200 dark:divide-dark-500 dark:border-dark-500">
+              <details
+                v-for="dimension in dimensions"
+                :key="dimension.id"
+                class="group/dimension"
+                :data-dimension-id="dimension.id"
+              >
+                <summary class="grid cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-2.5">
+                  <div class="min-w-0">
+                    <div class="truncate text-xs font-semibold text-gray-900 dark:text-gray-100">{{ dimensionDisplayName(dimension) }}</div>
+                    <div class="mt-0.5 truncate font-mono text-[10px] text-gray-400 dark:text-dark-400">{{ dimension.id }}</div>
+                  </div>
+                  <span class="text-[10px] font-medium" :class="dimensionStatusClass(dimension.status)">{{ dimensionStatusLabel(dimension.status) }}</span>
+                  <span class="min-w-[64px] text-right text-xs font-semibold text-gray-900 dark:text-gray-100">{{ dimensionScoreLabel(dimension) }}</span>
+                </summary>
+                <div class="space-y-3 border-t border-gray-100 px-3 py-3 text-xs dark:border-dark-600">
+                  <p class="leading-5 text-gray-600 dark:text-dark-300">{{ dimension.message }}</p>
+                  <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <span class="text-gray-400">{{ t('purity.detail.category') }}：</span>
+                      <span class="text-gray-700 dark:text-dark-300">{{ dimension.category }}</span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">{{ t('purity.detail.mode') }}：</span>
+                      <span class="text-gray-700 dark:text-dark-300">{{ dimension.mode || '-' }}</span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">{{ t('purity.detail.sourceChecks') }}：</span>
+                      <span class="break-words font-mono text-gray-700 dark:text-dark-300">{{ dimension.source_check_ids?.join(', ') || '-' }}</span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">{{ t('purity.detail.limitations') }}：</span>
+                      <span class="break-words text-gray-700 dark:text-dark-300">{{ dimension.limitations?.join('; ') || '-' }}</span>
+                    </div>
+                  </div>
+                  <dl v-if="safePurityDetailEntries(dimension.details).length" class="grid gap-2 rounded-md bg-gray-50 p-2 dark:bg-dark-600">
+                    <div v-for="entry in safePurityDetailEntries(dimension.details)" :key="entry[0]" class="grid gap-1 sm:grid-cols-[150px_minmax(0,1fr)]">
+                      <dt class="font-medium text-gray-500 dark:text-dark-400">{{ purityDetailKeyLabel(entry[0]) }}</dt>
+                      <dd class="break-all whitespace-pre-wrap text-gray-800 dark:text-gray-100">{{ formatPurityDetailValue(entry[1]) }}</dd>
+                    </div>
+                  </dl>
+                  <div v-if="sourceChecksForDimension(dimension).length" class="space-y-2">
+                    <div class="font-semibold text-gray-700 dark:text-dark-300">{{ t('purity.detail.sourceResults') }}</div>
+                    <details v-for="check in sourceChecksForDimension(dimension)" :key="check.id" class="rounded-md border border-gray-200 bg-white dark:border-dark-500 dark:bg-dark-700">
+                      <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2">
+                        <span class="font-medium text-gray-800 dark:text-gray-100">{{ check.name }}</span>
+                        <span :class="checkStatusClass(check.status)">{{ check.score }}/{{ check.max_score }}</span>
+                      </summary>
+                      <div class="border-t border-gray-100 px-2.5 py-2 dark:border-dark-600">
+                        <p class="text-gray-500 dark:text-dark-400">{{ check.message }}</p>
+                        <dl v-if="safePurityDetailEntries(check.details).length" class="mt-2 space-y-1">
+                          <div v-for="entry in safePurityDetailEntries(check.details)" :key="entry[0]" class="grid gap-1 sm:grid-cols-[130px_minmax(0,1fr)]">
+                            <dt class="font-medium text-gray-400">{{ purityDetailKeyLabel(entry[0]) }}</dt>
+                            <dd class="break-all whitespace-pre-wrap text-gray-700 dark:text-dark-300">{{ formatPurityDetailValue(entry[1]) }}</dd>
+                          </div>
+                        </dl>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+              <div v-if="dimensions.length === 0" class="p-4 text-center text-xs text-gray-400 dark:text-dark-400">{{ t('purity.detail.waitingDimensions') }}</div>
+            </div>
+          </section>
+
+          <div class="grid gap-3 lg:grid-cols-[1fr_320px]">
+        <div v-if="tokenAuditRequested" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
           <div class="mb-3 flex items-center justify-between gap-3">
             <div>
               <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">Token 用量审计</div>
@@ -237,22 +339,37 @@
           </div>
         </div>
 
+        <div v-else class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 dark:border-dark-500 dark:bg-dark-600 dark:text-dark-300">
+          <div class="font-semibold text-gray-900 dark:text-gray-100">{{ t('purity.detail.tokenAudit') }}</div>
+          <div class="mt-1 text-xs leading-5">{{ t('purity.detail.tokenAuditDisabled') }}</div>
+        </div>
+
         <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-500 dark:bg-dark-700">
-          <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">检测明细</div>
+          <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('purity.detail.rawChecks') }}</div>
           <div class="mt-3 max-h-[300px] space-y-2 overflow-y-auto pr-1">
-            <div v-for="check in reportChecks" :key="check.id" class="rounded-md bg-gray-50 p-2 dark:bg-dark-600">
-              <div class="flex items-center justify-between gap-2">
+            <details v-for="check in reportChecks" :key="check.id" class="rounded-md bg-gray-50 dark:bg-dark-600">
+              <summary class="flex cursor-pointer list-none items-center justify-between gap-2 p-2">
                 <span class="text-xs font-medium text-gray-800 dark:text-gray-100">{{ check.name }}</span>
                 <span class="text-xs" :class="checkStatusClass(check.status)">{{ check.score }}/{{ check.max_score }}</span>
+              </summary>
+              <div class="border-t border-gray-200 px-2 pb-2 pt-1.5 text-xs dark:border-dark-500">
+                <div class="leading-5 text-gray-500 dark:text-dark-400">{{ check.message }}</div>
+                <dl v-if="safePurityDetailEntries(check.details).length" class="mt-2 space-y-1">
+                  <div v-for="entry in safePurityDetailEntries(check.details)" :key="entry[0]" class="grid gap-1 sm:grid-cols-[120px_minmax(0,1fr)]">
+                    <dt class="font-medium text-gray-400">{{ purityDetailKeyLabel(entry[0]) }}</dt>
+                    <dd class="break-all whitespace-pre-wrap text-gray-700 dark:text-dark-300">{{ formatPurityDetailValue(entry[1]) }}</dd>
+                  </div>
+                </dl>
               </div>
-              <div class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ check.message }}</div>
-            </div>
+            </details>
             <div v-if="reportChecks.length === 0" class="rounded-md bg-gray-50 p-4 text-center text-xs text-gray-400 dark:bg-dark-600 dark:text-dark-400">
-              等待后端探针结果
+              {{ t('purity.detail.waitingChecks') }}
             </div>
           </div>
         </div>
-      </div>
+          </div>
+        </div>
+      </details>
 
       <div v-if="errorMessage" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-900/20 dark:text-red-200">
         {{ errorMessage }}
@@ -292,6 +409,8 @@ import {
   type PurityCheckMetrics,
   type PurityCheckResult,
   type PurityCheckStatus,
+  type PurityDimensionResult,
+  type PurityDimensionStatus,
   type PurityProvider,
   type PurityReport,
   type PurityScoreBreakdown,
@@ -299,6 +418,7 @@ import {
   type PurityTokenAuditSample,
   type PurityValidationResult
 } from '@/api/admin/adminPlus'
+import { formatPurityDetailValue, purityDetailKeyLabel, safePurityDetailEntries } from '@/utils/purityDetail'
 import { downloadPurityReportPDF } from '@/utils/purityPdf'
 import {
   formatTokenAuditLatencyMS,
@@ -394,6 +514,90 @@ const { t } = useI18n({
           wrapperVendorMismatch: '包装层暴露的上游厂商与请求模型不一致',
           reasoningTokensMismatch: '非 reasoning 模型响应暴露了 reasoning_tokens',
           completed: '模型身份检查已完成'
+        },
+        detail: {
+          tokenAuditOption: '检测 Token 用量是否异常（额外 11 轮请求）',
+          assessment: '结构化判定',
+          title: '检测 Detail 与逐项评分',
+          summary: '{count} 个检测维度，每项 Detail 独立展开',
+          dimensions: '12 维检测矩阵',
+          category: '分类',
+          mode: '探针模式',
+          sourceChecks: '来源探针',
+          sourceResults: '来源探针结果',
+          limitations: '限制',
+          waitingDimensions: '等待后端返回检测维度',
+          waitingChecks: '等待后端探针结果',
+          rawChecks: '全部原始 Check 与得分',
+          tokenAudit: 'Token 用量审计',
+          tokenAuditDisabled: '默认未启用，不发送额外 11 轮请求，也不参与本次判定。重新检测前勾选即可执行。',
+          unscored: '未评分',
+          scored: '项已评分',
+          channel: '上游渠道',
+          identity: '模型身份',
+          protocol: '协议兼容',
+          wrapper: '网关包装',
+          metering: 'Token 审计',
+          coverage: '维度覆盖',
+          limitationsFact: '能力限制',
+          noLimitations: '本轮已执行项未发现明确限制',
+          unknown: '未知',
+          notTested: '未检测',
+          dimensionNames: {
+            tag_check: 'LLM 指纹验证',
+            stream_structure: '流结构校验',
+            non_stream: '非流结构校验',
+            websearch: 'WebSearch',
+            signature_proto: '签名校验',
+            output_config: '结构化输出',
+            server_tool: '工具调用',
+            token_inject: 'Token 注入',
+            knowledge: '知识库检测',
+            doc_recognition: '文档识别',
+            image_recognition: '图片识别',
+            fingerprint: '协议与网关指纹'
+          },
+          dimensionStatus: {
+            pass: '通过',
+            warn: '警告',
+            fail: '失败',
+            not_run: '未执行',
+            not_applicable: '不适用',
+            unsupported_by_upstream: '上游不支持'
+          },
+          assessmentKind: {
+            official_native: '原生官方渠道',
+            official_cloud_channel: '官方云渠道',
+            transparent_relay: '透明中转',
+            compatible_channel: '兼容渠道',
+            channel_conflicted: '渠道证据冲突',
+            identity_conflict: '模型身份冲突',
+            compatibility_risk: '兼容链路风险',
+            invalid_or_unavailable: '接口不可用或协议不完整'
+          },
+          assessmentStatus: {
+            ready: '可用',
+            limited: '兼容受限',
+            risky: '高风险',
+            invalid: '不可用'
+          },
+          channelStatus: {
+            identified: '已识别',
+            likely: '较可能',
+            unknown: '证据不足',
+            conflicted: '证据冲突'
+          },
+          protocolStatus: {
+            high: '高',
+            medium: '中',
+            low: '低',
+            unavailable: '不可用'
+          },
+          wrapperMode: {
+            none: '未发现明显包装信号',
+            transparent: '透明中转或兼容网关',
+            obfuscating: '存在混淆模型或协议的信号'
+          }
         }
       }
     },
@@ -446,6 +650,90 @@ const { t } = useI18n({
           wrapperVendorMismatch: 'Wrapper-exposed upstream vendor does not match the requested model',
           reasoningTokensMismatch: 'A non-reasoning model response exposed reasoning_tokens',
           completed: 'Model identity check completed'
+        },
+        detail: {
+          tokenAuditOption: 'Check abnormal token usage (11 extra requests)',
+          assessment: 'Structured assessment',
+          title: 'Detection detail and per-item scores',
+          summary: '{count} dimensions, each detail expands independently',
+          dimensions: '12-dimension detection matrix',
+          category: 'Category',
+          mode: 'Probe mode',
+          sourceChecks: 'Source probes',
+          sourceResults: 'Source probe results',
+          limitations: 'Limitations',
+          waitingDimensions: 'Waiting for detection dimensions',
+          waitingChecks: 'Waiting for backend probe results',
+          rawChecks: 'All raw checks and scores',
+          tokenAudit: 'Token usage audit',
+          tokenAuditDisabled: 'Disabled by default. No additional 11-round audit is sent or used in this assessment. Enable it before rerunning to audit usage.',
+          unscored: 'Unscored',
+          scored: 'scored',
+          channel: 'Upstream channel',
+          identity: 'Model identity',
+          protocol: 'Protocol compatibility',
+          wrapper: 'Gateway wrapper',
+          metering: 'Token audit',
+          coverage: 'Dimension coverage',
+          limitationsFact: 'Capability limits',
+          noLimitations: 'No explicit limitation was found in the probes executed',
+          unknown: 'Unknown',
+          notTested: 'Not tested',
+          dimensionNames: {
+            tag_check: 'LLM fingerprint',
+            stream_structure: 'Streaming structure',
+            non_stream: 'Non-streaming structure',
+            websearch: 'WebSearch',
+            signature_proto: 'Signature validation',
+            output_config: 'Structured output',
+            server_tool: 'Tool call',
+            token_inject: 'Token injection',
+            knowledge: 'Knowledge check',
+            doc_recognition: 'Document recognition',
+            image_recognition: 'Image recognition',
+            fingerprint: 'Protocol and gateway fingerprint'
+          },
+          dimensionStatus: {
+            pass: 'Pass',
+            warn: 'Warning',
+            fail: 'Fail',
+            not_run: 'Not run',
+            not_applicable: 'Not applicable',
+            unsupported_by_upstream: 'Unsupported upstream'
+          },
+          assessmentKind: {
+            official_native: 'Official native channel',
+            official_cloud_channel: 'Official cloud channel',
+            transparent_relay: 'Transparent relay',
+            compatible_channel: 'Compatible channel',
+            channel_conflicted: 'Channel evidence conflict',
+            identity_conflict: 'Model identity conflict',
+            compatibility_risk: 'Compatibility risk',
+            invalid_or_unavailable: 'Unavailable or incomplete protocol'
+          },
+          assessmentStatus: {
+            ready: 'Ready',
+            limited: 'Limited',
+            risky: 'Risky',
+            invalid: 'Invalid'
+          },
+          channelStatus: {
+            identified: 'Identified',
+            likely: 'Likely',
+            unknown: 'Insufficient evidence',
+            conflicted: 'Conflicted evidence'
+          },
+          protocolStatus: {
+            high: 'High',
+            medium: 'Medium',
+            low: 'Low',
+            unavailable: 'Unavailable'
+          },
+          wrapperMode: {
+            none: 'No obvious wrapper signal',
+            transparent: 'Transparent relay or compatible gateway',
+            obfuscating: 'Model or protocol obfuscation signal detected'
+          }
         }
       }
     }
@@ -496,6 +784,7 @@ const runStatus = ref<RunStatus>('idle')
 const loadingModels = ref(false)
 const availableModels = ref<LocalAccountTestModel[]>([])
 const selectedModelId = ref('')
+const checkTokenUsage = ref(false)
 const report = ref<PurityReport | null>(null)
 const metrics = ref<PurityCheckMetrics>({})
 const scores = ref<PurityScoreBreakdown>({})
@@ -567,6 +856,13 @@ const probeIssueMessage = computed(() => {
   return metrics.value.error_message
 })
 const displayedValidations = computed<DisplayValidation[]>(() => validationDefinitions.map((definition) => {
+  if (definition.id === 'token_audit' && !tokenAuditRequested.value) {
+    return {
+      ...definition,
+      status: 'idle',
+      message: t('purity.detail.tokenAuditDisabled')
+    }
+  }
   const result = validations.value[definition.id]
   if (result) {
     return {
@@ -588,7 +884,13 @@ const scoreBreakdownItems = computed(() => {
   return scoreDefinitions.map((definition) => {
     const rawValue = source[definition.key] ?? 0
     const value = Math.max(0, Math.min(definition.max, rawValue))
-    return { ...definition, value }
+    const unscored = definition.key === 'token_audit' && !tokenAuditRequested.value
+    return {
+      ...definition,
+      value,
+      display: unscored ? t('purity.detail.unscored') : `${value}/${definition.max}`,
+      percent: unscored ? 0 : Math.round((value / definition.max) * 100)
+    }
   })
 })
 const validAuditSamples = computed(() => normalizedAuditSamples().filter(hasAuditSampleData))
@@ -596,6 +898,67 @@ const failedAuditSampleCount = computed(() => normalizedAuditSamples().filter((s
 const auditSamplesForChart = computed(() => validAuditSamples.value)
 const auditSamplesForTable = computed(() => normalizedAuditSamples())
 const reportChecks = computed<PurityCheckResult[]>(() => (report.value?.checks?.length ? report.value.checks : checks.value))
+const dimensions = computed<PurityDimensionResult[]>(() => {
+  const snake = report.value?.dimension_matrix || []
+  return snake.length ? snake : report.value?.dimensionMatrix || []
+})
+const assessment = computed(() => report.value?.assessment || report.value?.assessmentResult || null)
+const tokenAuditRequested = computed(() => {
+  if (report.value) {
+    const requested = report.value.check_token_usage ?? report.value.checkTokenUsage
+    if (typeof requested === 'boolean') return requested
+  }
+  return Boolean(checkTokenUsage.value || tokenAudit.value)
+})
+const assessmentDisplayTitle = computed(() => {
+  const value = assessment.value
+  if (!value) return ''
+  const model = report.value?.response_model || report.value?.responseModel || report.value?.expected_model || report.value?.expectedModel || report.value?.model_id || '-'
+  return `${assessmentKindLabel(value.kind)} · ${channelDisplayName(value.channel)} · ${model}`
+})
+const assessmentStatusLabel = computed(() => assessment.value ? t(`purity.detail.assessmentStatus.${assessment.value.status}`) : t('purity.detail.unknown'))
+const assessmentStatusClass = computed(() => {
+  if (assessment.value?.status === 'ready') return 'badge-success'
+  if (assessment.value?.status === 'limited') return 'badge-warning'
+  if (assessment.value?.status === 'risky' || assessment.value?.status === 'invalid') return 'badge-danger'
+  return 'badge-secondary'
+})
+const assessmentFacts = computed(() => {
+  const value = assessment.value
+  if (!value) return []
+  const protocolScore = report.value?.protocol_score ?? report.value?.protocolScore
+  const limitations = value.limitations || []
+  return [
+    {
+      label: t('purity.detail.channel'),
+      value: `${channelDisplayName(value.channel)} · ${t(`purity.detail.channelStatus.${value.channel_status}`)} · ${formatPercent(value.channel_confidence)}`
+    },
+    {
+      label: t('purity.detail.identity'),
+      value: identityStatusDisplay(value.identity_status)
+    },
+    {
+      label: t('purity.detail.protocol'),
+      value: `${typeof protocolScore === 'number' ? `${protocolScore}/100 · ` : ''}${t(`purity.detail.protocolStatus.${value.protocol_status}`)}`
+    },
+    {
+      label: t('purity.detail.wrapper'),
+      value: t(`purity.detail.wrapperMode.${value.wrapper_mode}`)
+    },
+    {
+      label: t('purity.detail.metering'),
+      value: meteringStatusDisplay(value.metering_status)
+    },
+    {
+      label: t('purity.detail.coverage'),
+      value: `${value.dimension_executed}/${value.dimension_total} · ${value.dimension_scored} ${t('purity.detail.scored')}`
+    },
+    {
+      label: t('purity.detail.limitationsFact'),
+      value: limitations.length ? limitations.join('; ') : t('purity.detail.noLimitations')
+    }
+  ]
+})
 const tokenAuditSummary = computed(() => {
   if (tokenAudit.value) return `${tokenAudit.value.summary} · ${auditSamplesForTable.value.length}/${tokenAudit.value.sample_count || 11}${failedAuditSampleCount.value > 0 ? ` · ${failedAuditSampleCount.value} 轮仅返回诊断` : ''}`
   if (auditSamples.value.length > 0) return `采集中 · ${tokenAuditProgress.value || `${auditSamples.value.length}/11`}`
@@ -738,6 +1101,7 @@ function preferredModel(models: LocalAccountTestModel[]): string {
 function resetAll() {
   abortStream()
   resetRun()
+  checkTokenUsage.value = false
   runStatus.value = 'idle'
 }
 
@@ -784,7 +1148,8 @@ async function startCheck() {
   try {
     const payload: LocalAccountPurityPayload = {
       provider: currentProvider.value || 'openai',
-      model_id: selectedModelId.value
+      model_id: selectedModelId.value,
+      check_token_usage: checkTokenUsage.value
     }
     const response = await fetch(localAccountPurityStreamURL(props.account.id), {
       method: 'POST',
@@ -947,6 +1312,87 @@ function sampleActualBarHeight(sample: PurityTokenAuditSample): number {
 
 function maxAuditCost(): number {
   return Math.max(0.000001, ...validAuditSamples.value.map((item) => Math.max(item.official_baseline_usd || item.baseline_cost || 0, item.actual_cost_usd || item.cost || 0)))
+}
+
+function assessmentKindLabel(kind: string): string {
+  const known = new Set([
+    'official_native',
+    'official_cloud_channel',
+    'transparent_relay',
+    'compatible_channel',
+    'channel_conflicted',
+    'identity_conflict',
+    'compatibility_risk',
+    'invalid_or_unavailable'
+  ])
+  return known.has(kind) ? t(`purity.detail.assessmentKind.${kind}`) : t('purity.detail.unknown')
+}
+
+function channelDisplayName(channel?: string): string {
+  const labels: Record<string, string> = {
+    anthropic_native: 'Anthropic API',
+    aws_bedrock: 'AWS Bedrock',
+    google_vertex: 'Google Vertex AI',
+    google_ai_studio: 'Google AI Studio',
+    openai_native: 'OpenAI API',
+    anthropic_compatible: 'Claude-compatible',
+    openai_compatible: 'OpenAI-compatible',
+    gemini_compatible: 'Gemini-compatible',
+    kiro: 'Kiro',
+    antigravity: 'Antigravity'
+  }
+  return channel ? labels[channel] || t('purity.detail.unknown') : t('purity.detail.unknown')
+}
+
+function identityStatusDisplay(status?: string): string {
+  if (status === 'pass' || status === 'warn' || status === 'fail') return validationStatusLabel(status)
+  return t('purity.detail.unknown')
+}
+
+function meteringStatusDisplay(status?: string): string {
+  if (status === 'not_tested') return t('purity.detail.notTested')
+  if (status === 'supported' || status === 'pass') return t('purity.status.pass')
+  if (status === 'limited' || status === 'warn') return t('purity.status.warn')
+  if (status === 'unsupported' || status === 'fail') return t('purity.status.fail')
+  return t('purity.detail.unknown')
+}
+
+function dimensionDisplayName(dimension: PurityDimensionResult): string {
+  const known = new Set([
+    'tag_check',
+    'stream_structure',
+    'non_stream',
+    'websearch',
+    'signature_proto',
+    'output_config',
+    'server_tool',
+    'token_inject',
+    'knowledge',
+    'doc_recognition',
+    'image_recognition',
+    'fingerprint'
+  ])
+  return known.has(dimension.id) ? t(`purity.detail.dimensionNames.${dimension.id}`) : dimension.name
+}
+
+function dimensionStatusLabel(status: PurityDimensionStatus): string {
+  return t(`purity.detail.dimensionStatus.${status}`)
+}
+
+function dimensionStatusClass(status: PurityDimensionStatus): string {
+  if (status === 'pass') return 'text-emerald-600 dark:text-emerald-300'
+  if (status === 'warn' || status === 'unsupported_by_upstream') return 'text-amber-600 dark:text-amber-300'
+  if (status === 'fail') return 'text-red-600 dark:text-red-300'
+  return 'text-gray-500 dark:text-dark-400'
+}
+
+function dimensionScoreLabel(dimension: PurityDimensionResult): string {
+  return dimension.scored ? `${dimension.score}/${dimension.max_score}` : t('purity.detail.unscored')
+}
+
+function sourceChecksForDimension(dimension: PurityDimensionResult): PurityCheckResult[] {
+  const sourceIDs = new Set(dimension.source_check_ids || [])
+  return reportChecks.value.filter((check) => sourceIDs.has(check.id))
 }
 
 function validationStatusLabel(status: DisplayStatus): string {
@@ -1229,6 +1675,7 @@ function buildPDFReportSnapshot(): PurityReport | null {
     billing_mode: 'account_internal',
     api_base_host: props.account.name,
     model_id: selectedModelId.value || '-',
+    check_token_usage: checkTokenUsage.value,
     expected_model: selectedModelId.value || undefined,
     status: runStatus.value,
     step_name: stepName.value,

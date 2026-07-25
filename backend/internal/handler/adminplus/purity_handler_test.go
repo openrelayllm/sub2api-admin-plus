@@ -85,9 +85,22 @@ func TestPurityHandlerAccountCheckStreamUsesStoredAccountCredential(t *testing.T
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Header().Get("Content-Type"), "application/x-ndjson")
 	require.Contains(t, w.Body.String(), `"type":"validation"`)
-	require.Contains(t, w.Body.String(), `"type":"token_audit_sample"`)
+	require.NotContains(t, w.Body.String(), `"type":"token_audit_sample"`)
 	require.Contains(t, w.Body.String(), `"type":"report"`)
+	require.Contains(t, w.Body.String(), `"check_token_usage":false`)
 	require.NotContains(t, w.Body.String(), "sk-account-handler")
+	require.Zero(t, auditResponseIndex)
+
+	req = httptest.NewRequest(http.MethodPost, "/accounts/42/purity/checks/stream", strings.NewReader(`{"provider":"openai","model_id":"gpt-5.4","check_token_usage":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"type":"token_audit_sample"`)
+	require.Contains(t, w.Body.String(), `"check_token_usage":true`)
+	require.NotContains(t, w.Body.String(), "sk-account-handler")
+	require.Equal(t, 11, auditResponseIndex)
 }
 
 func TestAllowPrivateBaseURLForRequestOnlyTrustsLoopbackRemoteAddr(t *testing.T) {
@@ -117,6 +130,15 @@ func TestAllowPrivateBaseURLForRequestOnlyTrustsLoopbackRemoteAddr(t *testing.T)
 	c.Request = req
 
 	require.False(t, allowPrivateBaseURLForRequest(c))
+}
+
+func TestShouldSkipTokenAuditDefaultsToDisabled(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	require.True(t, shouldSkipTokenAudit(nil))
+	require.False(t, shouldSkipTokenAudit(&enabled))
+	require.True(t, shouldSkipTokenAudit(&disabled))
 }
 
 type purityHandlerAccountResolverStub struct {

@@ -1,0 +1,33 @@
+{
+  "version": "2026-07-25.1",
+  "families": [
+    {
+      "id": "anthropic-native-2026-07",
+      "channel": "anthropic_native",
+      "model_families": ["claude"],
+      "required_top_level_fields": [2, 3],
+      "required_envelope_fields": [1, 2, 3, 4, 5],
+      "required_metadata_fields": [1, 3, 5, 6, 7, 8, 11],
+      "forbidden_metadata_fields": [2],
+      "min_samples": 3,
+      "sample_count": 3,
+      "source_type": "authorized_redacted",
+      "valid_from": "2026-07-25",
+      "limitations": ["No provider signing key is available for independent cryptographic verification"]
+    },
+    {
+      "id": "aws-bedrock-2026-07",
+      "channel": "aws_bedrock",
+      "model_families": ["claude"],
+      "required_top_level_fields": [2, 3],
+      "required_envelope_fields": [1, 2, 3, 4, 5],
+      "required_metadata_fields": [1, 2, 3, 5, 6, 7, 8],
+      "forbidden_metadata_fields": [11],
+      "min_samples": 3,
+      "sample_count": 4,
+      "source_type": "authorized_redacted",
+      "valid_from": "2026-07-25",
+      "limitations": ["Calibrated samples do not yet cover every AWS region or inference profile"]
+    }
+  ]
+}

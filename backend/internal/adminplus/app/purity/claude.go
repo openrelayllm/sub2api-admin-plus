@@ -142,6 +142,8 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 		report.HasVertex = hasVertexFingerprint(report.APIBaseHost, messagesProbe.Headers)
 		report.IsKiro = hasKiroFingerprint(report.APIBaseHost, messagesProbe.Headers)
 		report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, messagesProbe), gatewayProbe.Headers, messagesProbe.Headers)
+		applyChannelAttribution(report, []map[string]string{gatewayProbe.Headers, messagesProbe.Headers}, channelSignatureEvidence{})
+		appendAndEmitChannelAttribution(report, emit)
 		appendAndEmitModelIdentity(report, emit)
 		appendAndEmitWrapperFingerprint(report, emit)
 		s.finalizeAndSave(ctx, report, baseURL)
@@ -161,6 +163,9 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 	emitMetrics(report, emit)
 
 	emitProgress(report, emit, 4, "signature")
+	thinkingProbe := s.probeClaudeThinking(checkCtx, client, baseURL, apiKey, model, probeCtx)
+	thinkingAnalysis := analyzeClaudeThinkingProbe(&thinkingProbe)
+	thinkingStreamProbe := s.probeClaudeThinkingStream(checkCtx, client, baseURL, apiKey, model, probeCtx)
 	signatureProbe := s.probeClaudeInvalidThinkingSignature(checkCtx, client, baseURL, apiKey, model, probeCtx)
 	signatureCheck := buildClaudeThinkingSignatureCheck(signatureProbe, apiKey)
 	budgetProbe := s.probeClaudeThinkingBudgetViolation(checkCtx, client, baseURL, apiKey, model, probeCtx)
@@ -168,7 +173,7 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 	cacheControlProbe := s.probeClaudeCacheControlOverflow(checkCtx, client, baseURL, apiKey, model, probeCtx)
 	cacheControlCheck := buildClaudeCacheControlOverflowCheck(cacheControlProbe, apiKey)
 	appendAndEmitChecks(report, emit, signatureCheck, budgetCheck, cacheControlCheck)
-	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("signature", "签名校验", []CheckResult{usageCheck, signatureCheck, budgetCheck, cacheControlCheck}))
+	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("signature", "签名行为校验", []CheckResult{usageCheck, signatureCheck, budgetCheck, cacheControlCheck}))
 	emitMetrics(report, emit)
 
 	emitProgress(report, emit, 5, "multimodal")
@@ -182,11 +187,21 @@ func (s *Service) runClaudeCheck(ctx context.Context, in PublicCheckInput, emit 
 	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, messagesProbe.Headers, streamProbe.Headers)
 	report.IsKiro = hasKiroFingerprint(report.APIBaseHost, messagesProbe.Headers, streamProbe.Headers)
 	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, messagesProbe, signatureProbe, budgetProbe, cacheControlProbe, multimodalProbe), gatewayProbe.Headers, messagesProbe.Headers, streamProbe.Headers, signatureProbe.Headers, budgetProbe.Headers, cacheControlProbe.Headers, multimodalProbe.Headers)
+	applyChannelAttribution(report, []map[string]string{gatewayProbe.Headers, messagesProbe.Headers, streamProbe.Headers, thinkingProbe.Headers, thinkingStreamProbe.Headers, signatureProbe.Headers, budgetProbe.Headers, cacheControlProbe.Headers, multimodalProbe.Headers}, channelSignatureEvidence{
+		NonStream:         thinkingAnalysis,
+		Stream:            thinkingStreamProbe.SignatureFingerprints,
+		StreamFound:       thinkingStreamProbe.SignatureFound,
+		StreamParseErrors: thinkingStreamProbe.SignatureParseErrors,
+	})
+	provenanceCheck := buildClaudeSignatureProvenanceCheck(report, thinkingProbe, thinkingAnalysis, thinkingStreamProbe)
+	appendAndEmitChecks(report, emit, provenanceCheck)
+	upsertAndEmitValidation(report, emit, validationFromExecutedChecks("signature_provenance", "签名来源归因", []CheckResult{provenanceCheck}))
+	appendAndEmitChannelAttribution(report, emit)
 	appendAndEmitModelIdentity(report, emit)
 	appendAndEmitWrapperFingerprint(report, emit)
 
 	if in.SkipTokenAudit {
-		tokenAuditCheck := CheckResult{ID: "token_audit", Name: "Token 用量审计", Status: CheckStatusWarn, Score: 0, MaxScore: 15, Message: "本次请求已关闭 Token 用量审计。", Details: map[string]any{"skipped": true}}
+		tokenAuditCheck := skippedTokenAuditCheck()
 		appendAndEmitChecks(report, emit, tokenAuditCheck)
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
 	} else if messagesProbe.StatusCode >= 200 && messagesProbe.StatusCode < 300 {

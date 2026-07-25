@@ -56,11 +56,12 @@ func (s *Service) publicInputFromAccount(ctx context.Context, in AccountCheckInp
 		return nil, PublicCheckInput{}, infraerrors.BadRequest("PURITY_ACCOUNT_API_KEY_MISSING", "account api key is missing")
 	}
 	return account, PublicCheckInput{
-		Provider:   provider,
-		APIBaseURL: baseURL,
-		APIKey:     apiKey,
-		ModelID:    in.ModelID,
-		ClientIP:   fmt.Sprintf("account:%d", in.AccountID),
+		Provider:       provider,
+		APIBaseURL:     baseURL,
+		APIKey:         apiKey,
+		ModelID:        in.ModelID,
+		ClientIP:       fmt.Sprintf("account:%d", in.AccountID),
+		SkipTokenAudit: in.SkipTokenAudit,
 	}, nil
 }
 

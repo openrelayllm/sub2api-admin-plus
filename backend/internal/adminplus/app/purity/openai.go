@@ -89,6 +89,8 @@ func (s *Service) runOpenAICheck(ctx context.Context, in PublicCheckInput, emit 
 		report.HasVertex = hasVertexFingerprint(report.APIBaseHost, modelsProbe.Headers)
 		report.IsKiro = hasKiroFingerprint(report.APIBaseHost, modelsProbe.Headers)
 		report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, modelsProbe), gatewayProbe.Headers, modelsProbe.Headers)
+		applyChannelAttribution(report, []map[string]string{gatewayProbe.Headers, modelsProbe.Headers}, channelSignatureEvidence{})
+		appendAndEmitChannelAttribution(report, emit)
 		appendAndEmitModelIdentity(report, emit)
 		appendAndEmitWrapperFingerprint(report, emit)
 		s.finalizeAndSave(ctx, report, baseURL)
@@ -154,11 +156,13 @@ func (s *Service) runOpenAICheck(ctx context.Context, in PublicCheckInput, emit 
 	report.HasVertex = hasVertexFingerprint(report.APIBaseHost, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers)
 	report.IsKiro = hasKiroFingerprint(report.APIBaseHost, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers)
 	report.WrapperSignals = wrapperFingerprintSignalsForReportWithValues(report, fingerprintValuesFromHTTPProbes(gatewayProbe, modelsProbe, responsesProbe, storeIncludeProbe, multimodalProbe, chatProbe), gatewayProbe.Headers, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers, storeIncludeProbe.Headers, multimodalProbe.Headers, chatProbe.Headers)
+	applyChannelAttribution(report, []map[string]string{gatewayProbe.Headers, modelsProbe.Headers, responsesProbe.Headers, streamProbe.Headers, storeIncludeProbe.Headers, multimodalProbe.Headers, chatProbe.Headers}, channelSignatureEvidence{})
+	appendAndEmitChannelAttribution(report, emit)
 	appendAndEmitModelIdentity(report, emit)
 	appendAndEmitWrapperFingerprint(report, emit)
 
 	if in.SkipTokenAudit {
-		tokenAuditCheck := CheckResult{ID: "token_audit", Name: "Token 用量审计", Status: CheckStatusWarn, Score: 0, MaxScore: 15, Message: "本次请求已关闭 Token 用量审计。", Details: map[string]any{"skipped": true}}
+		tokenAuditCheck := skippedTokenAuditCheck()
 		appendAndEmitChecks(report, emit, tokenAuditCheck)
 		upsertAndEmitValidation(report, emit, validationFromExecutedChecks("token_audit", "Token 用量审计", []CheckResult{tokenAuditCheck}))
 	} else if responsesProbe.StatusCode >= 200 && responsesProbe.StatusCode < 300 {

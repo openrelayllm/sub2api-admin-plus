@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"github.com/Wei-Shaw/sub2api/internal/adminplus/app/purity/signature"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"io"
@@ -26,6 +27,10 @@ func (s *Service) probeClaudeAudit(ctx context.Context, client *http.Client, bas
 
 func (s *Service) probeClaudeInvalidThinkingSignature(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, probeCtx claudeProbeContext) httpProbe {
 	return s.doJSONWithHeaders(ctx, client, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/messages"), claudeInvalidThinkingSignaturePayload(model, probeCtx), claudeHeaders("application/json", apiKey, probeCtx), apiKey)
+}
+
+func (s *Service) probeClaudeThinking(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, probeCtx claudeProbeContext) httpProbe {
+	return s.doJSONWithHeaders(ctx, client, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/messages"), claudeThinkingProbePayload(model, probeCtx, false), claudeHeaders("application/json", apiKey, probeCtx), apiKey)
 }
 
 func (s *Service) probeClaudeThinkingBudgetViolation(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, probeCtx claudeProbeContext) httpProbe {
@@ -61,24 +66,37 @@ func claudeHeaders(accept string, apiKey string, probeCtx claudeProbeContext) ma
 }
 
 type claudeStreamProbe struct {
-	StatusCode            int
-	Headers               map[string]string
-	FirstTokenMS          int64
-	TotalLatencyMS        int64
-	SeenData              bool
-	SeenMessageStart      bool
-	SeenContentBlockStart bool
-	SeenDelta             bool
-	SeenMessageDelta      bool
-	SeenMessageStop       bool
-	SeenToolUse           bool
-	ErrorClass            string
-	ErrorMessage          string
+	StatusCode             int
+	Headers                map[string]string
+	FirstTokenMS           int64
+	TotalLatencyMS         int64
+	SeenData               bool
+	SeenMessageStart       bool
+	SeenContentBlockStart  bool
+	SeenDelta              bool
+	SeenMessageDelta       bool
+	SeenMessageStop        bool
+	SeenToolUse            bool
+	SeenThinkingDelta      bool
+	SeenSignatureDelta     bool
+	SignatureAfterThinking bool
+	SignatureFound         int
+	SignatureParseErrors   int
+	SignatureFingerprints  []signature.Fingerprint
+	ErrorClass             string
+	ErrorMessage           string
 }
 
 func (s *Service) probeClaudeStream(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, probeCtx claudeProbeContext) claudeStreamProbe {
+	return s.probeClaudeStreamWithPayload(ctx, client, baseURL, apiKey, claudeStreamProbePayload(model, probeCtx), probeCtx)
+}
+
+func (s *Service) probeClaudeThinkingStream(ctx context.Context, client *http.Client, baseURL string, apiKey string, model string, probeCtx claudeProbeContext) claudeStreamProbe {
+	return s.probeClaudeStreamWithPayload(ctx, client, baseURL, apiKey, claudeThinkingProbePayload(model, probeCtx, true), probeCtx)
+}
+
+func (s *Service) probeClaudeStreamWithPayload(ctx context.Context, client *http.Client, baseURL string, apiKey string, body []byte, probeCtx claudeProbeContext) claudeStreamProbe {
 	started := s.currentTime()
-	body := claudeStreamProbePayload(model, probeCtx)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, buildOpenAIEndpointURL(baseURL, "/v1/messages"), bytes.NewReader(body))
 	if err != nil {
 		return claudeStreamProbe{ErrorClass: "request_build_error", ErrorMessage: sanitizeMessage(err.Error(), apiKey)}
@@ -116,6 +134,30 @@ func (s *Service) probeClaudeStream(ctx context.Context, client *http.Client, ba
 func readClaudeStream(body io.Reader, started time.Time, now func() time.Time, result *claudeStreamProbe, apiKey string) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	signatureParts := make(map[int]*strings.Builder)
+	finishedSignatures := make(map[int]struct{})
+	finishSignature := func(index int) {
+		if _, done := finishedSignatures[index]; done {
+			return
+		}
+		builder := signatureParts[index]
+		if builder == nil || builder.Len() == 0 {
+			return
+		}
+		finishedSignatures[index] = struct{}{}
+		result.SignatureFound++
+		fingerprint, err := signature.Analyze(builder.String())
+		if err != nil {
+			result.SignatureParseErrors++
+			return
+		}
+		for _, existing := range result.SignatureFingerprints {
+			if existing.DedupHash == fingerprint.DedupHash {
+				return
+			}
+		}
+		result.SignatureFingerprints = append(result.SignatureFingerprints, fingerprint)
+	}
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -127,6 +169,7 @@ func readClaudeStream(body io.Reader, started time.Time, now func() time.Time, r
 		}
 		result.SeenData = true
 		eventType := strings.TrimSpace(gjson.Get(data, "type").String())
+		blockIndex := int(gjson.Get(data, "index").Int())
 		switch eventType {
 		case "message_start":
 			result.SeenMessageStart = true
@@ -139,10 +182,33 @@ func readClaudeStream(body io.Reader, started time.Time, now func() time.Time, r
 			deltaType := gjson.Get(data, "delta.type").String()
 			if deltaType == "text_delta" || deltaType == "input_json_delta" || deltaType == "thinking_delta" {
 				result.SeenDelta = true
+				if deltaType == "thinking_delta" {
+					result.SeenThinkingDelta = true
+				}
 				if result.FirstTokenMS == 0 {
 					result.FirstTokenMS = int64(now().Sub(started) / time.Millisecond)
 				}
 			}
+			if deltaType == "signature_delta" {
+				result.SeenSignatureDelta = true
+				result.SignatureAfterThinking = result.SignatureAfterThinking || result.SeenThinkingDelta
+				part := gjson.Get(data, "delta.signature").String()
+				if part != "" {
+					builder := signatureParts[blockIndex]
+					if builder == nil {
+						builder = &strings.Builder{}
+						signatureParts[blockIndex] = builder
+					}
+					if builder.Len()+len(part) <= 128*1024 {
+						builder.WriteString(part)
+					} else {
+						result.SignatureParseErrors++
+						finishedSignatures[blockIndex] = struct{}{}
+					}
+				}
+			}
+		case "content_block_stop":
+			finishSignature(blockIndex)
 		case "message_delta":
 			result.SeenMessageDelta = true
 		case "message_stop":
@@ -155,5 +221,8 @@ func readClaudeStream(body io.Reader, started time.Time, now func() time.Time, r
 	if err := scanner.Err(); err != nil {
 		result.ErrorClass = "stream_error"
 		result.ErrorMessage = sanitizeMessage(err.Error(), apiKey)
+	}
+	for index := range signatureParts {
+		finishSignature(index)
 	}
 }

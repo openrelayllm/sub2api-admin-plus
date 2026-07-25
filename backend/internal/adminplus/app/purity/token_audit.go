@@ -851,3 +851,14 @@ func newAuditNonce(model string, at time.Time) string {
 	}
 	return hash
 }
+func skippedTokenAuditCheck() CheckResult {
+	return CheckResult{
+		ID:       "token_audit",
+		Name:     "Token 用量审计",
+		Status:   CheckStatusWarn,
+		Score:    0,
+		MaxScore: 0,
+		Message:  "本次请求未开启 Token 用量审计。",
+		Details:  map[string]any{"skipped": true, "reason": "token_audit_not_requested"},
+	}
+}

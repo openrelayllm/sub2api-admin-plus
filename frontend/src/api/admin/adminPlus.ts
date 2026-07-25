@@ -1449,6 +1449,67 @@ export interface PurityModelIdentityResult {
   evidence?: Record<string, unknown>
 }
 
+export type PurityDimensionStatus = 'pass' | 'warn' | 'fail' | 'not_run' | 'not_applicable' | 'unsupported_by_upstream'
+
+export interface PurityDimensionResult {
+  id: string
+  name: string
+  category: string
+  status: PurityDimensionStatus
+  score: number
+  max_score: number
+  scored: boolean
+  message: string
+  mode?: string
+  source_check_ids?: string[]
+  limitations?: string[]
+  details?: Record<string, unknown>
+}
+
+export interface PurityAttributionEvidence {
+  kind: string
+  code: string
+  channel?: string
+  strength: 'strong' | 'medium' | 'weak'
+  source_type: string
+  summary: string
+  sample_count?: number
+  transport?: string
+  detector_version: string
+  observed_at?: string
+  limitations?: string[]
+}
+
+export interface PurityChannelAttributionResult {
+  channel: string
+  confidence: number
+  status: 'identified' | 'likely' | 'unknown' | 'conflicted'
+  evidence?: PurityAttributionEvidence[]
+  contradictions?: PurityAttributionEvidence[]
+  limitations?: string[]
+  reason_codes?: string[]
+  detector_version: string
+}
+
+export interface PurityAssessmentResult {
+  kind: 'official_native' | 'official_cloud_channel' | 'transparent_relay' | 'compatible_channel' | 'channel_conflicted' | 'identity_conflict' | 'compatibility_risk' | 'invalid_or_unavailable'
+  status: 'ready' | 'limited' | 'risky' | 'invalid'
+  title: string
+  summary: string
+  channel: string
+  channel_status: 'identified' | 'likely' | 'unknown' | 'conflicted'
+  channel_confidence: number
+  identity_status: string
+  protocol_status: 'high' | 'medium' | 'low' | 'unavailable'
+  wrapper_mode: 'none' | 'transparent' | 'obfuscating'
+  metering_status: string
+  dimension_total: number
+  dimension_executed: number
+  dimension_scored: number
+  limitations?: string[]
+  reason_codes?: string[]
+}
+
 export interface PurityReport {
   provider: string
   report_id: string
@@ -1458,6 +1519,8 @@ export interface PurityReport {
   billingMode?: string
   api_base_host: string
   model_id: string
+  check_token_usage?: boolean
+  checkTokenUsage?: boolean
   expected_model?: string
   expectedModel?: string
   response_model?: string
@@ -1472,6 +1535,14 @@ export interface PurityReport {
   score: number
   official_score: number
   compatibility_score: number
+  protocol_score?: number
+  protocolScore?: number
+  official_behavior_score?: number
+  officialBehaviorScore?: number
+  metering_score?: number
+  meteringScore?: number
+  metering_status?: string
+  meteringStatus?: string
   verdict: string
   summary: string
   error?: string
@@ -1483,6 +1554,12 @@ export interface PurityReport {
   wrapperSignals?: string[]
   model_identity?: PurityModelIdentityResult
   modelIdentity?: PurityModelIdentityResult
+  channel_attribution?: PurityChannelAttributionResult
+  channelAttribution?: PurityChannelAttributionResult
+  dimension_matrix?: PurityDimensionResult[]
+  dimensionMatrix?: PurityDimensionResult[]
+  assessment?: PurityAssessmentResult
+  assessmentResult?: PurityAssessmentResult
   validations: PurityValidationResult[]
   checks: PurityCheckResult[]
   metrics: PurityCheckMetrics
@@ -1515,6 +1592,7 @@ export interface PurityCheckEvent {
 export interface LocalAccountPurityPayload {
   provider?: PurityProvider
   model_id?: string
+  check_token_usage?: boolean
 }
 
 export interface SupplierAccount {

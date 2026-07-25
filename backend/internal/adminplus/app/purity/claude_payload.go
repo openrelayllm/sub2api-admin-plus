@@ -61,6 +61,30 @@ func claudeStreamProbePayload(model string, probeCtx claudeProbeContext) []byte 
 	return body
 }
 
+func claudeThinkingProbePayload(model string, probeCtx claudeProbeContext, stream bool) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"model":       firstNonEmptyString(model, defaultClaudeModel),
+		"max_tokens":  1408,
+		"temperature": 1,
+		"stream":      stream,
+		"thinking": map[string]any{
+			"type":          "enabled",
+			"budget_tokens": 1024,
+		},
+		"system": claudeSystemBlocks("Solve the task carefully, then return only the final integer."),
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					claudeTextBlock("Compute 173 multiplied by 219.", false),
+				},
+			},
+		},
+		"metadata": probeCtx.metadata(),
+	})
+	return body
+}
+
 func claudeMultimodalProbePayload(model string, probeCtx claudeProbeContext) []byte {
 	body, _ := json.Marshal(map[string]any{
 		"model":       firstNonEmptyString(model, defaultClaudeModel),

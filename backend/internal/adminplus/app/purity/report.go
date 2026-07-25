@@ -25,6 +25,7 @@ func finalizeReport(report *PublicReport) {
 	if report == nil {
 		return
 	}
+	ensureChannelAttribution(report)
 	totalScore := 0
 	totalMax := 0
 	capabilityScore := 0
@@ -45,8 +46,9 @@ func finalizeReport(report *PublicReport) {
 	report.Scores = scoreBreakdown(report)
 	report.OfficialScore = officialPurityScore(report, percent(totalScore, totalMax))
 	report.Score = report.OfficialScore
+	finalizeIndependentScores(report)
+	report.DimensionMatrix = buildDimensionMatrix(report)
 	report.Verdict = decideVerdict(report)
-	report.Summary = summaryForReport(report)
 	if report.Status == RunStatusError && report.Metrics.ErrorClass == "" {
 		report.Metrics.ErrorClass, report.Metrics.ErrorMessage = firstProbeError(report.Checks)
 	}
@@ -57,9 +59,17 @@ func finalizeReport(report *PublicReport) {
 		report.Score = 0
 		report.OfficialScore = 0
 		report.CompatibilityScore = 0
+		report.ProtocolScore = 0
+		report.OfficialBehaviorScore = 0
+		report.MeteringScore = 0
+		report.MeteringStatus = capabilityStatusUnknown
 		report.Verdict = VerdictInvalidOrUnavailable
 		report.Summary = summaryForReportError(report)
 		report.Scores = scoreBreakdown(report)
+	}
+	report.Assessment = buildAssessment(report)
+	if report.Status != RunStatusError {
+		report.Summary = summaryForReport(report)
 	}
 	syncReportCompat(report)
 }
@@ -82,6 +92,15 @@ func syncReportCompat(report *PublicReport) {
 	report.IsKiroCompat = report.IsKiro
 	report.WrapperSignalsCompat = append([]string(nil), report.WrapperSignals...)
 	report.ModelIdentityCompat = cloneModelIdentity(report.ModelIdentity)
+	report.CheckTokenUsageCompat = report.CheckTokenUsage
+	report.ProtocolScoreCompat = report.ProtocolScore
+	report.OfficialBehaviorScoreCompat = report.OfficialBehaviorScore
+	report.MeteringScoreCompat = report.MeteringScore
+	report.MeteringStatusCompat = report.MeteringStatus
+	report.ChannelAttributionCompat = cloneChannelAttribution(report.ChannelAttribution)
+	report.CapabilityMatrixCompat = cloneCapabilityMatrix(report.CapabilityMatrix)
+	report.DimensionMatrixCompat = cloneDimensionMatrix(report.DimensionMatrix)
+	report.AssessmentCompat = cloneAssessment(report.Assessment)
 	syncMetricsCompat(&report.Metrics)
 }
 
@@ -189,32 +208,41 @@ func buildPublicSummary(report *PublicReport) map[string]any {
 		return nil
 	}
 	out := map[string]any{
-		"provider":              report.Provider,
-		"report_id":             report.ReportID,
-		"api_base_host":         report.APIBaseHost,
-		"model_id":              report.ModelID,
-		"expected_model":        report.ExpectedModel,
-		"response_model":        report.ResponseModel,
-		"response_model_source": report.ResponseModelSource,
-		"status":                report.Status,
-		"step":                  report.Step,
-		"step_name":             report.StepName,
-		"progress":              report.Progress,
-		"scores":                report.Scores,
-		"score":                 report.Score,
-		"official_score":        report.OfficialScore,
-		"compatibility_score":   report.CompatibilityScore,
-		"verdict":               report.Verdict,
-		"summary":               report.Summary,
-		"error":                 report.Error,
-		"stream_channel":        report.StreamChannel,
-		"non_stream_channel":    report.NonStreamChannel,
-		"has_vertex":            report.HasVertex,
-		"is_kiro":               report.IsKiro,
-		"wrapper_signals":       report.WrapperSignals,
-		"model_identity":        report.ModelIdentity,
-		"validations":           report.Validations,
-		"checked_at":            report.CheckedAt,
+		"provider":                report.Provider,
+		"report_id":               report.ReportID,
+		"api_base_host":           report.APIBaseHost,
+		"model_id":                report.ModelID,
+		"check_token_usage":       report.CheckTokenUsage,
+		"expected_model":          report.ExpectedModel,
+		"response_model":          report.ResponseModel,
+		"response_model_source":   report.ResponseModelSource,
+		"status":                  report.Status,
+		"step":                    report.Step,
+		"step_name":               report.StepName,
+		"progress":                report.Progress,
+		"scores":                  report.Scores,
+		"score":                   report.Score,
+		"official_score":          report.OfficialScore,
+		"compatibility_score":     report.CompatibilityScore,
+		"protocol_score":          report.ProtocolScore,
+		"official_behavior_score": report.OfficialBehaviorScore,
+		"metering_score":          report.MeteringScore,
+		"metering_status":         report.MeteringStatus,
+		"verdict":                 report.Verdict,
+		"summary":                 report.Summary,
+		"error":                   report.Error,
+		"stream_channel":          report.StreamChannel,
+		"non_stream_channel":      report.NonStreamChannel,
+		"has_vertex":              report.HasVertex,
+		"is_kiro":                 report.IsKiro,
+		"wrapper_signals":         report.WrapperSignals,
+		"model_identity":          report.ModelIdentity,
+		"channel_attribution":     report.ChannelAttribution,
+		"capability_matrix":       report.CapabilityMatrix,
+		"dimension_matrix":        report.DimensionMatrix,
+		"assessment":              report.Assessment,
+		"validations":             report.Validations,
+		"checked_at":              report.CheckedAt,
 	}
 	if report.TokenAudit != nil {
 		out["token_audit"] = map[string]any{

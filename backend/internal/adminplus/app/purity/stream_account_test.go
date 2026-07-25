@@ -84,7 +84,7 @@ func TestServiceRunPublicCheckStream_EmitsProgressEvents(t *testing.T) {
 	require.Contains(t, eventTypes(events), PublicCheckEventTokenAuditSample)
 	require.Equal(t, PublicCheckEventReport, events[len(events)-1].Type)
 	require.NotNil(t, events[len(events)-1].Report)
-	require.Len(t, events[len(events)-1].Report.Validations, 8)
+	require.Len(t, events[len(events)-1].Report.Validations, 9)
 	require.Equal(t, []string{
 		"base_url",
 		"models_schema",
@@ -95,6 +95,7 @@ func TestServiceRunPublicCheckStream_EmitsProgressEvents(t *testing.T) {
 		"streaming",
 		"responses_store_include",
 		"multimodal",
+		"channel_attribution",
 		"model_identity",
 		"wrapper_fingerprint",
 		"token_audit",
@@ -105,6 +106,7 @@ func TestServiceRunPublicCheckStream_EmitsProgressEvents(t *testing.T) {
 		"behavior",
 		"signature",
 		"multimodal",
+		"channel_attribution",
 		"model_identity",
 		"wrapper_fingerprint",
 		"token_audit",

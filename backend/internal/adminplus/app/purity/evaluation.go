@@ -220,17 +220,19 @@ func summaryForReport(report *PublicReport) string {
 	if report == nil {
 		return summaryForVerdict(VerdictUnknown)
 	}
+	if report.Assessment != nil && strings.TrimSpace(report.Assessment.Summary) != "" {
+		return report.Assessment.Summary
+	}
 	identitySummary := modelIdentitySummary(report)
+	channelSummary := attributionSummary(report)
+	contextSummary := strings.TrimSpace(strings.Join(nonEmptyStrings(channelSummary, identitySummary), " "))
 	if hasWrapperFingerprint(report) {
 		signals := strings.Join(report.WrapperSignals, "、")
 		if strings.TrimSpace(signals) == "" && report.IsKiro {
 			signals = "kiro"
 		}
 		obfuscationSignals := wrapperObfuscationSignals(report)
-		suffix := ""
-		if identitySummary != "" {
-			suffix = identitySummary
-		}
+		suffix := contextSummary
 		if len(obfuscationSignals) > 0 {
 			riskSignals := strings.Join(obfuscationSignals, "、")
 			if report.Provider == ProviderAnthropic {
@@ -249,10 +251,20 @@ func summaryForReport(report *PublicReport) string {
 		}
 		return fmt.Sprintf("检测到透明中转/兼容网关信号：%s；当前证据未显示模型或协议混淆，可继续按 OpenAI 上游纯度评估。%s", signals, suffix)
 	}
-	if identitySummary != "" {
-		return strings.TrimSpace(identitySummary)
+	if contextSummary != "" {
+		return contextSummary
 	}
 	return summaryForVerdict(report.Verdict)
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func modelIdentitySummary(report *PublicReport) string {

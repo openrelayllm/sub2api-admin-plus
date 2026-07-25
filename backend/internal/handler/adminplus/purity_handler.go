@@ -34,8 +34,9 @@ type publicPurityCheckRequest struct {
 }
 
 type accountPurityCheckRequest struct {
-	Provider string `json:"provider"`
-	ModelID  string `json:"model_id"`
+	Provider        string `json:"provider"`
+	ModelID         string `json:"model_id"`
+	CheckTokenUsage *bool  `json:"check_token_usage"`
 }
 
 func (h *PurityHandler) PublicCheck(c *gin.Context) {
@@ -84,7 +85,7 @@ func (h *PurityHandler) runPublicCheck(c *gin.Context, verifyTurnstile bool, dev
 		APIKey:              req.APIKey,
 		ModelID:             req.ModelID,
 		ClientIP:            clientIP,
-		SkipTokenAudit:      req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
+		SkipTokenAudit:      shouldSkipTokenAudit(req.CheckTokenUsage),
 		AllowPrivateBaseURL: allowPrivateBaseURLForRequest(c),
 	}
 	var report *purityapp.PublicReport
@@ -127,7 +128,7 @@ func (h *PurityHandler) runPublicCheckStream(c *gin.Context, verifyTurnstile boo
 		APIKey:              req.APIKey,
 		ModelID:             req.ModelID,
 		ClientIP:            clientIP,
-		SkipTokenAudit:      req.CheckTokenUsage != nil && !*req.CheckTokenUsage,
+		SkipTokenAudit:      shouldSkipTokenAudit(req.CheckTokenUsage),
 		AllowPrivateBaseURL: allowPrivateBaseURLForRequest(c),
 	}
 	emit := func(event purityapp.PublicCheckEvent) {
@@ -163,6 +164,10 @@ func (h *PurityHandler) runPublicCheckStream(c *gin.Context, verifyTurnstile boo
 		c.Writer.Flush()
 		return
 	}
+}
+
+func shouldSkipTokenAudit(requested *bool) bool {
+	return requested == nil || !*requested
 }
 
 func (h *PurityHandler) verifyWebPurityTurnstile(c *gin.Context, token string, clientIP string) bool {
@@ -240,9 +245,10 @@ func (h *PurityHandler) AccountCheckStream(c *gin.Context) {
 	encoder := json.NewEncoder(c.Writer)
 	var writeErr error
 	report, err := h.service.RunAccountCheckStream(c.Request.Context(), purityapp.AccountCheckInput{
-		AccountID: accountID,
-		Provider:  req.Provider,
-		ModelID:   req.ModelID,
+		AccountID:      accountID,
+		Provider:       req.Provider,
+		ModelID:        req.ModelID,
+		SkipTokenAudit: shouldSkipTokenAudit(req.CheckTokenUsage),
 	}, func(event purityapp.PublicCheckEvent) {
 		if writeErr != nil {
 			return
